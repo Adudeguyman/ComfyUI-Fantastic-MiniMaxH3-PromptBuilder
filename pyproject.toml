@@ -21,6 +21,6 @@ Repository = "https://github.com/Adudeguyman/ComfyUI-Fantastic-MiniMaxH3-PromptB
 "Bug Tracker" = "https://github.com/Adudeguyman/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder/issues"
 
 [tool.comfy]
-PublisherId = "Adudeguyman"
+PublisherId = "adudeguyman"
 DisplayName = "Fantastic MiniMax H3 Prompt Builder"
 requires-comfyui = ">=0.30.0"
