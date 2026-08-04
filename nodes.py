@@ -1,0 +1,390 @@
+"""MiniMax H3 Prompt Builder
+A guided prompt-composition node for the open-weight MiniMax H3 model
+(FL2VA family: T2VA / I2VA / FL2VA / L2VA, and Ref2VA full-reference mode).
+
+Outputs the final prompt STRING plus optional pass-throughs for every
+reference slot, so the builder can sit inline between your loaders and
+`MiniMaxH3ReferenceToVideo` and keep tag order locked to wiring order.
+"""
+
+import json
+
+from . import media_io
+
+PICTURES = 9
+VIDEOS = 3
+VIDEO_AUDIOS = 3
+AUDIOS = 3
+
+
+# What each mode can actually consume. Base modes have no reference slots at
+# all — their pictures are the native node's first_frame / last_frame.
+MODE_LIMITS = {
+    "T2VA": {"picture": 0, "video": 0, "video_audio": 0, "audio": 0},
+    "I2VA": {"picture": 1, "video": 0, "video_audio": 0, "audio": 0},
+    "FL2VA": {"picture": 2, "video": 0, "video_audio": 0, "audio": 0},
+    "L2VA": {"picture": 1, "video": 0, "video_audio": 0, "audio": 0},
+    "REF": {"picture": PICTURES, "video": VIDEOS,
+            "video_audio": VIDEO_AUDIOS, "audio": AUDIOS},
+}
+
+
+def _split_name(name):
+    """'video_audio_2' -> ('video_audio', 2)"""
+    group, _, num = name.rpartition("_")
+    try:
+        return group, int(num)
+    except ValueError:
+        return group, 0
+
+
+def _mode_of(builder_state):
+    try:
+        mode = json.loads(builder_state or "{}").get("mode")
+    except Exception:
+        mode = None
+    return mode if mode in MODE_LIMITS else "REF"
+
+
+def _usable(name, mode):
+    group, index = _split_name(name)
+    return index <= MODE_LIMITS.get(mode, MODE_LIMITS["REF"]).get(group, 0)
+
+
+def _media_names():
+    """Ordered media slot names; index in this list + 1 == output slot index.
+
+    Mirrors the native node's four groups: ref_images, ref_videos,
+    ref_video_audios (the soundtrack paired with the same-numbered video),
+    and ref_audios (standalone).
+    """
+    return (
+        [f"picture_{i}" for i in range(1, PICTURES + 1)]
+        + [f"video_{i}" for i in range(1, VIDEOS + 1)]
+        + [f"video_audio_{i}" for i in range(1, VIDEO_AUDIOS + 1)]
+        + [f"audio_{i}" for i in range(1, AUDIOS + 1)]
+    )
+
+
+class MiniMaxH3PromptBuilder:
+    CATEGORY = "conditioning/video_models"
+    DESCRIPTION = (
+        "Guided prompt builder for MiniMax H3 (T2VA / I2VA / FL2VA / L2VA / "
+        "full-reference). Click 'Edit prompt' on the node to open the editor. "
+        "Outputs the final prompt STRING plus a pass-through for every "
+        "reference slot, so media can carry on to MiniMaxH3ReferenceToVideo. "
+        "Each media output prefers its own input, falling back to the matching "
+        "item from a connected Media Loader 'references' bundle."
+    )
+
+    RETURN_TYPES = (
+        ("STRING",)
+        + ("IMAGE",) * PICTURES
+        + ("IMAGE",) * VIDEOS
+        + ("AUDIO",) * VIDEO_AUDIOS
+        + ("AUDIO",) * AUDIOS
+    )
+    RETURN_NAMES = ("prompt",) + tuple(_media_names())
+    FUNCTION = "build"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = {}
+        for i in range(1, PICTURES + 1):
+            optional[f"picture_{i}"] = ("IMAGE", {"lazy": True})
+        for i in range(1, VIDEOS + 1):
+            optional[f"video_{i}"] = ("IMAGE", {"lazy": True})
+        for i in range(1, VIDEO_AUDIOS + 1):
+            optional[f"video_audio_{i}"] = ("AUDIO", {"lazy": True})
+        for i in range(1, AUDIOS + 1):
+            optional[f"audio_{i}"] = ("AUDIO", {"lazy": True})
+        return {
+            "required": {
+                # Final assembled prompt (written by the editor UI).
+                # Deliberately single-line: multiline widgets become DOM
+                # overlays in the new frontend and interfere with the node's
+                # canvas button when hidden. The value itself may contain
+                # newlines regardless of widget type.
+                "prompt_text": ("STRING", {"multiline": False, "default": ""}),
+                # Serialized editor state (JSON). Hidden in the UI.
+                "builder_state": ("STRING", {"multiline": False, "default": "{}"}),
+            },
+            "optional": dict(
+                references=("H3_REFS", {"lazy": True}), **optional
+            ),
+            "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
+        }
+
+    # -- graph introspection -------------------------------------------------
+
+    @staticmethod
+    def _linked_inputs(prompt, unique_id):
+        """Names of this node's inputs that are actually connected."""
+        try:
+            inputs = prompt[str(unique_id)]["inputs"]
+        except Exception:
+            return None
+        return {
+            name
+            for name, val in inputs.items()
+            if isinstance(val, list) and len(val) == 2
+        }
+
+    @staticmethod
+    def _consumed_slots(prompt, unique_id):
+        """Output slot indices of this node that some other node reads."""
+        if not isinstance(prompt, dict):
+            return None
+        uid = str(unique_id)
+        slots = set()
+        for nid, node in prompt.items():
+            if str(nid) == uid or not isinstance(node, dict):
+                continue
+            for val in (node.get("inputs") or {}).values():
+                if (
+                    isinstance(val, list)
+                    and len(val) == 2
+                    and str(val[0]) == uid
+                ):
+                    try:
+                        slots.add(int(val[1]))
+                    except (TypeError, ValueError):
+                        pass
+        return slots
+
+    # -- execution -----------------------------------------------------------
+
+    def check_lazy_status(
+        self, prompt_text=None, builder_state=None, references=None,
+        prompt=None, unique_id=None, **kwargs
+    ):
+        """Pull only what a downstream node actually reads.
+
+        A media slot is evaluated when its pass-through output is consumed:
+        from its own input if one is wired, otherwise from the references
+        bundle. Media wired purely for editor previews stays free.
+        """
+        consumed = self._consumed_slots(prompt, unique_id)
+        linked = self._linked_inputs(prompt, unique_id)
+        mode = _mode_of(builder_state)
+        needed = []
+        want_bundle = False
+        for idx, name in enumerate(_media_names()):
+            slot = idx + 1  # slot 0 is the prompt string
+            if consumed is not None and slot not in consumed:
+                continue
+            # Never fetch media the current mode cannot use.
+            if not _usable(name, mode):
+                continue
+            if linked is None or name in linked:
+                if kwargs.get(name) is None:
+                    needed.append(name)
+            elif linked is None or "references" in linked:
+                want_bundle = True
+        if want_bundle and references is None:
+            needed.append("references")
+        return needed
+
+    @staticmethod
+    def _from_bundle(references, name):
+        """Matching item from a Media Loader bundle, if there is one."""
+        if not isinstance(references, dict):
+            return None
+        group, _, num = name.rpartition("_")
+        key = {
+            "picture": "pictures", "video": "videos",
+            "video_audio": "video_audios", "audio": "audios",
+        }.get(group)
+        seq = references.get(key) if key else None
+        if not isinstance(seq, (list, tuple)):
+            return None
+        try:
+            index = int(num) - 1
+        except ValueError:
+            return None
+        return seq[index] if 0 <= index < len(seq) else None
+
+    def build(
+        self, prompt_text, builder_state, references=None,
+        prompt=None, unique_id=None, **kwargs
+    ):
+        mode = _mode_of(builder_state)
+        media = []
+        for name in _media_names():
+            # A slot the mode can't use stays empty, so switching mode is
+            # enough to stop that media reaching the sampler.
+            if not _usable(name, mode):
+                media.append(None)
+                continue
+            value = kwargs.get(name)
+            if value is None:
+                value = self._from_bundle(references, name)
+            media.append(value)
+        return (prompt_text.strip(),) + tuple(media)
+
+
+class MiniMaxH3MediaLoader:
+    """Drag-and-drop / file-picker loader for H3 reference media.
+
+    Emits one `references` bundle for the Prompt Builder, plus individual
+    pass-throughs so it can drive MiniMaxH3ReferenceToVideo on its own.
+    """
+
+    CATEGORY = "conditioning/video_models"
+    DESCRIPTION = (
+        "Load MiniMax H3 reference media by drag-and-drop or file picker. "
+        "Wire 'references' to the Prompt Builder, and to the Reference Splitter "
+        "when you also want individual slots for MiniMaxH3ReferenceToVideo. "
+        "A video's soundtrack can be split off and paired with it automatically."
+    )
+
+    RETURN_TYPES = ("H3_REFS",)
+    RETURN_NAMES = ("references",)
+    FUNCTION = "load"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                # JSON list of media items, written by the node's panel.
+                "media_state": ("STRING", {"multiline": False, "default": "[]"}),
+            },
+            "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, media_state="[]", **kwargs):
+        return media_state
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, media_state="[]", **kwargs):
+        try:
+            items = json.loads(media_state or "[]")
+        except Exception:
+            return "Media Loader state is corrupt; clear the node and re-add media."
+        if not isinstance(items, list):
+            return "Media Loader state is corrupt; clear the node and re-add media."
+        pics = sum(1 for i in items if i.get("kind") == "picture")
+        vids = sum(1 for i in items if i.get("kind") == "video")
+        if pics > PICTURES:
+            return f"{pics} pictures loaded; H3 accepts {PICTURES}."
+        if vids > VIDEOS:
+            return f"{vids} videos loaded; H3 accepts {VIDEOS}."
+        return True
+
+    # -- ordering ---------------------------------------------------------
+
+    @staticmethod
+    def _partition(items):
+        """Split items into the four native groups, preserving list order.
+
+        A video's split audio goes to the paired group (its <Audio N> is
+        emitted just before its <Video N>) or to the standalone group,
+        depending on the item's audio_mode.
+        """
+        pictures, videos, video_audios, audios = [], [], [], []
+        for item in items:
+            # Items switched off in the loader are kept in the list but never
+            # reach the model, so the tag numbering closes up around them.
+            if isinstance(item, dict) and item.get("enabled") is False:
+                continue
+            kind = item.get("kind")
+            if kind == "picture":
+                pictures.append(item)
+            elif kind == "video":
+                mode = item.get("audio_mode", "paired")
+                has_audio = bool(item.get("has_audio"))
+                videos.append(item)
+                if has_audio and mode == "paired":
+                    video_audios.append(item)
+                else:
+                    video_audios.append(None)
+                if has_audio and mode == "standalone":
+                    audios.append(item)
+            elif kind == "audio":
+                audios.append(item)
+        return pictures, videos, video_audios, audios
+
+    def load(self, media_state="[]", prompt=None, unique_id=None):
+        try:
+            items = json.loads(media_state or "[]")
+        except Exception:
+            items = []
+
+        pictures, videos, video_audios, audios = self._partition(items)
+
+        pic_t = [media_io.load_image(i["file"]) for i in pictures[:PICTURES]]
+        vid_t = [media_io.load_video_frames(i["file"]) for i in videos[:VIDEOS]]
+        vaud_t = [
+            media_io.extract_audio(i["file"]) if i else None
+            for i in video_audios[:VIDEO_AUDIOS]
+        ]
+        aud_t = []
+        for i in audios[:AUDIOS]:
+            if i.get("kind") == "video":
+                aud_t.append(media_io.extract_audio(i["file"]))
+            else:
+                aud_t.append(media_io.load_audio(i["file"]))
+
+        bundle = {
+            "pictures": pic_t,
+            "videos": vid_t,
+            "video_audios": vaud_t,
+            "audios": aud_t,
+            "items": items,
+        }
+
+        return (bundle,)
+
+
+def _pad(seq, n):
+    return list(seq or []) + [None] * (n - len(seq or []))
+
+
+class MiniMaxH3ReferenceSplitter:
+    """Fan a `references` bundle out into individual slots.
+
+    Keeps the Media Loader short: add this only when you want to wire media
+    straight into MiniMaxH3ReferenceToVideo. Slot order matches the tags the
+    Prompt Builder shows — video_audio_N is the soundtrack of video_N.
+    """
+
+    CATEGORY = "conditioning/video_models"
+    DESCRIPTION = (
+        "Split a MiniMax H3 references bundle into individual picture / video / "
+        "video_audio / audio slots for MiniMaxH3ReferenceToVideo."
+    )
+    RETURN_TYPES = (
+        ("IMAGE",) * PICTURES
+        + ("IMAGE",) * VIDEOS
+        + ("AUDIO",) * VIDEO_AUDIOS
+        + ("AUDIO",) * AUDIOS
+    )
+    RETURN_NAMES = tuple(_media_names())
+    FUNCTION = "split"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"references": ("H3_REFS",)}}
+
+    def split(self, references=None):
+        b = references or {}
+        return (
+            tuple(_pad(b.get("pictures"), PICTURES))
+            + tuple(_pad(b.get("videos"), VIDEOS))
+            + tuple(_pad(b.get("video_audios"), VIDEO_AUDIOS))
+            + tuple(_pad(b.get("audios"), AUDIOS))
+        )
+
+
+NODE_CLASS_MAPPINGS = {
+    "MiniMaxH3PromptBuilder": MiniMaxH3PromptBuilder,
+    "MiniMaxH3MediaLoader": MiniMaxH3MediaLoader,
+    "MiniMaxH3ReferenceSplitter": MiniMaxH3ReferenceSplitter,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "MiniMaxH3PromptBuilder": "MiniMax H3 Prompt Builder",
+    "MiniMaxH3MediaLoader": "MiniMax H3 Media Loader",
+    "MiniMaxH3ReferenceSplitter": "MiniMax H3 Reference Splitter",
+}

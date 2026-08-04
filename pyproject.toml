@@ -1,0 +1,26 @@
+[project]
+name = "fantastic-minimax-h3-prompt-builder"
+version = "1.0.0"
+description = "Guided prompt writing and reference media handling for the MiniMax H3 video model: fillable templates for every mode, live checking against MiniMax's prompt guide, and a drag-and-drop media loader that keeps reference tags straight."
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+classifiers = [
+    "Operating System :: OS Independent",
+]
+
+# PyAV is only needed for reference videos; images and audio work without it,
+# and ffmpeg on PATH is an equally good alternative. It is declared here so a
+# Manager install works for video out of the box. Left unpinned to avoid
+# clashing with other packs that pin their own version.
+dependencies = [
+    "av",
+]
+
+[project.urls]
+Repository = "https://github.com/Adudeguyman/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder"
+"Bug Tracker" = "https://github.com/Adudeguyman/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder/issues"
+
+[tool.comfy]
+PublisherId = "Adudeguyman"
+DisplayName = "Fantastic MiniMax H3 Prompt Builder"
+requires-comfyui = ">=0.30.0"

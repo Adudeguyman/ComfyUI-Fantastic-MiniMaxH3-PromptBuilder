@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+minimax_h3_presets/
+minimax_h3_prompts/
+.DS_Store

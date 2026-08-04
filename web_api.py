@@ -1,0 +1,397 @@
+"""HTTP routes backing the Media Loader's drag-drop and file picker."""
+
+import json
+import os
+import re
+import time
+
+from . import media_io
+
+try:
+    from server import PromptServer
+    from aiohttp import web
+except Exception:  # pragma: no cover - only outside ComfyUI
+    PromptServer = None
+    web = None
+
+try:
+    import folder_paths
+except Exception:  # pragma: no cover
+    folder_paths = None
+
+SUBFOLDER = "minimax_h3"
+
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg"}
+AUDIO_EXT = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"}
+
+
+def kind_for(name):
+    ext = os.path.splitext(name)[1].lower()
+    if ext in IMAGE_EXT:
+        return "picture"
+    if ext in VIDEO_EXT:
+        return "video"
+    if ext in AUDIO_EXT:
+        return "audio"
+    return None
+
+
+def _safe(name):
+    name = os.path.basename(name or "")
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._") or "upload"
+    return name[:120]
+
+
+def _target_dir():
+    base = folder_paths.get_input_directory() if folder_paths else "input"
+    path = os.path.join(base, SUBFOLDER)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _preset_dir():
+    """Presets live with the user's data so they survive extension updates."""
+    base = None
+    if folder_paths is not None:
+        for getter in ("get_user_directory", "get_output_directory"):
+            fn = getattr(folder_paths, getter, None)
+            if callable(fn):
+                try:
+                    base = fn()
+                    break
+                except Exception:
+                    continue
+    if not base:
+        base = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "minimax_h3_presets")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _prompt_dir():
+    base = None
+    if folder_paths is not None:
+        for getter in ("get_user_directory", "get_output_directory"):
+            fn = getattr(folder_paths, getter, None)
+            if callable(fn):
+                try:
+                    base = fn()
+                    break
+                except Exception:
+                    continue
+    if not base:
+        base = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "minimax_h3_prompts")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _slug(text):
+    out = re.sub(r"[^A-Za-z0-9 ._-]+", "_", str(text or "")).strip(" ._-")
+    return out[:80] or None
+
+
+def _prompt_path(entry_id):
+    slug = _slug(entry_id)
+    if not slug:
+        return None, None
+    return slug, os.path.join(_prompt_dir(), slug + ".json")
+
+
+def _read_prompt(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _preset_path(name):
+    safe = re.sub(r"[^A-Za-z0-9 ._-]+", "_", str(name or "")).strip(" ._-")
+    if not safe:
+        return None, None
+    return safe[:80], os.path.join(_preset_dir(), safe[:80] + ".json")
+
+
+def _unique(directory, name):
+    stem, ext = os.path.splitext(name)
+    candidate = name
+    if os.path.exists(os.path.join(directory, candidate)):
+        candidate = f"{stem}_{int(time.time() * 1000) % 100000}{ext}"
+    return candidate
+
+
+if PromptServer is not None and web is not None:
+
+    routes = PromptServer.instance.routes
+
+    @routes.post("/minimax_h3/upload")
+    async def upload(request):
+        """Accept one file, store it under input/minimax_h3, return its metadata."""
+        try:
+            reader = await request.multipart()
+        except Exception:
+            return web.json_response({"error": "expected multipart form data"},
+                                     status=400)
+        field = await reader.next()
+        while field is not None and field.name != "file":
+            field = await reader.next()
+        if field is None:
+            return web.json_response({"error": "no file field in request"}, status=400)
+
+        original = field.filename or "upload"
+        kind = kind_for(original)
+        if kind is None:
+            return web.json_response(
+                {"error": f"unsupported file type: {os.path.splitext(original)[1]}"},
+                status=400)
+
+        directory = _target_dir()
+        name = _unique(directory, _safe(original))
+        path = os.path.join(directory, name)
+        size = 0
+        try:
+            with open(path, "wb") as fh:
+                while True:
+                    chunk = await field.read_chunk()
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    fh.write(chunk)
+        except Exception as exc:
+            if os.path.exists(path):
+                os.remove(path)
+            return web.json_response({"error": f"write failed: {exc}"}, status=500)
+
+        annotated = f"{SUBFOLDER}/{name} [input]"
+        info = media_io.probe(annotated) if kind in ("video", "audio") else {}
+        return web.json_response({
+            "file": annotated,
+            "name": name,
+            "original": original,
+            "kind": kind,
+            "size": size,
+            "duration": info.get("duration"),
+            "has_audio": bool(info.get("has_audio")),
+            "width": info.get("width"),
+            "height": info.get("height"),
+        })
+
+    @routes.get("/minimax_h3/capabilities")
+    async def capabilities(request):
+        caps = media_io.backends()
+        caps["video"] = media_io.can_decode_video()
+        return web.json_response(caps)
+
+    @routes.get("/minimax_h3/presets")
+    async def list_presets(request):
+        names = []
+        try:
+            for fn in os.listdir(_preset_dir()):
+                if fn.endswith(".json"):
+                    names.append(fn[:-5])
+        except Exception:
+            pass
+        return web.json_response({"presets": sorted(names, key=str.lower)})
+
+    @routes.post("/minimax_h3/presets/save")
+    async def save_preset(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name, path = _preset_path(body.get("name"))
+        if not path:
+            return web.json_response({"error": "give the preset a name"}, status=400)
+        items = body.get("items")
+        if not isinstance(items, list):
+            return web.json_response({"error": "items must be a list"}, status=400)
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"version": 1, "items": items}, fh, indent=1)
+        except Exception as exc:
+            return web.json_response({"error": f"save failed: {exc}"}, status=500)
+        return web.json_response({"name": name, "count": len(items)})
+
+    @routes.post("/minimax_h3/presets/load")
+    async def load_preset(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name, path = _preset_path(body.get("name"))
+        if not path or not os.path.exists(path):
+            return web.json_response({"error": "preset not found"}, status=404)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as exc:
+            return web.json_response({"error": f"unreadable preset: {exc}"},
+                                     status=500)
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return web.json_response({"error": "preset has no item list"},
+                                     status=500)
+        # Report files that have since been deleted rather than failing later.
+        kept, missing = [], []
+        for item in items:
+            target = item.get("file") if isinstance(item, dict) else None
+            if target and os.path.exists(media_io.resolve(target)):
+                kept.append(item)
+            elif target:
+                missing.append(item.get("name") or target)
+        return web.json_response({"name": name, "items": kept, "missing": missing})
+
+    @routes.post("/minimax_h3/presets/delete")
+    async def delete_preset(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name, path = _preset_path(body.get("name"))
+        if not path or not os.path.exists(path):
+            return web.json_response({"error": "preset not found"}, status=404)
+        try:
+            os.remove(path)
+        except Exception as exc:
+            return web.json_response({"error": f"delete failed: {exc}"}, status=500)
+        return web.json_response({"deleted": name})
+
+    # -- prompt library ---------------------------------------------------
+
+    @routes.get("/minimax_h3/prompts")
+    async def list_prompts(request):
+        entries, categories = [], set()
+        directory = _prompt_dir()
+        try:
+            names = [f for f in os.listdir(directory) if f.endswith(".json")]
+        except Exception:
+            names = []
+        for fn in names:
+            data = _read_prompt(os.path.join(directory, fn))
+            if not data:
+                continue
+            category = (data.get("category") or "").strip()
+            if category:
+                categories.add(category)
+            text = data.get("prompt") or ""
+            entries.append({
+                "id": fn[:-5],
+                "name": data.get("name") or fn[:-5],
+                "category": category,
+                "favorite": bool(data.get("favorite")),
+                "mode": data.get("mode") or "",
+                "updated": data.get("updated") or 0,
+                "refs": data.get("refs") or 0,
+                "preview": " ".join(text.split())[:150],
+            })
+        entries.sort(key=lambda e: (not e["favorite"], -float(e["updated"] or 0),
+                                    e["name"].lower()))
+        return web.json_response({
+            "prompts": entries,
+            "categories": sorted(categories, key=str.lower),
+        })
+
+    @routes.post("/minimax_h3/prompts/save")
+    async def save_prompt(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name = (body.get("name") or "").strip()
+        entry_id, path = _prompt_path(body.get("id") or name)
+        if not path:
+            return web.json_response({"error": "give the prompt a name"},
+                                     status=400)
+        if not isinstance(body.get("state"), dict):
+            return web.json_response({"error": "missing editor state"}, status=400)
+        previous = _read_prompt(path) or {}
+        record = {
+            "version": 1,
+            "name": name or entry_id,
+            "category": (body.get("category") or "").strip(),
+            "favorite": bool(body.get("favorite", previous.get("favorite"))),
+            "mode": body.get("mode") or "",
+            "refs": body.get("refs") or 0,
+            "prompt": body.get("prompt") or "",
+            "state": body["state"],
+            "created": previous.get("created") or time.time(),
+            "updated": time.time(),
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(record, fh, indent=1)
+        except Exception as exc:
+            return web.json_response({"error": f"save failed: {exc}"}, status=500)
+        # Renaming writes a new file; drop the old one.
+        old = _slug(body.get("rename_from"))
+        if old and old != entry_id:
+            try:
+                os.remove(os.path.join(_prompt_dir(), old + ".json"))
+            except Exception:
+                pass
+        return web.json_response({"id": entry_id, "name": record["name"]})
+
+    @routes.post("/minimax_h3/prompts/load")
+    async def load_prompt(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        entry_id, path = _prompt_path(body.get("id"))
+        data = _read_prompt(path) if path else None
+        if not data:
+            return web.json_response({"error": "prompt not found"}, status=404)
+        return web.json_response({"id": entry_id, **data})
+
+    @routes.post("/minimax_h3/prompts/meta")
+    async def update_prompt_meta(request):
+        """Toggle favourite or move to another category without a full save."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        entry_id, path = _prompt_path(body.get("id"))
+        data = _read_prompt(path) if path else None
+        if not data:
+            return web.json_response({"error": "prompt not found"}, status=404)
+        if "favorite" in body:
+            data["favorite"] = bool(body["favorite"])
+        if "category" in body:
+            data["category"] = (body.get("category") or "").strip()
+        data["updated"] = time.time()
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=1)
+        except Exception as exc:
+            return web.json_response({"error": f"update failed: {exc}"}, status=500)
+        return web.json_response({"id": entry_id, "favorite": data["favorite"],
+                                  "category": data["category"]})
+
+    @routes.post("/minimax_h3/prompts/delete")
+    async def delete_prompt(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        entry_id, path = _prompt_path(body.get("id"))
+        if not path or not os.path.exists(path):
+            return web.json_response({"error": "prompt not found"}, status=404)
+        try:
+            os.remove(path)
+        except Exception as exc:
+            return web.json_response({"error": f"delete failed: {exc}"}, status=500)
+        return web.json_response({"deleted": entry_id})
+
+    @routes.post("/minimax_h3/probe")
+    async def probe_route(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        target = body.get("file")
+        if not target:
+            return web.json_response({"error": "missing 'file'"}, status=400)
+        return web.json_response(media_io.probe(target))
