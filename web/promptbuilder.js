@@ -144,6 +144,42 @@ const MODE_CAPACITY = {
   REF: { Picture: 9, Video: 3, Audio: 3, total: 12, roles: {} },
 };
 
+/* Roles a definition line states outright. Used to seed a sensible marker and
+   an example note — never to overwrite anything the user has written, since a
+   definition constrains the marker but does not determine it. */
+const ROLE_HINTS = [
+  { re: /voice[- ]timbre|voice reference|timbre reference/i, marker: "reference",
+    note: "its vocal timbre guides the delivery without copying the original signal." },
+  { re: /music[- ]style|background-music style|score reference/i, marker: "reference",
+    note: "only its instrumentation, tempo, and dynamics guide the new score." },
+  { re: /synchroni[sz]ed audio track|soundtrack of/i, marker: "partially_copy",
+    note: "the audio layers carried over from that video remain audible." },
+  { re: /reused in full|1:1|complete final audio track/i, marker: "fully_copy",
+    note: "reused as the target video's complete final audio track." },
+  { re: /beat and rhythm|audio continuity/i, marker: "reference",
+    note: "only its beat and rhythm guide the target video's pacing." },
+  { re: /sound-effect texture/i, marker: "reference",
+    note: "only its sound-effect texture is referenced; the signal is not copied." },
+  { re: /storyboard/i, marker: "weak_reference",
+    note: "its viewpoint, subject placement, and shot order are followed." },
+  { re: /first frame|last frame|keyframe/i, marker: "fully_preserved",
+    note: "the frame is reproduced exactly at that point in the target video." },
+  { re: /source video for the target video edit|edited version/i,
+    marker: "partially_preserved",
+    note: "the source structure is retained where the edit does not change it." },
+];
+
+function roleHint(text) {
+  return ROLE_HINTS.find((h) => h.re.test(text || "")) || null;
+}
+
+/** The definition line that defines this label, if there is one. */
+function definitionFor(state, label) {
+  const line = (state.ref?.subjectDefs || [])
+    .find((d) => (d.text || "").trim().startsWith(label));
+  return line ? line.text : "";
+}
+
 const TAG_CLASS = { Subject: "subj", Picture: "pic", Video: "vid", Audio: "aud" };
 
 /* ------------------------------------------------------------------ */
@@ -158,7 +194,11 @@ function el(tag, props = {}, ...children) {
     else if (k === "dataset") Object.assign(e.dataset, v);
     else if (k.startsWith("on") && typeof v === "function")
       e.addEventListener(k.slice(2).toLowerCase(), v);
-    else if (k in e) e[k] = v;
+    else if (k in e) {
+      // Some DOM properties are read-only (input.list, input.form, ...);
+      // assigning throws in strict mode, so fall back to the attribute.
+      try { e[k] = v; } catch (err) { e.setAttribute(k, v); }
+    }
     else e.setAttribute(k, v);
   }
   for (const c of children.flat(Infinity)) {
@@ -620,6 +660,22 @@ function validate(state, slots) {
       if (![...retLabels].some((l) => l === `<Subject ${n}>`))
         warn(`<Subject ${n}> has no retention_analysis entry.`);
     }
+    // The guide requires the marker to sit inside the role the definition
+    // already states, so a plain contradiction is worth flagging.
+    state.ref.retention.forEach((row) => {
+      const def = definitionFor(state, row.label);
+      if (!def || !row.marker) return;
+      const copies = /\breused\b|\bcopied\b|\bcopy\b|1:1/i.test(def);
+      const refsOnly = /without copying|\breference\b|only its/i.test(def);
+      const copyMarker = ["fully_copy", "partially_copy"].includes(row.marker);
+      if (copies && !refsOnly && row.marker === "reference")
+        warn(`${row.label} is defined as reused or copied, but its retention ` +
+          "marker says reference \u2014 one of the two is wrong.");
+      if (refsOnly && !copies && copyMarker)
+        warn(`${row.label} is defined as a reference only, but its retention ` +
+          `marker says ${row.marker} \u2014 one of the two is wrong.`);
+    });
+
     const wc = state.ref.detail.trim() ? state.ref.detail.trim().split(/\s+/).length : 0;
     if (wc && (wc < 350 || wc > 500))
       info(`detailed_description is ${wc} words (guide suggests 350–500 for generation tasks).`);
@@ -826,7 +882,11 @@ const CSS = `
 .mmh3-libmode{font-size:9px;text-transform:uppercase;letter-spacing:.06em;
   border:1px solid #2b3a52;color:#7ea7d8;border-radius:8px;padding:0 6px;}
 .mmh3-libcat{font-size:9px;border:1px solid #3e5240;color:#7ec87e;border-radius:8px;
-  padding:0 6px;}
+  padding:0 6px;cursor:pointer;}
+.mmh3-libcat:hover{border-color:#7ec87e;background:#1e2a1e;}
+.mmh3-libcat.none{border-color:#333a45;color:#5c6472;}
+.mmh3-libcat.none:hover{border-color:#59637a;color:#8a93a3;background:none;}
+.mmh3-catlbl{font-size:11px;color:#8a93a3;white-space:nowrap;}
 .mmh3-libage{margin-left:auto;font-size:10px;color:#5c6472;}
 .mmh3-libprev{font-size:11px;color:#6b7484;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;margin-top:2px;font-family:ui-monospace,monospace;}
@@ -888,6 +948,8 @@ class Library {
     this.category = "";
     this.favesOnly = false;
     this.saveOpen = false;
+    this.catEdit = false;     // renaming the selected category
+    this.rowCat = null;       // id of the entry whose category is being set
     this.pending = null;      // { id, action: "load" | "delete" }
     this.formId = `mmh3cat${Math.random().toString(36).slice(2, 8)}`;
     injectCSS();
@@ -910,6 +972,14 @@ class Library {
       onclick: () => { this.favesOnly = !this.favesOnly; this.paint(); } },
       "\u2605 Favourites");
 
+    this.catBtn = el("button", { class: "mmh3-btn",
+      title: "Rename or clear the selected category",
+      onclick: () => {
+        if (!this.category) { toast("Pick a category to manage first"); return; }
+        this.catEdit = !this.catEdit;
+        this.paint();
+      } }, "\u270e");
+
     this.overlay = el("div", { class: "mmh3-overlay mmh3-libover",
       onmousedown: (e) => { if (e.target === this.overlay) this.close(); } },
       el("div", { class: "mmh3-libmodal" },
@@ -919,7 +989,8 @@ class Library {
             onclick: () => { this.saveOpen = !this.saveOpen; this.paint(); } },
             "Save current prompt"),
           el("button", { class: "mmh3-x", onclick: () => this.close() }, "\u2715")),
-        el("div", { class: "mmh3-libbar" }, this.searchEl, this.catEl, this.favEl),
+        el("div", { class: "mmh3-libbar" },
+          this.searchEl, this.catEl, this.catBtn, this.favEl),
         this.listEl));
 
     this.escHandler = (e) => { if (e.key === "Escape") this.close(); };
@@ -1028,11 +1099,77 @@ class Library {
           onclick: () => { this.pending = null; this.paint(); } }, "Cancel")));
   }
 
+  categoryForm() {
+    const input = el("input", { type: "text", value: this.category,
+      placeholder: "New category name" });
+    const count = this.entries.filter((e) => e.category === this.category).length;
+    const err = el("span", { class: "mmh3-saveerr" });
+
+    const apply = async (target) => {
+      try {
+        const res = await libApi("/category", { from: this.category, to: target });
+        toast(target
+          ? `Moved ${res.changed} prompt${res.changed === 1 ? "" : "s"} to "${target}"`
+          : `Cleared the category on ${res.changed} prompt${res.changed === 1 ? "" : "s"}`);
+        this.category = target;
+        this.catEdit = false;
+        this.refresh();
+      } catch (e2) { err.textContent = e2.message; }
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") apply(input.value.trim());
+    });
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+
+    return el("div", { class: "mmh3-saveform" },
+      el("div", { class: "mmh3-saverow" },
+        el("span", { class: "mmh3-catlbl" },
+          `"${this.category}" \u2014 ${count} prompt${count === 1 ? "" : "s"}`),
+        input,
+        el("button", { class: "mmh3-btn primary",
+          onclick: () => apply(input.value.trim()) }, "Rename"),
+        el("button", { class: "mmh3-btn ghost",
+          title: "Remove this category from its prompts (they are kept)",
+          onclick: () => apply("") }, "Clear"),
+        el("button", { class: "mmh3-btn",
+          onclick: () => { this.catEdit = false; this.paint(); } }, "Cancel")),
+      err);
+  }
+
+  rowCategoryForm(entry) {
+    const input = el("input", { type: "text", value: entry.category || "",
+      list: this.formId, placeholder: "Category (blank to clear)" });
+    const apply = async () => {
+      try {
+        const res = await libApi("/meta",
+          { id: entry.id, category: input.value.trim() });
+        entry.category = res.category;
+        this.rowCat = null;
+        this.refresh();
+      } catch (e2) { toast(e2.message); }
+    };
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+    return el("div", { class: "mmh3-librow confirm" },
+      el("div", { class: "mmh3-libmain" },
+        el("div", { class: "mmh3-libtop" },
+          el("span", { class: "mmh3-libname" }, entry.name)),
+        el("div", { class: "mmh3-saverow", style: { marginTop: "4px" } },
+          input,
+          el("datalist", { id: this.formId },
+            this.categories.map((c) => el("option", { value: c }))))),
+      el("div", { class: "mmh3-libacts" },
+        el("button", { class: "mmh3-btn primary", onclick: apply }, "Set"),
+        el("button", { class: "mmh3-btn",
+          onclick: () => { this.rowCat = null; this.paint(); } }, "Cancel")));
+  }
+
   paint() {
     this.favEl.classList.toggle("on", this.favesOnly);
     const rows = this.visible();
     const kids = [];
     if (this.saveOpen) kids.push(this.saveForm());
+    if (this.catEdit && this.category) kids.push(this.categoryForm());
     if (!rows.length) {
       kids.push(el("div", { class: "mmh3-libempty" },
         this.entries.length
@@ -1041,7 +1178,9 @@ class Library {
       this.listEl.replaceChildren(...kids);
       return;
     }
-    kids.push(...rows.map((e) => this.pending?.id === e.id
+    kids.push(...rows.map((e) => this.rowCat === e.id
+      ? this.rowCategoryForm(e)
+      : this.pending?.id === e.id
       ? this.confirmRow(e, this.pending.action)
       : el("div", { class: "mmh3-librow" },
       el("button", {
@@ -1059,7 +1198,10 @@ class Library {
           el("span", { class: "mmh3-libname" }, e.name),
           e.mode ? el("span", { class: "mmh3-libmode" },
             e.mode === "REF" ? "reference" : e.mode) : null,
-          e.category ? el("span", { class: "mmh3-libcat" }, e.category) : null,
+          el("span", { class: "mmh3-libcat" + (e.category ? "" : " none"),
+          title: "Change this prompt's category",
+          onclick: () => { this.rowCat = e.id; this.paint(); } },
+          e.category || "+ category"),
           el("span", { class: "mmh3-libage" }, ago(e.updated))),
         el("div", { class: "mmh3-libprev" }, e.preview || "(empty)")),
       el("div", { class: "mmh3-libacts" },
@@ -1141,6 +1283,8 @@ class Editor {
     if (opts.newline) {
       before = before.replace(/\s+$/, "");
       pad = before ? "\n" : "";
+    } else if (/^[,;]/.test(text)) {
+      pad = "";                     // the snippet supplies its own separator
     } else {
       pad = before && !/[\s(\u2014]$/.test(before) ? " " : "";
     }
@@ -1538,8 +1682,16 @@ class Editor {
       title: "Insert the next [Shot N]. Shots after the first use the cut time " +
         "from the stepper, formatted as At MM:SS.mmm",
       onclick: () => {
-        const t = this.lastFocus?.value || "";
+        const field = this.lastFocus;
+        const t = field?.value || "";
         const n = Math.max(0, ...[...t.matchAll(/\[Shot (\d+)\]/g)].map((m) => +m[1])) + 1;
+        // "appears in ..." fields want a bare shot label, not a cut scaffold.
+        if (field?.dataset?.shotlist) {
+          const sep = t.trim() && !/[\s,]$/.test(t.slice(0, field.selectionStart ?? t.length))
+            ? ", " : "";
+          this.insert(`${sep}[Shot ${n}]`);
+          return;
+        }
         if (n === 1) { this.insert("[Shot 1] ", { newline: true }); return; }
         const sec = parseFloat(timeIn.value);
         if (!isFinite(sec) || sec <= 0) {
@@ -1838,6 +1990,20 @@ class Editor {
 
     /* retention_analysis ---------------------------------------------- */
     const retWrap = el("div");
+    // The item a definition line actually defines: the tag it opens with.
+    // Pictures merely cited inside a subject are that subject's evidence, not
+    // separate labels, so they never earn their own retention line.
+    const definedLabels = () => {
+      const seen = [];
+      r.subjectDefs.forEach((d) => {
+        const m = (d.text || "").match(/^\s*<(Subject|Picture|Video|Audio) (\d+)>/);
+        if (!m) return;
+        const tag = `<${m[1]} ${m[2]}>`;
+        if (!seen.includes(tag)) seen.push(tag);
+      });
+      return seen;
+    };
+
     const knownLabels = () => {
       const defText = r.subjectDefs.map((d) => d.text).join("\n");
       const found = new Set(
@@ -1862,6 +2028,7 @@ class Editor {
             knownLabels().map((l) =>
               el("option", { value: l, selected: l === row.label }, l))),
           el("input", { type: "text", value: row.context,
+            dataset: { shotlist: "1" },
             placeholder: "appears in [Shot 1], [Shot 2]  \u2014 or leave empty",
             oninput: (e) => { row.context = e.target.value; } }),
           el("select", {
@@ -1871,7 +2038,11 @@ class Editor {
             onclick: () => { r.retention.splice(i, 1); drawRet(); this.updatePreview(); } },
             "\u2715"),
           el("input", { class: "mmh3-retnote", type: "text", value: row.note,
-            placeholder: "what exactly is retained / transferred / referenced",
+            placeholder: (() => {
+              const hint = roleHint(definitionFor(this.state, row.label));
+              return hint ? `e.g. ${hint.note}`
+                : "what exactly is retained / transferred / referenced";
+            })(),
             oninput: (e) => { row.note = e.target.value; } }),
         ));
       });
@@ -1886,17 +2057,35 @@ class Editor {
           if (!labels.length) { toast("Define a subject or connect media first"); return; }
           const used = new Set(r.retention.map((x) => x.label));
           const next = labels.find((l) => !used.has(l)) || labels[0];
-          r.retention.push({ label: next, context: "", marker: "fully_preserved", note: "" });
+          const hint = roleHint(definitionFor(this.state, next));
+          r.retention.push({ label: next, context: "",
+            marker: hint?.marker
+              || (next.startsWith("<Audio") ? "reference" : "fully_preserved"),
+            note: "" });
           drawRet(); this.updatePreview();
         } }, "+ Entry"),
-        el("button", { class: "mmh3-btn", title: "Add one entry per defined label",
+        el("button", { class: "mmh3-btn",
+          title: "One entry per item defined above \u2014 not per picture cited " +
+            "inside a subject",
           onclick: () => {
+            const labels = definedLabels();
+            if (!labels.length) {
+              toast("Define a subject or standalone reference first", 3000);
+              return;
+            }
             const used = new Set(r.retention.map((x) => x.label));
-            knownLabels().forEach((l) => {
-              if (!used.has(l))
-                r.retention.push({ label: l, context: "", marker: "fully_preserved", note: "" });
+            let added = 0;
+            labels.forEach((l) => {
+              if (used.has(l)) return;
+              const hint = roleHint(definitionFor(this.state, l));
+              r.retention.push({ label: l, context: "",
+                marker: hint?.marker
+                  || (l.startsWith("<Audio") ? "reference" : "fully_preserved"),
+                note: "" });
+              added += 1;
             });
             drawRet(); this.updatePreview();
+            if (!added) toast("Every defined label already has an entry", 2600);
           } }, "Auto-fill from labels")),
       el("span", { class: "hint" },
         "Visual labels: fully_preserved / partially_preserved / attribute_transfer / " +

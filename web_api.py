@@ -370,6 +370,38 @@ if PromptServer is not None and web is not None:
         return web.json_response({"id": entry_id, "favorite": data["favorite"],
                                   "category": data["category"]})
 
+    @routes.post("/minimax_h3/prompts/category")
+    async def rename_category(request):
+        """Rename a category across every prompt, or clear it entirely."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        source = (body.get("from") or "").strip()
+        target = (body.get("to") or "").strip()
+        if not source:
+            return web.json_response({"error": "missing category"}, status=400)
+        directory = _prompt_dir()
+        changed = 0
+        try:
+            names = [f for f in os.listdir(directory) if f.endswith(".json")]
+        except Exception:
+            names = []
+        for fn in names:
+            path = os.path.join(directory, fn)
+            data = _read_prompt(path)
+            if not data or (data.get("category") or "").strip() != source:
+                continue
+            data["category"] = target
+            data["updated"] = time.time()
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, indent=1)
+                changed += 1
+            except Exception:
+                pass
+        return web.json_response({"from": source, "to": target, "changed": changed})
+
     @routes.post("/minimax_h3/prompts/delete")
     async def delete_prompt(request):
         try:

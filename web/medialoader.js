@@ -23,7 +23,11 @@ function el(tag, props = {}, ...children) {
     else if (k === "dataset") Object.assign(e.dataset, v);
     else if (k.startsWith("on") && typeof v === "function")
       e.addEventListener(k.slice(2).toLowerCase(), v);
-    else if (k in e) e[k] = v;
+    else if (k in e) {
+      // Some DOM properties are read-only (input.list, input.form, ...);
+      // assigning throws in strict mode, so fall back to the attribute.
+      try { e[k] = v; } catch (err) { e.setAttribute(k, v); }
+    }
     else e.setAttribute(k, v);
   }
   for (const c of children.flat(Infinity)) {

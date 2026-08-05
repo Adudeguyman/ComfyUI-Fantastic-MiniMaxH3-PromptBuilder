@@ -211,6 +211,11 @@ In the library you can:
 - **Search** by name, category, mode, or the prompt text itself.
 - **Filter by category** — type any category name when saving and it becomes
   available in the dropdown.
+- **Manage categories** — pick one in the dropdown and click ✎ to rename it
+  across every prompt in it, or clear it so those prompts become uncategorised.
+  The prompts themselves are never deleted.
+- **Recategorise a single prompt** — click its category chip (or `+ category` on
+  one without) and set a new one.
 - **Star favourites**, which sort to the top of the list.
 - **Load** a prompt, replacing what's in the editor (it asks first if you'd be
   overwriting something).
