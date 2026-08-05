@@ -2061,7 +2061,9 @@ class Editor {
           r.retention.push({ label: next, context: "",
             marker: hint?.marker
               || (next.startsWith("<Audio") ? "reference" : "fully_preserved"),
-            note: "" });
+            // When the definition states the role outright, write the matching
+            // note rather than only hinting at it — the role chips already do.
+            note: hint ? hint.note : "" });
           drawRet(); this.updatePreview();
         } }, "+ Entry"),
         el("button", { class: "mmh3-btn",
@@ -2081,7 +2083,7 @@ class Editor {
               r.retention.push({ label: l, context: "",
                 marker: hint?.marker
                   || (l.startsWith("<Audio") ? "reference" : "fully_preserved"),
-                note: "" });
+                note: hint ? hint.note : "" });
               added += 1;
             });
             drawRet(); this.updatePreview();

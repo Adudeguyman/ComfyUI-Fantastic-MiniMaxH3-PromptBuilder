@@ -372,8 +372,17 @@ button next to the videos heading that explains it in the node, but in short:
 
 H3 takes at most 12 references in total, and a video's split-off soundtrack is
 its own reference. So a video with `paired` or `alone` audio uses two of your
-twelve. Set it to `off` and you get one back. The counter at the top of the
-Media Loader accounts for this.
+twelve. Set it to `off` and you get one back.
+
+It also spends part of a second budget: H3 accepts **three audio clips**, and a
+split soundtrack is one of them even though it travels in a different input
+group on the native node. Three videos with their sound enabled therefore use
+your whole audio allowance. The loader shows both counters — files and ♪ audio —
+and warns when either is exceeded.
+
+Reference clips should also run 2–15 seconds each, with no more than 15 seconds
+of video and 15 seconds of audio in total, and audio can't be sent without at
+least one image or video alongside it. The loader flags all of these.
 
 Go over twelve and you get a red warning. The node deliberately won't drop
 anything for you — removing a reference renumbers every tag after it, which

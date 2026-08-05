@@ -12,6 +12,30 @@ import { api } from "../../scripts/api.js";
 export const LOADER_NAME = "MiniMaxH3MediaLoader";
 export const SPLITTER_NAME = "MiniMaxH3ReferenceSplitter";
 export const MAX = { picture: 9, video: 3, audio: 3, total: 12 };
+// H3 policy: 2-15s per reference clip, 15s total per media type.
+export const CLIP = { min: 2, max: 15, totalPerType: 15 };
+
+/** Audio clips in play, counting split soundtracks — they spend the same
+ *  budget as standalone clips even though they use a different slot group. */
+export function audioCount(all) {
+  return (all || []).filter(isOn).reduce((n, it) => {
+    if (it.kind === "audio") return n + 1;
+    if (it.kind === "video" && it.has_audio &&
+        (it.audio_mode || "off") !== "off") return n + 1;
+    return n;
+  }, 0);
+}
+
+/** Total seconds per media type, for the 15s-per-type ceiling. */
+export function durations(all) {
+  const on = (all || []).filter(isOn);
+  const sum = (list) => list.reduce((t, i) => t + (i.duration || 0), 0);
+  return {
+    video: sum(on.filter((i) => i.kind === "video")),
+    audio: sum(on.filter((i) => i.kind === "audio" ||
+      (i.kind === "video" && i.has_audio && (i.audio_mode || "off") !== "off"))),
+  };
+}
 
 /* ---------------------------------------------------------------- utils */
 
@@ -561,6 +585,11 @@ class LoaderPanel {
         this.say(`All ${MAX[guess]} ${guess} slots are full — ${file.name} skipped.`, true);
         continue;
       }
+      if (guess === "audio" && audioCount(this.items) >= MAX.audio) {
+        this.say(`H3 takes ${MAX.audio} audio clips in total, and split video ` +
+          `soundtracks count too — ${file.name} skipped.`, true);
+        continue;
+      }
       if (guess === "video" && !caps.video) {
         this.say("Videos need PyAV or ffmpeg on the server.", true);
         continue;
@@ -568,14 +597,21 @@ class LoaderPanel {
       this.busy += 1; this.render();
       try {
         const info = await uploadFile(file);
+        // Don't spend an audio clip the budget can't cover — the soundtrack
+        // stays available, just switched off until room is made.
+        const budgetFull = audioCount(this.items) >= MAX.audio;
+        const pairable = info.kind === "video" && info.has_audio;
         this.items.push({
           kind: info.kind,
           file: info.file,
           name: info.original || info.name,
           duration: info.duration ?? null,
           has_audio: !!info.has_audio,
-          audio_mode: info.kind === "video" && info.has_audio ? "paired" : "off",
+          audio_mode: pairable && !budgetFull ? "paired" : "off",
         });
+        if (pairable && budgetFull)
+          this.say(`${info.original || info.name} loaded with its audio off — ` +
+            `already using ${MAX.audio} audio clips.`, true);
       } catch (err) {
         this.say(`${file.name}: ${err.message}`, true);
       } finally {
@@ -676,7 +712,11 @@ class LoaderPanel {
       el("span", { style: { fontSize: "10px", color: "#6b7484" } },
         this.busy ? `uploading ${this.busy}\u2026` : "or drop files on any slot"),
       el("span", { class: "mml-count" + (total > MAX.total ? " over" : "") },
-        `${total} / ${MAX.total}`)));
+        `${total} / ${MAX.total}`),
+      el("span", { class: "mml-count" + (audioCount(this.items) > MAX.audio ? " over" : ""),
+        style: { marginLeft: "6px" },
+        title: "Audio clips in play, including split video soundtracks" },
+        `\u266a ${audioCount(this.items)}/${MAX.audio}`)));
 
     const select = el("select", { class: "mml-preset",
       title: "Load a saved reference set",
@@ -723,10 +763,31 @@ class LoaderPanel {
           } }, "Delete")));
     }
 
-    kids.push(el("div", { class: "mml-msg" + (this.msgErr ? " err" : "") },
-      total > MAX.total
-        ? `Over the ${MAX.total}-file limit — remove ${total - MAX.total}.`
-        : this.msg));
+    const audio = audioCount(this.items);
+    const dur = durations(this.items);
+    const problems = [];
+    if (total > MAX.total)
+      problems.push(`Over the ${MAX.total}-file limit — remove ${total - MAX.total}.`);
+    if (audio > MAX.audio)
+      problems.push(`${audio} audio clips in play (limit ${MAX.audio}); split ` +
+        "soundtracks count. Switch one to off.");
+    if (dur.video > CLIP.totalPerType)
+      problems.push(`Reference video totals ${dur.video.toFixed(1)}s ` +
+        `(limit ${CLIP.totalPerType}s).`);
+    if (dur.audio > CLIP.totalPerType)
+      problems.push(`Reference audio totals ${dur.audio.toFixed(1)}s ` +
+        `(limit ${CLIP.totalPerType}s).`);
+    const short = this.items.filter((i) => isOn(i) && i.kind !== "picture" &&
+      i.duration && i.duration < CLIP.min);
+    if (short.length)
+      problems.push(`${short.map((i) => i.name).join(", ")} under ` +
+        `${CLIP.min}s — H3 expects ${CLIP.min}\u2013${CLIP.max}s clips.`);
+    if (!this.items.some((i) => isOn(i) && (i.kind === "picture" ||
+        i.kind === "video")) && audio)
+      problems.push("Audio can't be sent alone — add an image or video.");
+
+    kids.push(el("div", { class: "mml-msg" + (this.msgErr || problems.length ? " err" : "") },
+      problems.length ? problems[0] : this.msg));
 
     const left = el("div", { class: "mml-col" });
     const right = el("div", { class: "mml-col" });
@@ -777,13 +838,23 @@ class LoaderPanel {
           el("span", { class: "mml-seg" },
             ["off", "paired", "alone"].map((label) => {
               const m = label === "alone" ? "standalone" : label;
+              const turningOn = m !== "off" && mode === "off";
               return el("button", { class: m === mode ? "on" : "",
                 title: m === "paired"
                   ? "Soundtrack pairs with this video, labelled just before it"
                   : m === "standalone"
                     ? "Soundtrack becomes a separate reference, numbered after the videos"
                     : "Ignore this video's audio",
-                onclick: () => { it.audio_mode = m; this.commit(); } }, label);
+                onclick: () => {
+                  if (turningOn && audioCount(this.items) >= MAX.audio) {
+                    this.say(`Already using ${MAX.audio} audio clips \u2014 ` +
+                      "switch another off first.", true);
+                    this.render();
+                    return;
+                  }
+                  it.audio_mode = m;
+                  this.commit();
+                } }, label);
             })),
           el("span", { class: "mml-tag aud" },
             mode === "off" ? "\u2014" : (splitTag || "").slice(1, -1)));
