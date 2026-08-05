@@ -776,6 +776,12 @@ const CSS = `
 .mmh3-form textarea:focus,.mmh3-form input:focus,.mmh3-form select:focus{
   outline:none;border-color:#4a5568;}
 .mmh3-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.mmh3-clearbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  background:#2b2320;border:1px solid #7a4a3a;border-radius:7px;padding:8px 10px;
+  margin-bottom:10px;font-size:12px;color:#e8c4b4;}
+.mmh3-clearnote{font-size:11px;color:#a08878;}
+.mmh3-clearbar .mmh3-btn{margin-left:auto;}
+.mmh3-clearbar .mmh3-btn + .mmh3-btn{margin-left:0;}
 .mmh3-chipbar{position:sticky;top:0;z-index:5;background:#191c22;padding:8px 0 10px;
   border-bottom:1px solid #242a34;margin-bottom:14px;}
 .mmh3-chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:3px;align-items:flex-start;}
@@ -1264,6 +1270,7 @@ class Editor {
     this.libraryId = null;
     this.libraryName = "";
     this.libraryCategory = "";
+    this.clearPending = false;
     injectCSS();
     this.build();
     this.render();
@@ -1335,6 +1342,10 @@ class Editor {
           el("button", { class: "mmh3-btn",
             title: "Browse saved prompts",
             onclick: () => new Library(this) }, "\u2630 Library"),
+          el("button", { class: "mmh3-btn",
+            title: "Clear every field and start over",
+            onclick: () => { this.clearPending = !this.clearPending; this.render(); } },
+            "Clear"),
           this.modeBar,
           el("button", { class: "mmh3-x", onclick: () => this.close() }, "\u2715"),
         ),
@@ -1372,6 +1383,33 @@ class Editor {
     });
     this.escHandler = (e) => { if (e.key === "Escape") this.close(); };
     window.addEventListener("keydown", this.escHandler);
+  }
+
+  clearAll() {
+    const mode = this.state.mode;          // you're still working in this mode
+    this.state = defaultState();
+    this.state.mode = mode;
+    this.pins = [];
+    this.autoPin = null;
+    // Forget the library entry too, so the next save creates a new prompt
+    // rather than quietly renaming the one that was loaded.
+    this.libraryId = null;
+    this.libraryName = "";
+    this.libraryCategory = "";
+    this.clearPending = false;
+    this.render();
+    toast("Prompt cleared \u2014 nothing saved to the node yet");
+  }
+
+  clearStrip() {
+    return el("div", { class: "mmh3-clearbar" },
+      el("span", {}, `Clear every field and start a new ${this.state.mode} prompt?`),
+      el("span", { class: "mmh3-clearnote" },
+        "The node keeps its current prompt until you save."),
+      el("button", { class: "mmh3-btn primary",
+        onclick: () => this.clearAll() }, "Clear"),
+      el("button", { class: "mmh3-btn",
+        onclick: () => { this.clearPending = false; this.render(); } }, "Cancel"));
   }
 
   close() {
@@ -1771,7 +1809,10 @@ class Editor {
     this.slots = getRefSlots(this.node);
     if (this.state.mode === "REF") this.renderRef();
     else this.renderBase();
-    this.formEl.scrollTop = scroll;
+    if (this.clearPending) {
+      this.formEl.prepend(this.clearStrip());
+      this.formEl.scrollTop = 0;
+    } else this.formEl.scrollTop = scroll;
     this.updatePreview();
     this.drawPins();
   }

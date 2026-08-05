@@ -186,6 +186,10 @@ mode — every subject having a matching retention entry.
 Amber warnings are advisory and the prompt saves regardless. Red errors are the
 ones worth fixing before you render.
 
+**Clear** in the header empties every field and starts a new prompt in the same
+mode. It asks first, and the node keeps whatever prompt it already has until you
+save — so clearing is only permanent once you press **Save to node**.
+
 ![I2VA editor layout](docs/4.png)
 
 *I2VA layout — only the input Picture 1 can be used in I2VA mode. Other media is
