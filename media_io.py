@@ -84,24 +84,165 @@ def load_image(annotated):
 
 # --- audio ------------------------------------------------------------------
 
+def _normalize_scale(waveform):
+    """Force samples into [-1, 1] whatever the decoder produced.
+
+    Some packs globally monkey-patch torchaudio.load (e.g. via scipy), which
+    returns raw integer samples as floats. Feeding int16-scale audio to the
+    audio VAE silently yields garbage conditioning, so guard every path.
+    """
+    peak = float(waveform.abs().max()) if waveform.numel() else 0.0
+    if peak <= 1.5:
+        return waveform
+    if peak <= 132.0:
+        scale = 128.0            # int8-scale
+    elif peak <= 33000.0:
+        scale = 32768.0          # int16-scale (the common case)
+    elif peak >= 1e6:
+        scale = 2147483648.0     # int32-scale
+    else:
+        scale = peak             # loud float data: bring the peak to 1.0
+    print(f"[MiniMaxH3 media_io] audio arrived out of range "
+          f"(peak {peak:.0f}); normalising by {scale:.0f}")
+    return waveform / scale
+
+
 def _to_audio_dict(waveform, sr):
     if waveform.ndim == 1:
         waveform = waveform[None, :]
     if waveform.ndim == 2:
         waveform = waveform[None, ...]  # [1, C, L]
-    return {"waveform": waveform.float(), "sample_rate": int(sr)}
+    return {"waveform": _normalize_scale(waveform.float()), "sample_rate": int(sr)}
+
+
+def _audio_via_comfy(annotated, path):
+    """Delegate to ComfyUI's own LoadAudio machinery when available.
+
+    This is byte-for-byte the decode the native node performs, so anything
+    that works with a native LoadAudio works identically through us. Import
+    paths are tried defensively because comfy_extras is not a stable API.
+    """
+    last = None
+    try:
+        from comfy_extras import nodes_audio as na
+    except Exception as exc:
+        raise RuntimeError(f"comfy audio module unavailable: {exc}")
+
+    # 1) module-level helper, present in several ComfyUI versions
+    for name in ("load_audio", "load"):
+        fn = getattr(na, name, None)
+        if callable(fn):
+            try:
+                out = fn(path)
+                d = _unwrap_audio(out)
+                if d is not None:
+                    return d
+            except Exception as exc:
+                last = exc
+
+    # 2) the LoadAudio node itself, fed the same annotated name the UI would use
+    cls = getattr(na, "LoadAudio", None)
+    if cls is not None:
+        for attr in ("execute", getattr(cls, "FUNCTION", None), "load"):
+            fn = getattr(cls, attr, None) if isinstance(attr, str) else None
+            if not callable(fn):
+                continue
+            for arg in (annotated, path):
+                try:
+                    d = _unwrap_audio(fn(arg))
+                    if d is not None:
+                        return d
+                except Exception as exc:
+                    last = exc
+    raise RuntimeError(f"comfy LoadAudio path failed: {last}")
+
+
+def _unwrap_audio(out):
+    """Dig the {'waveform','sample_rate'} dict out of whatever wrapper."""
+    seen = 0
+    while out is not None and seen < 5:
+        if isinstance(out, dict) and "waveform" in out:
+            return {"waveform": _normalize_scale(out["waveform"].float()),
+                    "sample_rate": int(out["sample_rate"])}
+        if isinstance(out, (tuple, list)) and out:
+            out = out[0]
+        elif hasattr(out, "args"):          # io.NodeOutput
+            out = out.args
+        elif hasattr(out, "audio"):
+            out = out.audio
+        else:
+            return None
+        seen += 1
+    return None
+
+
+def _audio_via_av(path):
+    """Decode with PyAV, the same route ComfyUI's own LoadAudio takes.
+
+    Preferred over torchaudio, which other extensions are known to globally
+    monkey-patch into returning unnormalised integer samples.
+    """
+    import av
+
+    with av.open(path) as container:
+        stream = next(s for s in container.streams if s.type == "audio")
+        chunks = []
+        for frame in container.decode(stream):
+            arr = frame.to_ndarray()
+            if arr.dtype.kind == "i":
+                arr = arr.astype(np.float32) / float(np.iinfo(arr.dtype).max)
+            elif arr.dtype.kind == "u":
+                arr = (arr.astype(np.float32) - 128.0) / 128.0
+            else:
+                arr = arr.astype(np.float32)
+            if arr.ndim == 1:
+                arr = arr[None, :]
+            # Packed layouts arrive as ONE interleaved row of C*samples.
+            # frame.samples is the per-channel count, so the channel count is
+            # arithmetic — never trust stream.channels, which newer PyAV
+            # builds return as None (that misread stereo as half-speed mono).
+            per_channel = int(getattr(frame, "samples", 0) or 0)
+            if arr.shape[0] == 1 and per_channel and arr.shape[1] > per_channel:
+                ch = arr.shape[1] // per_channel
+                if ch * per_channel == arr.shape[1]:
+                    arr = arr.reshape(per_channel, ch).T
+            chunks.append(arr)
+        if not chunks:
+            raise RuntimeError("no decodable audio frames")
+        data = np.concatenate(chunks, axis=1)
+        sr = stream.rate
+    return _to_audio_dict(torch.from_numpy(data), sr)
 
 
 def load_audio(annotated):
     path = resolve(annotated)
+    errors = []
+    try:
+        d = _audio_via_comfy(annotated, path)
+        print(f"[MiniMaxH3 media_io] {os.path.basename(path)}: decoded via "
+              "ComfyUI's own LoadAudio")
+        return d
+    except Exception as exc:
+        errors.append(f"comfy: {exc}")
+    try:
+        d = _audio_via_av(path)
+        print(f"[MiniMaxH3 media_io] {os.path.basename(path)}: decoded via PyAV")
+        return d
+    except Exception as exc:
+        errors.append(f"av: {exc}")
+    try:
+        return _audio_via_ffmpeg(path)
+    except Exception as exc:
+        errors.append(f"ffmpeg: {exc}")
     try:
         import torchaudio
 
         waveform, sr = torchaudio.load(path)
-        return _to_audio_dict(waveform, sr)
-    except Exception:
-        pass
-    return _audio_via_ffmpeg(path)
+        return _to_audio_dict(waveform, sr)   # scale guard covers patched loads
+    except Exception as exc:
+        errors.append(f"torchaudio: {exc}")
+    raise RuntimeError(
+        f"Can't decode audio from {os.path.basename(path)} — " + "; ".join(errors))
 
 
 def _audio_via_ffmpeg(path):
@@ -204,32 +345,6 @@ def extract_audio(annotated):
             pass
     return _audio_via_ffmpeg(path)
 
-
-def _audio_via_av(path):
-    import av
-
-    chunks = []
-    sr = AUDIO_SR
-    with av.open(path) as container:
-        if not container.streams.audio:
-            raise RuntimeError("no audio stream")
-        stream = container.streams.audio[0]
-        sr = int(stream.rate or AUDIO_SR)
-        for frame in container.decode(stream):
-            chunks.append(frame.to_ndarray())
-    if not chunks:
-        raise RuntimeError("no audio decoded")
-    data = np.concatenate(chunks, axis=-1) if chunks[0].ndim > 1 else \
-        np.concatenate(chunks)[None, :]
-    if data.ndim == 1:
-        data = data[None, :]
-    if data.dtype != np.float32:
-        info = np.iinfo(data.dtype) if np.issubdtype(data.dtype, np.integer) else None
-        data = data.astype(np.float32) / (info.max if info else 1.0)
-    return _to_audio_dict(torch.from_numpy(np.ascontiguousarray(data)), sr)
-
-
-# --- probing for the UI -----------------------------------------------------
 
 def probe(annotated):
     """Duration / stream info shown on the node. Never raises."""

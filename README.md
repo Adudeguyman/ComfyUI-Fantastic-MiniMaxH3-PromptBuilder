@@ -394,15 +394,15 @@ would quietly invalidate tags already written into your prompt.
 
 ### Does switching mode change what gets sent?
 
-Yes, and that's what makes leaving everything wired safe. Each mode only uses
-certain references — T2VA none, I2VA and L2VA one image, FL2VA two, reference
-mode the lot — and the Prompt Builder simply doesn't pass anything the current
-mode can't use. Switch from reference mode to I2VA and the videos, audio, and
-extra images stop being sent, without touching a cable.
+No — the Prompt Builder passes connected media through unchanged in every mode.
+Which references a mode can *use* is shown in the editor: unusable media is
+greyed out in the rail, can't be inserted, and the checks list exactly what will
+be ignored. If media is connected that the saved mode can't use, a note is
+printed to the console at run time, but nothing is silently dropped.
 
-The editor shows this too: references the current mode can't use are greyed out
-in the rail and can't be inserted, so you can't write a tag that would go
-nowhere.
+To stop something reaching the model, switch it off with the ◉ toggle on the
+Media Loader or disconnect it — an explicit action, visible in the panel,
+rather than a side effect of changing mode.
 
 ### Can I wire every output once and leave it?
 

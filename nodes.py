@@ -131,6 +131,28 @@ class MiniMaxH3PromptBuilder:
         }
 
     @staticmethod
+    @staticmethod
+    def _iter_links(value):
+        """Yield every [node_id, slot] link inside an input value.
+
+        Plain inputs hold a bare link, but Autogrow inputs (as used by the
+        native MiniMax H3 reference node) hold a dict of links, one per grown
+        slot — so the scan has to recurse or those consumers are invisible.
+        """
+        if isinstance(value, list):
+            if (len(value) == 2
+                    and isinstance(value[0], (str, int))
+                    and isinstance(value[1], int)
+                    and not isinstance(value[1], bool)):
+                yield value
+            else:
+                for item in value:
+                    yield from MiniMaxH3PromptBuilder._iter_links(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                yield from MiniMaxH3PromptBuilder._iter_links(item)
+
+    @staticmethod
     def _consumed_slots(prompt, unique_id):
         """Output slot indices of this node that some other node reads."""
         if not isinstance(prompt, dict):
@@ -141,15 +163,9 @@ class MiniMaxH3PromptBuilder:
             if str(nid) == uid or not isinstance(node, dict):
                 continue
             for val in (node.get("inputs") or {}).values():
-                if (
-                    isinstance(val, list)
-                    and len(val) == 2
-                    and str(val[0]) == uid
-                ):
-                    try:
-                        slots.add(int(val[1]))
-                    except (TypeError, ValueError):
-                        pass
+                for link in MiniMaxH3PromptBuilder._iter_links(val):
+                    if str(link[0]) == uid:
+                        slots.add(int(link[1]))
         return slots
 
     # -- execution -----------------------------------------------------------
@@ -165,6 +181,12 @@ class MiniMaxH3PromptBuilder:
         bundle. Media wired purely for editor previews stays free.
         """
         consumed = self._consumed_slots(prompt, unique_id)
+        # If this node is executing, something downstream reads at least one
+        # output — a scan that finds none has misread the graph (as happened
+        # with nested Autogrow links). Fail open and evaluate what's wired
+        # rather than silently starving every output.
+        if consumed is not None and not consumed:
+            consumed = None
         linked = self._linked_inputs(prompt, unique_id)
         mode = _mode_of(builder_state)
         needed = []
@@ -173,9 +195,6 @@ class MiniMaxH3PromptBuilder:
             slot = idx + 1  # slot 0 is the prompt string
             if consumed is not None and slot not in consumed:
                 continue
-            # Never fetch media the current mode cannot use.
-            if not _usable(name, mode):
-                continue
             if linked is None or name in linked:
                 if kwargs.get(name) is None:
                     needed.append(name)
@@ -183,6 +202,9 @@ class MiniMaxH3PromptBuilder:
                 want_bundle = True
         if want_bundle and references is None:
             needed.append("references")
+        print(f"[MiniMaxH3 Builder] lazy: consumed slots="
+              f"{sorted(consumed) if consumed is not None else 'unknown (evaluate all)'} "
+              f"linked={sorted(linked) if linked else linked} -> requesting {needed or 'nothing'}")
         return needed
 
     @staticmethod
@@ -208,18 +230,43 @@ class MiniMaxH3PromptBuilder:
         self, prompt_text, builder_state, references=None,
         prompt=None, unique_id=None, **kwargs
     ):
+        # Pass everything through. The editor and validator surface what a
+        # mode can't use; silently dropping media here proved worse than the
+        # problem it solved — a stale builder_state (mode changed without a
+        # re-save) made connected audio vanish with no error anywhere.
         mode = _mode_of(builder_state)
-        media = []
+        media, dropped = [], []
         for name in _media_names():
-            # A slot the mode can't use stays empty, so switching mode is
-            # enough to stop that media reaching the sampler.
-            if not _usable(name, mode):
-                media.append(None)
-                continue
             value = kwargs.get(name)
             if value is None:
                 value = self._from_bundle(references, name)
             media.append(value)
+            if value is not None and not _usable(name, mode):
+                dropped.append(name)
+        if dropped:
+            print(
+                f"[MiniMaxH3 PromptBuilder] note: {', '.join(dropped)} "
+                f"connected while builder_state says {mode}; passing through "
+                "unchanged. If this is stale, re-save the prompt in the editor."
+            )
+        def _short(v):
+            try:
+                w = v["waveform"]
+                return f"audio {list(w.shape)}@{v['sample_rate']}Hz " \
+                       f"rms={float((w ** 2).mean() ** 0.5):.4f}"
+            except Exception:
+                pass
+            try:
+                return f"tensor {list(v.shape)}"
+            except Exception:
+                return type(v).__name__
+
+        sent = [f"{n2}={_short(v)}" for n2, v in zip(_media_names(), media)
+                if v is not None]
+        print(f"[MiniMaxH3 Builder] mode={mode} references="
+              f"{'yes' if references is not None else 'no'} -> "
+              + ("; ".join(sent) if sent else
+                 "NO media on any output — check the loader lines above"))
         return (prompt_text.strip(),) + tuple(media)
 
 
@@ -333,6 +380,26 @@ class MiniMaxH3MediaLoader:
             "audios": aud_t,
             "items": items,
         }
+
+        def _brief(a):
+            if a is None:
+                return "None"
+            try:
+                w = a["waveform"]
+                rms = float((w ** 2).mean() ** 0.5)
+                return f"{list(w.shape)}@{a['sample_rate']}Hz rms={rms:.4f}"
+            except Exception as exc:
+                return f"unreadable ({exc})"
+
+        print(f"[MiniMaxH3 Loader] {len(items)} item(s) in state -> "
+              f"{len(pic_t)} picture(s), {len(vid_t)} video(s), "
+              f"{sum(1 for x in vaud_t if x is not None)} soundtrack(s), "
+              f"{len(aud_t)} standalone audio")
+        for i, a in enumerate(vaud_t):
+            if a is not None:
+                print(f"[MiniMaxH3 Loader]   video_audio_{i+1}: {_brief(a)}")
+        for i, a in enumerate(aud_t):
+            print(f"[MiniMaxH3 Loader]   audio_{i+1}: {_brief(a)}")
 
         return (bundle,)
 
