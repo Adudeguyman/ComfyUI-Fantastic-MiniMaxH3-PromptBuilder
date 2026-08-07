@@ -214,31 +214,46 @@ def _audio_via_av(path):
     return _to_audio_dict(torch.from_numpy(data), sr)
 
 
-def load_audio(annotated):
+def _slice_audio(d, start, end):
+    """Trim a decoded {'waveform','sample_rate'} dict to [start, end] seconds."""
+    if not start and not end:
+        return d
+    sr = d["sample_rate"]
+    total = d["waveform"].shape[-1]
+    a = max(0, int(round((start or 0.0) * sr)))
+    b = min(total, int(round(end * sr))) if end else total
+    if b <= a:
+        raise RuntimeError(
+            f"Audio trim {start or 0:.2f}-{end:.2f}s selects nothing "
+            f"(clip is {total / sr:.2f}s).")
+    return {"waveform": d["waveform"][..., a:b], "sample_rate": sr}
+
+
+def load_audio(annotated, start=None, end=None):
     path = resolve(annotated)
     errors = []
     try:
         d = _audio_via_comfy(annotated, path)
         print(f"[MiniMaxH3 media_io] {os.path.basename(path)}: decoded via "
               "ComfyUI's own LoadAudio")
-        return d
+        return _slice_audio(d, start, end)
     except Exception as exc:
         errors.append(f"comfy: {exc}")
     try:
         d = _audio_via_av(path)
         print(f"[MiniMaxH3 media_io] {os.path.basename(path)}: decoded via PyAV")
-        return d
+        return _slice_audio(d, start, end)
     except Exception as exc:
         errors.append(f"av: {exc}")
     try:
-        return _audio_via_ffmpeg(path)
+        return _slice_audio(_audio_via_ffmpeg(path), start, end)
     except Exception as exc:
         errors.append(f"ffmpeg: {exc}")
     try:
         import torchaudio
 
         waveform, sr = torchaudio.load(path)
-        return _to_audio_dict(waveform, sr)   # scale guard covers patched loads
+        return _slice_audio(_to_audio_dict(waveform, sr), start, end)
     except Exception as exc:
         errors.append(f"torchaudio: {exc}")
     raise RuntimeError(
@@ -263,50 +278,80 @@ def _audio_via_ffmpeg(path):
 
 # --- video ------------------------------------------------------------------
 
-def load_video_frames(annotated, fps=FPS, max_frames=None):
-    """Decode to an IMAGE batch [N, H, W, 3] resampled to `fps`."""
+def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None):
+    """Decode to an IMAGE batch [N, H, W, 3] resampled to `fps`.
+
+    `start`/`end` (seconds) trim the source before sampling; only the trimmed
+    span is decoded, so trimming a long file is cheap.
+    """
     path = resolve(annotated)
     if _have_av():
         try:
-            return _frames_via_av(path, fps, max_frames)
+            return _frames_via_av(path, fps, max_frames, start, end)
         except Exception:
             pass
     if _ffmpeg():
-        return _frames_via_ffmpeg(path, fps, max_frames)
+        return _frames_via_ffmpeg(path, fps, max_frames, start, end)
     raise RuntimeError(
         f"Can't decode {os.path.basename(path)}: install PyAV (pip install av) "
         "or put ffmpeg on PATH."
     )
 
 
-def _frames_via_av(path, fps, max_frames):
+def _frames_via_av(path, fps, max_frames, start=None, end=None):
+    """Sample frames on the target-fps time grid using frame timestamps.
+
+    Timestamp-based sampling handles variable-frame-rate sources correctly
+    (index-based stepping does not), and trims decode from the nearest
+    keyframe rather than reading the whole file.
+    """
     import av
 
+    t0 = float(start or 0.0)
     out = []
     with av.open(path) as container:
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
-        src_fps = float(stream.average_rate or fps)
-        step = max(1.0, src_fps / float(fps))
-        nxt, i = 0.0, 0
+        if t0 > 0:
+            # Lands on the keyframe at or before t0; frames before t0 are
+            # decoded (they must be, for reference frames) but not kept.
+            container.seek(int(t0 / stream.time_base), stream=stream,
+                           backward=True, any_frame=False)
+        grid = 1.0 / float(fps)
+        want = t0
         for frame in container.decode(stream):
-            if i >= nxt:
-                out.append(frame.to_ndarray(format="rgb24"))
-                nxt += step
-                if max_frames and len(out) >= max_frames:
-                    break
-            i += 1
+            t = frame.time
+            if t is None:
+                continue
+            if end is not None and t > end + grid / 2:
+                break
+            if t < want - grid / 2:
+                continue
+            out.append(frame.to_ndarray(format="rgb24"))
+            want += grid
+            if max_frames and len(out) >= max_frames:
+                break
     if not out:
-        raise RuntimeError("No video frames decoded.")
+        raise RuntimeError(
+            "No video frames decoded"
+            + (f" in {t0:.2f}-{end:.2f}s" if (start or end) else "") + ".")
     arr = np.stack(out).astype(np.float32) / 255.0
     return torch.from_numpy(arr)
 
 
-def _frames_via_ffmpeg(path, fps, max_frames):
+def _frames_via_ffmpeg(path, fps, max_frames, start=None, end=None):
     exe = _ffmpeg()
     w, h = _dimensions(path)
-    cmd = [exe, "-v", "error", "-i", path, "-vf", f"fps={fps}",
-           "-f", "rawvideo", "-pix_fmt", "rgb24"]
+    cmd = [exe, "-v", "error"]
+    if start:
+        cmd += ["-ss", f"{float(start):.3f}"]     # before -i: keyframe-fast seek
+    cmd += ["-i", path]
+    if end:
+        span = float(end) - float(start or 0.0)
+        if span <= 0:
+            raise RuntimeError(f"Video trim {start}-{end}s selects nothing.")
+        cmd += ["-t", f"{span:.3f}"]
+    cmd += ["-vf", f"fps={fps}", "-f", "rawvideo", "-pix_fmt", "rgb24"]
     if max_frames:
         cmd += ["-frames:v", str(int(max_frames))]
     cmd += ["-"]
@@ -335,15 +380,15 @@ def _dimensions(path):
     return int(w), int(h)
 
 
-def extract_audio(annotated):
+def extract_audio(annotated, start=None, end=None):
     """Pull the soundtrack out of a video file."""
     path = resolve(annotated)
     if _have_av():
         try:
-            return _audio_via_av(path)
+            return _slice_audio(_audio_via_av(path), start, end)
         except Exception:
             pass
-    return _audio_via_ffmpeg(path)
+    return _slice_audio(_audio_via_ffmpeg(path), start, end)
 
 
 def probe(annotated):

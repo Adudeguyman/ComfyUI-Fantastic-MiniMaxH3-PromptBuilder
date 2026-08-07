@@ -68,6 +68,8 @@ Highlights:
   failed render.
 - **The official guide is built in.** A 📖 button opens the full PDF.
 - **Drag-and-drop media** with previews, playback, and reorderable slots.
+- **Non-destructive trim** — send just a slice of a clip (like its last 3
+  seconds) without touching the file.
 - **A prompt library** — save prompts with categories and favourites, then
   search and reload them.
 - **Media presets** so you can reload a set of references in one click.
@@ -261,6 +263,12 @@ this into" — see [How do tags get their
 numbers?](#how-do-tags-get-their-numbers) — so the loader displays the exact tag
 order along the bottom of the node, and the editor labels each thumbnail with
 the tag it will actually get.
+
+The ✂ button on any video or audio row trims what's sent to a start–end range
+in seconds — the file itself is untouched, and the counters and 15-second
+budgets track the trimmed span. `last 2s` / `last 3s` shortcuts grab a clip's
+tail in one click, which is exactly what video continuation wants. Over-long
+clips can be brought inside the budget the same way instead of re-exporting.
 
 Videos that carry sound get an extra control for whether that soundtrack is
 treated as part of the video or as a separate audio reference. The **?** button

@@ -250,12 +250,14 @@ class MiniMaxH3PromptBuilder:
                 "unchanged. If this is stale, re-save the prompt in the editor."
             )
         def _short(v):
-            try:
-                w = v["waveform"]
-                return f"audio {list(w.shape)}@{v['sample_rate']}Hz " \
-                       f"rms={float((w ** 2).mean() ** 0.5):.4f}"
-            except Exception:
-                pass
+            # Never index a tensor speculatively — type-check first.
+            if isinstance(v, dict) and "waveform" in v:
+                try:
+                    w = v["waveform"]
+                    return f"audio {list(w.shape)}@{v['sample_rate']}Hz " \
+                           f"rms={float((w ** 2).mean() ** 0.5):.4f}"
+                except Exception:
+                    return "audio (unreadable)"
             try:
                 return f"tensor {list(v.shape)}"
             except Exception:
@@ -360,18 +362,33 @@ class MiniMaxH3MediaLoader:
 
         pictures, videos, video_audios, audios = self._partition(items)
 
+        def _trim(i):
+            t = i.get("trim") if isinstance(i, dict) else None
+            if not isinstance(t, dict):
+                return None, None
+            def num(v):
+                try:
+                    v = float(v)
+                    return v if v > 0 else None
+                except (TypeError, ValueError):
+                    return None
+            return num(t.get("start")), num(t.get("end"))
+
         pic_t = [media_io.load_image(i["file"]) for i in pictures[:PICTURES]]
-        vid_t = [media_io.load_video_frames(i["file"]) for i in videos[:VIDEOS]]
+        vid_t = [media_io.load_video_frames(i["file"], start=_trim(i)[0],
+                 end=_trim(i)[1]) for i in videos[:VIDEOS]]
         vaud_t = [
-            media_io.extract_audio(i["file"]) if i else None
+            media_io.extract_audio(i["file"], start=_trim(i)[0], end=_trim(i)[1]) if i else None
             for i in video_audios[:VIDEO_AUDIOS]
         ]
         aud_t = []
         for i in audios[:AUDIOS]:
             if i.get("kind") == "video":
-                aud_t.append(media_io.extract_audio(i["file"]))
+                aud_t.append(media_io.extract_audio(i["file"],
+                    start=_trim(i)[0], end=_trim(i)[1]))
             else:
-                aud_t.append(media_io.load_audio(i["file"]))
+                aud_t.append(media_io.load_audio(i["file"],
+                    start=_trim(i)[0], end=_trim(i)[1]))
 
         bundle = {
             "pictures": pic_t,
@@ -384,6 +401,8 @@ class MiniMaxH3MediaLoader:
         def _brief(a):
             if a is None:
                 return "None"
+            if not (isinstance(a, dict) and "waveform" in a):
+                return f"unexpected type {type(a).__name__}"
             try:
                 w = a["waveform"]
                 rms = float((w ** 2).mean() ** 0.5)

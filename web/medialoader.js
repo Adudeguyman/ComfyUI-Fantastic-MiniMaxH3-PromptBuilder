@@ -26,10 +26,20 @@ export function audioCount(all) {
   }, 0);
 }
 
+/** Duration actually sent: the trimmed span when a trim is set. */
+export function effDuration(it) {
+  const full = it.duration || 0;
+  const t = it.trim;
+  if (!t || (!t.start && !t.end)) return full;
+  const a = Math.max(0, t.start || 0);
+  const b = t.end ? Math.min(t.end, full || t.end) : full;
+  return Math.max(0, b - a);
+}
+
 /** Total seconds per media type, for the 15s-per-type ceiling. */
 export function durations(all) {
   const on = (all || []).filter(isOn);
-  const sum = (list) => list.reduce((t, i) => t + (i.duration || 0), 0);
+  const sum = (list) => list.reduce((t, i) => t + effDuration(i), 0);
   return {
     video: sum(on.filter((i) => i.kind === "video")),
     audio: sum(on.filter((i) => i.kind === "audio" ||
@@ -70,6 +80,13 @@ export function viewURL(annotated) {
   if (slash >= 0) { sub = name.slice(0, slash); name = name.slice(slash + 1); }
   return api.apiURL(`/view?filename=${encodeURIComponent(name)}` +
     `&subfolder=${encodeURIComponent(sub)}&type=${type}`);
+}
+
+export function fmtSpan(item) {
+  const t = item.trim || {};
+  const a = t.start || 0;
+  const b = t.end || item.duration || 0;
+  return `${a.toFixed(1)}\u2013${b.toFixed(1)}s`;
 }
 
 function fmtDur(s) {
@@ -295,6 +312,25 @@ const CSS = `
 .mml-slot.filled.off{opacity:.42;border-style:dashed;}
 .mml-slot.filled.off .mml-power{opacity:1;color:#6b7484;}
 .mml-slot.filled.off:hover{opacity:.7;}
+.mml-segstack{display:flex;flex-direction:column;align-items:center;gap:2px;
+  flex-shrink:0;}
+.mml-segtag{font-size:9px;}
+.mml-trimok{border-color:#3e5240;color:#7ec87e;}
+.mml-trimbtn{cursor:pointer;color:#e0a94c;opacity:.65;font-size:15px;line-height:1;
+  flex-shrink:0;user-select:none;}
+.mml-trimbtn:hover{opacity:1;}
+.mml-trimbtn.on{opacity:1;text-shadow:0 0 6px rgba(224,169,76,.55);}
+.mml-trimrow{display:flex;align-items:center;flex-wrap:nowrap;gap:3px;
+  padding:0 5px;height:100%;overflow:hidden;}
+.mml-trimlbl{font-size:9px;text-transform:uppercase;letter-spacing:.07em;
+  color:#6b7484;}
+.mml-triminput{width:38px;background:#12151b;color:#dde2ea;
+  border:1px solid #2e3440;border-radius:5px;padding:2px 6px;font-size:11px;}
+.mml-triminput:focus{outline:none;border-color:#4a5568;}
+.mml-trimdash{color:#6b7484;}
+.mml-trimof{font-size:10px;color:#6b7484;}
+.mml-trimerr{flex-basis:100%;font-size:10px;color:#f07070;}
+.mml-trimerr:empty{display:none;}
 .mml-drag{cursor:grab;color:#4d5563;font-size:10px;user-select:none;flex-shrink:0;}
 
 .mml-order{flex:0 0 auto;background:#1a2230;border:1px solid #2b3a52;border-radius:6px;
@@ -455,6 +491,7 @@ class LoaderPanel {
     this.presets = [];
     this.presetName = "";
     this.presetPrompt = null;   // "save" | "delete" while confirming inline
+    this.trimOpen = null;       // item whose trim editor is expanded
     this.msg = "";
     this.msgErr = false;
     this.players = [];
@@ -621,6 +658,85 @@ class LoaderPanel {
     this.commit();
   }
 
+  trimBtn(item) {
+    if (item.kind === "picture" || !item.duration) return null;
+    const active = item.trim && (item.trim.start || item.trim.end);
+    return el("span", {
+      class: "mml-trimbtn" + (active ? " on" : ""),
+      title: active
+        ? `Trimmed to ${fmtSpan(item)} — click to edit`
+        : "Use only part of this clip",
+      onclick: (e) => {
+        e.stopPropagation();
+        this.trimOpen = this.trimOpen === item ? null : item;
+        this.render();
+      },
+    }, "\u2702");
+  }
+
+  trimRow(item) {
+    const cur = item.trim || {};
+    const startEl = el("input", { type: "text", class: "mml-triminput",
+      placeholder: "0", value: cur.start ? String(cur.start) : "" });
+    const endEl = el("input", { type: "text", class: "mml-triminput",
+      placeholder: item.duration ? item.duration.toFixed(1) : "end",
+      value: cur.end ? String(cur.end) : "" });
+    const apply = () => {
+      const num = (v) => {
+        const t = String(v).trim();
+        if (!t) return null;
+        const n = parseFloat(t);
+        return Number.isFinite(n) && n > 0 ? n : NaN;
+      };
+      const a = num(startEl.value);
+      const b = num(endEl.value);
+      if (Number.isNaN(a) || Number.isNaN(b)) {
+        this.say("Trim takes seconds, e.g. 2.5", true); this.render(); return;
+      }
+      const dur = item.duration || Infinity;
+      if (a !== null && a >= dur) {
+        this.say(`Start is past the end of the clip (${dur.toFixed(1)}s).`, true);
+        this.render(); return;
+      }
+      if (a !== null && b !== null && b <= a) {
+        this.say("End must come after start.", true); this.render(); return;
+      }
+      item.trim = (a || b) ? { start: a || 0, end: b || null } : undefined;
+      if (!item.trim) delete item.trim;
+      this.trimOpen = null;
+      this.commit();
+    };
+    [startEl, endEl].forEach((f) => f.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") apply();
+      if (e.key === "Escape") { this.trimOpen = null; this.render(); }
+    }));
+    setTimeout(() => startEl.focus(), 0);
+
+    // One-click continuation shortcut: keep only the clip's tail.
+    const lastChip = (secs) => {
+      if (!item.duration || item.duration <= secs) return null;
+      return el("button", { class: "mml-btn mml-sm",
+        title: `Use only the final ${secs} seconds`,
+        onclick: () => {
+          item.trim = { start: +(item.duration - secs).toFixed(2), end: null };
+          this.trimOpen = null;
+          this.commit();
+        } }, `${secs}s\u21e5`);
+    };
+
+    return el("div", { class: "mml-trimrow" },
+      startEl, el("span", { class: "mml-trimdash" }, "\u2013"), endEl,
+      lastChip(2), lastChip(3),
+      el("button", { class: "mml-btn mml-sm mml-trimok", title: "Apply trim",
+        onclick: apply }, "\u2713"),
+      (item.trim ? el("button", { class: "mml-btn mml-sm",
+        title: "Use the whole clip again",
+        onclick: () => { delete item.trim; this.trimOpen = null; this.commit(); } },
+        "\u21ba") : null),
+      el("button", { class: "mml-btn mml-sm", title: "Cancel",
+        onclick: () => { this.trimOpen = null; this.render(); } }, "\u2715"));
+  }
+
   toggle(item) {
     item.enabled = item.enabled === false;
     this.commit();
@@ -778,7 +894,7 @@ class LoaderPanel {
       problems.push(`Reference audio totals ${dur.audio.toFixed(1)}s ` +
         `(limit ${CLIP.totalPerType}s).`);
     const short = this.items.filter((i) => isOn(i) && i.kind !== "picture" &&
-      i.duration && i.duration < CLIP.min);
+      i.duration && effDuration(i) < CLIP.min);
     if (short.length)
       problems.push(`${short.map((i) => i.name).join(", ")} under ` +
         `${CLIP.min}s — H3 expects ${CLIP.min}\u2013${CLIP.max}s clips.`);
@@ -824,7 +940,11 @@ class LoaderPanel {
       const splitTag = extra.get(it);
       const row = el("div", { class: "mml-row" },
         this.powerBtn(it),
-        el("video", { class: "mml-vthumb", src: viewURL(it.file), muted: true,
+        el("video", { class: "mml-vthumb",
+          onloadedmetadata: (e) => {
+            const t = it.trim;
+            if (t && t.start) try { e.target.currentTime = t.start; } catch (_) {}
+          }, src: viewURL(it.file), muted: true,
           preload: "metadata",
           onmouseenter: (e) => e.target.play().catch(() => {}),
           onmouseleave: (e) => e.target.pause(),
@@ -834,7 +954,9 @@ class LoaderPanel {
             isOn(it) ? (tags.get(it) || "").slice(1, -1) : "off"),
           el("div", { class: "mml-name", title: it.name }, it.name)));
       if (it.has_audio && isOn(it)) {
-        row.append(
+        row.append(el("div", { class: "mml-segstack" },
+          el("span", { class: "mml-tag aud mml-segtag" },
+            mode === "off" ? "\u2014" : (splitTag || "").slice(1, -1)),
           el("span", { class: "mml-seg" },
             ["off", "paired", "alone"].map((label) => {
               const m = label === "alone" ? "standalone" : label;
@@ -855,17 +977,16 @@ class LoaderPanel {
                   it.audio_mode = m;
                   this.commit();
                 } }, label);
-            })),
-          el("span", { class: "mml-tag aud" },
-            mode === "off" ? "\u2014" : (splitTag || "").slice(1, -1)));
+            }))));
       }
       row.append(
+        this.trimBtn(it),
         el("span", { class: "mml-drag", title: "Drag to reorder" }, "\u2630"),
         el("span", { class: "mml-x", title: "Remove",
           onclick: () => this.remove(it) }, "\u2715"));
-      vidCells.push(this.reorderable(
-        el("div", { class: "mml-slot filled vid" + (isOn(it) ? "" : " off") },
-          row), it));
+      const vcell = el("div", { class: "mml-slot filled vid" + (isOn(it) ? "" : " off") },
+        this.trimOpen === it ? this.trimRow(it) : row);
+      vidCells.push(this.reorderable(vcell, it));
     });
     for (let i = vids.length; i < MAX.video; i++)
       vidCells.push(this.emptySlot("video", i + 1));
@@ -877,9 +998,7 @@ class LoaderPanel {
     auds.forEach((it) => {
       const player = miniPlayer(viewURL(it.file));
       this.players.push(player);
-      audCells.push(this.reorderable(el("div",
-        { class: "mml-slot filled aud" + (isOn(it) ? "" : " off") },
-        el("div", { class: "mml-row" },
+      const arow = el("div", { class: "mml-row" },
           this.powerBtn(it),
           player.btn,
           el("div", { class: "mml-meta", style: { flex: "0 0 auto", maxWidth: "38%" } },
@@ -887,9 +1006,14 @@ class LoaderPanel {
               isOn(it) ? (tags.get(it) || "").slice(1, -1) : "off"),
             el("div", { class: "mml-name", title: it.name }, it.name)),
           player.bar, player.time,
+          this.trimBtn(it),
           el("span", { class: "mml-drag", title: "Drag to reorder" }, "\u2630"),
           el("span", { class: "mml-x", title: "Remove",
-            onclick: () => this.remove(it) }, "\u2715"))), it));
+            onclick: () => this.remove(it) }, "\u2715"));
+      const acell = el("div",
+        { class: "mml-slot filled aud" + (isOn(it) ? "" : " off") },
+        this.trimOpen === it ? this.trimRow(it) : arow);
+      audCells.push(this.reorderable(acell, it));
     });
     for (let i = auds.length; i < MAX.audio; i++)
       audCells.push(this.emptySlot("audio", i + 1));
