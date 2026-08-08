@@ -278,20 +278,51 @@ def _audio_via_ffmpeg(path):
 
 # --- video ------------------------------------------------------------------
 
-def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None):
+def _apply_crop(frames, crop):
+    """Crop [T, H, W, C] frames by a normalised {x, y, w, h} rect (0..1).
+
+    Applied after decode so both decode paths behave identically. The rect is
+    clamped to at least 16px per axis so a stray drag can't produce an
+    unusable sliver.
+    """
+    if not crop:
+        return frames
+    try:
+        H, W = int(frames.shape[1]), int(frames.shape[2])
+        x = float(crop.get("x", 0.0))
+        y = float(crop.get("y", 0.0))
+        x0 = max(0, min(W - 16, int(round(x * W))))
+        y0 = max(0, min(H - 16, int(round(y * H))))
+        x1 = min(W, max(x0 + 16, int(round((x + float(crop.get("w", 1.0))) * W))))
+        y1 = min(H, max(y0 + 16, int(round((y + float(crop.get("h", 1.0))) * H))))
+        if (x0, y0, x1, y1) == (0, 0, W, H):
+            return frames
+        print(f"[MiniMaxH3 media_io] crop {W}x{H} -> "
+              f"{x1 - x0}x{y1 - y0} at ({x0},{y0})")
+        return frames[:, y0:y1, x0:x1, :]
+    except Exception as exc:
+        print(f"[MiniMaxH3 media_io] crop ignored ({exc})")
+        return frames
+
+
+def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None,
+                      crop=None):
     """Decode to an IMAGE batch [N, H, W, 3] resampled to `fps`.
 
     `start`/`end` (seconds) trim the source before sampling; only the trimmed
-    span is decoded, so trimming a long file is cheap.
+    span is decoded, so trimming a long file is cheap. `crop` is a normalised
+    {x, y, w, h} rect applied after decode.
     """
     path = resolve(annotated)
     if _have_av():
         try:
-            return _frames_via_av(path, fps, max_frames, start, end)
+            return _apply_crop(_frames_via_av(path, fps, max_frames, start, end),
+                               crop)
         except Exception:
             pass
     if _ffmpeg():
-        return _frames_via_ffmpeg(path, fps, max_frames, start, end)
+        return _apply_crop(_frames_via_ffmpeg(path, fps, max_frames, start, end),
+                           crop)
     raise RuntimeError(
         f"Can't decode {os.path.basename(path)}: install PyAV (pip install av) "
         "or put ffmpeg on PATH."

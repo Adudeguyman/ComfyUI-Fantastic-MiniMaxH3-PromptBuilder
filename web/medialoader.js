@@ -320,6 +320,61 @@ const CSS = `
   flex-shrink:0;user-select:none;}
 .mml-trimbtn:hover{opacity:1;}
 .mml-trimbtn.on{opacity:1;text-shadow:0 0 6px rgba(224,169,76,.55);}
+.mml-tmover{position:fixed;inset:0;background:rgba(8,10,14,.72);z-index:10050;
+  display:flex;align-items:center;justify-content:center;}
+.mml-tmmodal{width:min(640px,92vw);background:#191c22;border:1px solid #303642;
+  border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.55);display:flex;
+  flex-direction:column;overflow:hidden;font-family:system-ui,sans-serif;}
+.mml-tmhead{display:flex;align-items:center;gap:8px;padding:8px 12px;
+  border-bottom:1px solid #2a2f3a;background:#1b1f27;}
+.mml-tmtitle{flex:1;min-width:0;font-size:12px;color:#dde2ea;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;}
+.mml-tmstage{position:relative;background:#000;line-height:0;}
+.mml-tmvideo{width:100%;max-height:340px;object-fit:contain;display:block;}
+.mml-tmcropwrap{position:absolute;inset:0;}
+.mml-tmcrop{position:absolute;border:1.5px dashed #4cc3e0;cursor:move;
+  background:
+    linear-gradient(rgba(76,195,224,.25),rgba(76,195,224,.25)) 33.33% 0/1px 100% no-repeat,
+    linear-gradient(rgba(76,195,224,.25),rgba(76,195,224,.25)) 66.66% 0/1px 100% no-repeat,
+    linear-gradient(rgba(76,195,224,.25),rgba(76,195,224,.25)) 0 33.33%/100% 1px no-repeat,
+    linear-gradient(rgba(76,195,224,.25),rgba(76,195,224,.25)) 0 66.66%/100% 1px no-repeat;
+  box-shadow:0 0 0 4000px rgba(0,0,0,.45);}
+.mml-tmcorner{position:absolute;width:11px;height:11px;background:#4cc3e0;
+  border-radius:2px;}
+.mml-tmcorner.nw{left:-6px;top:-6px;cursor:nwse-resize;}
+.mml-tmcorner.ne{right:-6px;top:-6px;cursor:nesw-resize;}
+.mml-tmcorner.sw{left:-6px;bottom:-6px;cursor:nesw-resize;}
+.mml-tmcorner.se{right:-6px;bottom:-6px;cursor:nwse-resize;}
+.mml-tmcropbar{display:flex;align-items:center;gap:6px;}
+.mml-tmcropinfo{font-size:10px;color:#4cc3e0;font-family:ui-monospace,monospace;}
+.mml-tmaspect{background:#12151b;color:#c9cfda;border:1px solid #2e3440;
+  border-radius:6px;padding:2px 5px;font-size:11px;}
+.mml-btn.on{background:#173642;border-color:#4cc3e0;color:#9fe3f5;}
+.mml-tmtimeline{position:relative;padding:8px 14px 4px;}
+.mml-tmwave{display:block;width:100%;height:46px;margin-bottom:2px;}
+.mml-tmruler{position:relative;height:16px;}
+.mml-tmtick{position:absolute;transform:translateX(-50%);font-size:9px;
+  color:#6b7484;}
+.mml-tmtick::before{content:"";position:absolute;left:50%;top:-3px;width:1px;
+  height:3px;background:#3a4252;}
+.mml-tmbar{position:relative;height:20px;background:#12151b;border-radius:5px;
+  margin:2px 0 6px;cursor:ew-resize;}
+.mml-tmsel{position:absolute;top:0;bottom:0;background:#1f6f96;border-radius:5px;}
+.mml-tmhandle{position:absolute;top:-3px;bottom:-3px;width:9px;background:#4cc3e0;
+  border-radius:3px;transform:translateX(-50%);cursor:ew-resize;z-index:2;}
+.mml-tmplayhead{position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a94c;
+  transform:translateX(-50%);pointer-events:none;}
+.mml-tmfoot{display:flex;align-items:center;gap:6px;padding:8px 12px 10px;
+  flex-wrap:wrap;}
+.mml-tmspace{flex:1;}
+.mml-tmnum{width:52px;background:#12151b;color:#dde2ea;border:1px solid #2e3440;
+  border-radius:6px;padding:3px 6px;font-size:11px;text-align:right;
+  font-family:ui-monospace,monospace;}
+.mml-tmnum:focus{outline:none;border-color:#4cc3e0;}
+.mml-tmdash{color:#5c6472;font-size:11px;}
+.mml-tmreadout{font-size:11px;color:#8a93a3;font-family:ui-monospace,monospace;}
+.mml-tmreadout.bad{color:#f07070;}
+.mml-btn.primary{background:#1f4f7d;border-color:#3d7fbf;color:#dbeafe;}
 .mml-trimrow{display:flex;align-items:center;flex-wrap:nowrap;gap:3px;
   padding:0 5px;height:100%;overflow:hidden;}
 .mml-trimlbl{font-size:9px;text-transform:uppercase;letter-spacing:.07em;
@@ -389,6 +444,351 @@ function injectCSS() {
   if (cssDone) return;
   document.head.append(el("style", { textContent: CSS }));
   cssDone = true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Trim / crop modal                                                   */
+/* ------------------------------------------------------------------ */
+
+const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
+
+/** Popout editor for a clip's trim range and (for video) a crop rect.
+ *  Writes item.trim {start,end} and item.crop {x,y,w,h} on Apply only. */
+class TrimModal {
+  constructor(panel, item) {
+    this.panel = panel;
+    this.item = item;
+    this.dur = item.duration || 0;
+    this.start = item.trim?.start || 0;
+    this.end = item.trim?.end ?? this.dur;
+    this.crop = item.crop ? { ...item.crop } : null;
+    this.cropMode = false;
+    this.aspect = "free";
+    this.drag = null;
+    injectCSS();
+    this.build();
+    document.body.append(this.overlay);
+    window.addEventListener("keydown", this.onKey = (e) => {
+      if (e.key === "Escape") this.close();
+    });
+  }
+
+  close() {
+    window.removeEventListener("keydown", this.onKey);
+    try { this.media?.pause?.(); } catch (e) {}
+    this.overlay.remove();
+  }
+
+  apply() {
+    const it = this.item;
+    const eps = 0.05;
+    if (this.start <= eps && this.end >= this.dur - eps) delete it.trim;
+    else it.trim = { start: +this.start.toFixed(2),
+      end: this.end >= this.dur - eps ? null : +this.end.toFixed(2) };
+    if (this.crop && it.kind === "video") it.crop = this.crop;
+    else delete it.crop;
+    this.close();
+    this.panel.commit();
+  }
+
+  /* ---- media preview ---------------------------------------------- */
+
+  buildMedia() {
+    const url = viewURL(this.item.file);
+    if (this.item.kind === "video") {
+      this.media = el("video", { class: "mml-tmvideo", src: url, muted: true,
+        playsInline: true, loop: false, preload: "auto" });
+    } else {
+      this.media = el("audio", { src: url, preload: "auto" });
+    }
+    // keep playback inside the selected range
+    this.media.addEventListener("timeupdate", () => {
+      if (this.media.currentTime >= this.end - 0.02) {
+        this.media.currentTime = this.start;
+      }
+      this.updatePlayhead();
+    });
+    this.playBtn = el("button", { class: "mml-btn mml-sm",
+      onclick: () => {
+        if (this.media.paused) {
+          if (this.media.currentTime < this.start ||
+              this.media.currentTime >= this.end - 0.02)
+            this.media.currentTime = this.start;
+          this.media.play();
+          this.playBtn.textContent = "\u23f8";
+        } else { this.media.pause(); this.playBtn.textContent = "\u25b6"; }
+      } }, "\u25b6");
+  }
+
+  seek(t, pause = true) {
+    if (pause && !this.media.paused) {
+      this.media.pause(); this.playBtn.textContent = "\u25b6";
+    }
+    try { this.media.currentTime = Math.min(Math.max(t, 0), this.dur); }
+    catch (e) {}
+    this.updatePlayhead();
+  }
+
+  /* ---- audio waveform --------------------------------------------- */
+
+  async drawWave(canvas) {
+    try {
+      const resp = await fetch(viewURL(this.item.file));
+      const buf = await resp.arrayBuffer();
+      const ctx2 = new (window.AudioContext || window.webkitAudioContext)();
+      const audio = await ctx2.decodeAudioData(buf);
+      const data = audio.getChannelData(0);
+      const g = canvas.getContext("2d");
+      const W = canvas.width, H = canvas.height, N = 240;
+      const per = Math.floor(data.length / N);
+      g.clearRect(0, 0, W, H);
+      g.fillStyle = "#7d63b8";
+      for (let i = 0; i < N; i++) {
+        let peak = 0;
+        for (let j = i * per; j < (i + 1) * per; j += 16)
+          peak = Math.max(peak, Math.abs(data[j]));
+        const h = Math.max(1, peak * H * 0.92);
+        g.fillRect(i * (W / N), (H - h) / 2, W / N - 1, h);
+      }
+      ctx2.close();
+    } catch (e) { /* waveform is decoration; the ruler still works */ }
+  }
+
+  /* ---- timeline ---------------------------------------------------- */
+
+  buildTimeline() {
+    this.ruler = el("div", { class: "mml-tmruler" });
+    const ticks = 8;
+    for (let i = 0; i <= ticks; i++) {
+      this.ruler.append(el("span", { class: "mml-tmtick",
+        style: { left: `${(i / ticks) * 100}%` } },
+        fmt(this.dur * (i / ticks))));
+    }
+    this.selEl = el("div", { class: "mml-tmsel" });
+    this.hStart = el("div", { class: "mml-tmhandle s", title: "Drag: set start" });
+    this.hEnd = el("div", { class: "mml-tmhandle e", title: "Drag: set end" });
+    this.playhead = el("div", { class: "mml-tmplayhead" });
+    this.bar = el("div", { class: "mml-tmbar",
+      onmousedown: (e) => this.barDown(e) },
+      this.selEl, this.hStart, this.hEnd, this.playhead);
+    if (this.item.kind === "audio") {
+      this.wave = el("canvas", { class: "mml-tmwave", width: 560, height: 46 });
+      this.drawWave(this.wave);
+    }
+    const num = (label, get, set) => {
+      const input = el("input", { class: "mml-tmnum", type: "text",
+        inputmode: "decimal", title: `${label} time in seconds` });
+      input.addEventListener("focus", () => { this.typing = input; input.select(); });
+      input.addEventListener("blur", () => {
+        if (this.typing === input) this.typing = null;
+        this.layoutTimeline();               // snap display back to the value
+      });
+      const commit = () => {
+        const v = parseFloat(input.value.replace(",", "."));
+        if (Number.isNaN(v)) { this.layoutTimeline(); return; }
+        set(Math.min(Math.max(v, 0), this.dur));
+        this.seek(get());
+        this.layoutTimeline();
+      };
+      input.addEventListener("change", commit);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { commit(); input.blur(); }
+        if (e.key === "Escape") { this.layoutTimeline(); input.blur();
+          e.stopPropagation(); }           // don't close the modal on field-escape
+      });
+      return input;
+    };
+    this.numStart = num("Start", () => this.start,
+      (v) => { this.start = Math.min(v, this.end - 0.1); });
+    this.numEnd = num("End", () => this.end,
+      (v) => { this.end = Math.max(v, this.start + 0.1); });
+    this.readout = el("span", { class: "mml-tmreadout" });
+    this.layoutTimeline();
+    return el("div", { class: "mml-tmtimeline" },
+      this.wave || null, this.ruler, this.bar);
+  }
+
+  barDown(e) {
+    const r = this.bar.getBoundingClientRect();
+    const t = ((e.clientX - r.left) / r.width) * this.dur;
+    const dS = Math.abs(t - this.start), dE = Math.abs(t - this.end);
+    this.drag = dS <= dE ? "s" : "e";
+    this.barMove(e);
+    const move = (ev) => this.barMove(ev);
+    const up = () => { this.drag = null;
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
+  barMove(e) {
+    if (!this.drag) return;
+    const r = this.bar.getBoundingClientRect();
+    let t = ((e.clientX - r.left) / r.width) * this.dur;
+    t = Math.min(Math.max(t, 0), this.dur);
+    if (this.drag === "s") this.start = Math.min(t, this.end - 0.1);
+    else this.end = Math.max(t, this.start + 0.1);
+    this.seek(t);                       // preview follows the active handle
+    this.layoutTimeline();
+  }
+
+  layoutTimeline() {
+    const p = (t) => `${(this.dur ? t / this.dur : 0) * 100}%`;
+    this.selEl.style.left = p(this.start);
+    this.selEl.style.width = p(this.end - this.start);
+    this.hStart.style.left = p(this.start);
+    this.hEnd.style.left = p(this.end);
+    const span = this.end - this.start;
+    if (this.numStart && this.typing !== this.numStart)
+      this.numStart.value = this.start.toFixed(2);
+    if (this.numEnd && this.typing !== this.numEnd)
+      this.numEnd.value = this.end.toFixed(2);
+    this.readout.textContent = `${span.toFixed(1)}s kept`;
+    const bad = span < CLIP.min;
+    this.readout.classList.toggle("bad", bad);
+    this.readout.title = bad
+      ? `Kept span is under ${CLIP.min}s. MiniMax H3 was trained on ` +
+        `${CLIP.min}\u2013${CLIP.max}s reference clips; shorter ones tend to be ` +
+        "weakly followed or ignored. Widen the range, or pad short files " +
+        "(like sound effects) with silence before loading." : "";
+  }
+
+  updatePlayhead() {
+    if (!this.media || !this.dur) return;
+    this.playhead.style.left =
+      `${(this.media.currentTime / this.dur) * 100}%`;
+  }
+
+  /* ---- crop -------------------------------------------------------- */
+
+  buildCrop() {
+    if (this.item.kind !== "video") return null;
+    this.cropRect = el("div", { class: "mml-tmcrop",
+      onmousedown: (e) => this.cropDown(e, "move") },
+      ...["nw", "ne", "sw", "se"].map((c) =>
+        el("div", { class: `mml-tmcorner ${c}`,
+          onmousedown: (e) => { e.stopPropagation(); this.cropDown(e, c); } })));
+    this.cropWrap = el("div", { class: "mml-tmcropwrap" }, this.cropRect);
+    this.cropInfo = el("span", { class: "mml-tmcropinfo" });
+    this.cropBtn = el("button", { class: "mml-btn mml-sm",
+      title: "Crop the frame",
+      onclick: () => {
+        this.cropMode = !this.cropMode;
+        if (this.cropMode && !this.crop)
+          this.crop = { x: 0.125, y: 0.125, w: 0.75, h: 0.75 };
+        if (!this.cropMode && this.crop &&
+            this.crop.w > 0.995 && this.crop.h > 0.995) this.crop = null;
+        this.syncCrop();
+      } }, "\u25a3 Crop");
+    this.aspectEl = el("select", { class: "mml-tmaspect",
+      onchange: (e) => { this.aspect = e.target.value; this.forceAspect(); } },
+      [["free", "freeform"], ["1", "1:1"], [String(16 / 9), "16:9"],
+       [String(9 / 16), "9:16"]].map(([v, l]) => el("option", { value: v }, l)));
+    return el("span", { class: "mml-tmcropbar" },
+      this.cropBtn, this.aspectEl, this.cropInfo);
+  }
+
+  forceAspect() {
+    if (this.aspect === "free" || !this.crop) return;
+    const target = parseFloat(this.aspect);
+    const vw = this.item.width || 16, vh = this.item.height || 9;
+    this.crop.h = Math.min(1 - this.crop.y, this.crop.w * (vw / vh) / target);
+    this.syncCrop();
+  }
+
+  cropDown(e, mode) {
+    if (!this.cropMode) return;
+    e.preventDefault();
+    const wrap = this.cropWrap.getBoundingClientRect();
+    const c0 = { ...this.crop, mx: e.clientX, my: e.clientY };
+    const move = (ev) => {
+      const dx = (ev.clientX - c0.mx) / wrap.width;
+      const dy = (ev.clientY - c0.my) / wrap.height;
+      const c = this.crop;
+      if (mode === "move") {
+        c.x = Math.min(Math.max(c0.x + dx, 0), 1 - c.w);
+        c.y = Math.min(Math.max(c0.y + dy, 0), 1 - c.h);
+      } else {
+        if (mode.includes("w")) { c.x = Math.min(Math.max(c0.x + dx, 0), c0.x + c0.w - 0.05);
+          c.w = c0.w + (c0.x - c.x); }
+        if (mode.includes("e")) c.w = Math.min(Math.max(c0.w + dx, 0.05), 1 - c.x);
+        if (mode.includes("n")) { c.y = Math.min(Math.max(c0.y + dy, 0), c0.y + c0.h - 0.05);
+          c.h = c0.h + (c0.y - c.y); }
+        if (mode.includes("s")) c.h = Math.min(Math.max(c0.h + dy, 0.05), 1 - c.y);
+        if (this.aspect !== "free") this.forceAspect();
+      }
+      this.syncCrop();
+    };
+    const up = () => { window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
+  syncCrop() {
+    if (!this.cropWrap) return;
+    this.cropWrap.style.display = this.cropMode ? "" : "none";
+    this.cropBtn.classList.toggle("on", !!(this.cropMode && this.crop));
+    this.aspectEl.style.display = this.cropMode ? "" : "none";
+    if (this.crop && this.cropRect) {
+      const c = this.crop;
+      Object.assign(this.cropRect.style, {
+        left: `${c.x * 100}%`, top: `${c.y * 100}%`,
+        width: `${c.w * 100}%`, height: `${c.h * 100}%`,
+      });
+      const vw = this.item.width, vh = this.item.height;
+      this.cropInfo.textContent = vw
+        ? `${Math.round(c.w * vw)} \u00d7 ${Math.round(c.h * vh)}` : "";
+    } else this.cropInfo.textContent = "";
+  }
+
+  /* ---- assembly ---------------------------------------------------- */
+
+  build() {
+    this.buildMedia();
+    const isVid = this.item.kind === "video";
+    const stage = isVid
+      ? el("div", { class: "mml-tmstage" }, this.media, this.cropBar = null,
+          (this.cropUI = this.buildCrop(), this.cropWrap))
+      : null;
+
+    const chips = [2, 3].map((secs) =>
+      this.dur > secs ? el("button", { class: "mml-btn mml-sm",
+        title: `Use only the final ${secs} seconds`,
+        onclick: () => { this.start = this.dur - secs; this.end = this.dur;
+          this.seek(this.start); this.layoutTimeline(); } },
+        `last ${secs}s`) : null);
+
+    this.overlay = el("div", { class: "mml-tmover",
+      onmousedown: (e) => { if (e.target === this.overlay) this.close(); } },
+      el("div", { class: "mml-tmmodal" + (isVid ? "" : " audio") },
+        el("div", { class: "mml-tmhead" },
+          el("span", { class: "mml-tmtitle" },
+            `\u2702 ${this.item.name}`),
+          isVid ? this.cropUI : null,
+          el("button", { class: "mml-x", onclick: () => this.close() }, "\u2715")),
+        stage,
+        this.buildTimeline(),
+        el("div", { class: "mml-tmfoot" },
+          this.playBtn,
+          this.numStart, el("span", { class: "mml-tmdash" }, "\u2013"),
+          this.numEnd, this.readout, ...chips,
+          el("span", { class: "mml-tmspace" }),
+          (this.item.trim || this.item.crop)
+            ? el("button", { class: "mml-btn mml-sm",
+                title: "Whole clip, no crop",
+                onclick: () => { this.start = 0; this.end = this.dur;
+                  this.crop = null; this.cropMode = false;
+                  this.syncCrop(); this.layoutTimeline(); } }, "\u21ba Reset")
+            : null,
+          el("button", { class: "mml-btn mml-sm primary",
+            onclick: () => this.apply() }, "Apply"),
+          el("button", { class: "mml-btn mml-sm",
+            onclick: () => this.close() }, "Cancel"))));
+    this.syncCrop();
+    this.seek(this.start, false);
+  }
 }
 
 function lightbox(item, tag) {
@@ -643,6 +1043,8 @@ class LoaderPanel {
           file: info.file,
           name: info.original || info.name,
           duration: info.duration ?? null,
+          width: info.width ?? null,
+          height: info.height ?? null,
           has_audio: !!info.has_audio,
           audio_mode: pairable && !budgetFull ? "paired" : "off",
         });
@@ -660,7 +1062,7 @@ class LoaderPanel {
 
   trimBtn(item) {
     if (item.kind === "picture" || !item.duration) return null;
-    const active = item.trim && (item.trim.start || item.trim.end);
+    const active = (item.trim && (item.trim.start || item.trim.end)) || item.crop;
     return el("span", {
       class: "mml-trimbtn" + (active ? " on" : ""),
       title: active
@@ -668,74 +1070,11 @@ class LoaderPanel {
         : "Use only part of this clip",
       onclick: (e) => {
         e.stopPropagation();
-        this.trimOpen = this.trimOpen === item ? null : item;
-        this.render();
+        new TrimModal(this, item);
       },
     }, "\u2702");
   }
 
-  trimRow(item) {
-    const cur = item.trim || {};
-    const startEl = el("input", { type: "text", class: "mml-triminput",
-      placeholder: "0", value: cur.start ? String(cur.start) : "" });
-    const endEl = el("input", { type: "text", class: "mml-triminput",
-      placeholder: item.duration ? item.duration.toFixed(1) : "end",
-      value: cur.end ? String(cur.end) : "" });
-    const apply = () => {
-      const num = (v) => {
-        const t = String(v).trim();
-        if (!t) return null;
-        const n = parseFloat(t);
-        return Number.isFinite(n) && n > 0 ? n : NaN;
-      };
-      const a = num(startEl.value);
-      const b = num(endEl.value);
-      if (Number.isNaN(a) || Number.isNaN(b)) {
-        this.say("Trim takes seconds, e.g. 2.5", true); this.render(); return;
-      }
-      const dur = item.duration || Infinity;
-      if (a !== null && a >= dur) {
-        this.say(`Start is past the end of the clip (${dur.toFixed(1)}s).`, true);
-        this.render(); return;
-      }
-      if (a !== null && b !== null && b <= a) {
-        this.say("End must come after start.", true); this.render(); return;
-      }
-      item.trim = (a || b) ? { start: a || 0, end: b || null } : undefined;
-      if (!item.trim) delete item.trim;
-      this.trimOpen = null;
-      this.commit();
-    };
-    [startEl, endEl].forEach((f) => f.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") apply();
-      if (e.key === "Escape") { this.trimOpen = null; this.render(); }
-    }));
-    setTimeout(() => startEl.focus(), 0);
-
-    // One-click continuation shortcut: keep only the clip's tail.
-    const lastChip = (secs) => {
-      if (!item.duration || item.duration <= secs) return null;
-      return el("button", { class: "mml-btn mml-sm",
-        title: `Use only the final ${secs} seconds`,
-        onclick: () => {
-          item.trim = { start: +(item.duration - secs).toFixed(2), end: null };
-          this.trimOpen = null;
-          this.commit();
-        } }, `${secs}s\u21e5`);
-    };
-
-    return el("div", { class: "mml-trimrow" },
-      startEl, el("span", { class: "mml-trimdash" }, "\u2013"), endEl,
-      lastChip(2), lastChip(3),
-      el("button", { class: "mml-btn mml-sm mml-trimok", title: "Apply trim",
-        onclick: apply }, "\u2713"),
-      (item.trim ? el("button", { class: "mml-btn mml-sm",
-        title: "Use the whole clip again",
-        onclick: () => { delete item.trim; this.trimOpen = null; this.commit(); } },
-        "\u21ba") : null),
-      el("button", { class: "mml-btn mml-sm", title: "Cancel",
-        onclick: () => { this.trimOpen = null; this.render(); } }, "\u2715"));
-  }
 
   toggle(item) {
     item.enabled = item.enabled === false;
@@ -896,8 +1235,10 @@ class LoaderPanel {
     const short = this.items.filter((i) => isOn(i) && i.kind !== "picture" &&
       i.duration && effDuration(i) < CLIP.min);
     if (short.length)
-      problems.push(`${short.map((i) => i.name).join(", ")} under ` +
-        `${CLIP.min}s — H3 expects ${CLIP.min}\u2013${CLIP.max}s clips.`);
+      problems.push(`${short.map((i) => i.name).join(", ")}: shorter than ` +
+        `${CLIP.min}s. The model was trained on ${CLIP.min}\u2013${CLIP.max}s ` +
+        "reference clips, so very short ones may be weakly followed or " +
+        "ignored \u2014 pad with silence or use a longer take.");
     if (!this.items.some((i) => isOn(i) && (i.kind === "picture" ||
         i.kind === "video")) && audio)
       problems.push("Audio can't be sent alone — add an image or video.");
@@ -985,7 +1326,7 @@ class LoaderPanel {
         el("span", { class: "mml-x", title: "Remove",
           onclick: () => this.remove(it) }, "\u2715"));
       const vcell = el("div", { class: "mml-slot filled vid" + (isOn(it) ? "" : " off") },
-        this.trimOpen === it ? this.trimRow(it) : row);
+        row);
       vidCells.push(this.reorderable(vcell, it));
     });
     for (let i = vids.length; i < MAX.video; i++)
@@ -1012,7 +1353,7 @@ class LoaderPanel {
             onclick: () => this.remove(it) }, "\u2715"));
       const acell = el("div",
         { class: "mml-slot filled aud" + (isOn(it) ? "" : " off") },
-        this.trimOpen === it ? this.trimRow(it) : arow);
+        arow);
       audCells.push(this.reorderable(acell, it));
     });
     for (let i = auds.length; i < MAX.audio; i++)

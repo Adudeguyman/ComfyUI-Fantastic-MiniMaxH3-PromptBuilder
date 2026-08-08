@@ -68,8 +68,9 @@ Highlights:
   failed render.
 - **The official guide is built in.** A 📖 button opens the full PDF.
 - **Drag-and-drop media** with previews, playback, and reorderable slots.
-- **Non-destructive trim** — send just a slice of a clip (like its last 3
-  seconds) without touching the file.
+- **Non-destructive trim and crop** — a popout editor sends just a slice of a
+  clip (like its last 3 seconds), or just a region of the frame, without
+  touching the file.
 - **A prompt library** — save prompts with categories and favourites, then
   search and reload them.
 - **Media presets** so you can reload a set of references in one click.
@@ -275,6 +276,42 @@ treated as part of the video or as a separate audio reference. The **?** button
 by the videos heading explains the choice, and there's a
 [summary in the FAQ](#what-do-off--paired--alone-do).
 
+### Trimming and cropping clips
+
+The ✂ button on any video or audio row opens a popout editor. **The file on
+disk is never modified** — everything is applied when the clip is decoded, so
+the same file can be treated differently in another workflow, and Reset gives
+you the whole clip back.
+
+For both video and audio you get a timeline with draggable start and end
+handles; the preview follows whichever handle you're dragging, so you can find
+a cut by eye. Audio shows its waveform under the ruler. Play loops just the
+selected span, and the readout warns when the kept span drops under the model's
+2-second minimum.
+
+Video additionally gets **▣ Crop**: drag a rectangle (with rule-of-thirds
+guides) to send only part of the frame — freeform or locked to 1:1, 16:9, or
+9:16 — with the resulting pixel size shown live. Handy for cutting a subject
+out of wider footage instead of re-exporting.
+
+Two things it's for:
+
+- **Getting inside the budget.** A 40-second song or a long take doesn't need
+  re-exporting; trim it to the seconds you want. The file counter, the ♪ audio
+  counter, and the 2–15s and 15s-total checks all measure the *trimmed* span.
+- **Continuing a video.** `2s⇥` and `3s⇥` set the trim to the clip's final
+  seconds in one click, which is exactly what a continuation reference wants —
+  the motion and audio leading into the new clip, without spending your whole
+  budget on footage the model doesn't need.
+
+The scissors glow amber when a trim is active, and the trim travels with media
+presets and with saved workflows.
+
+One wrinkle worth knowing: a trim applies to the *item*, so trimming a video
+trims its frames and its paired soundtrack together. To keep the full video but
+only a few seconds of its audio, set the video's audio to `off` and load the
+audio separately, then trim that copy.
+
 You can also skip the Media Loader entirely and wire your own loaders — the
 [FAQ](#do-i-have-to-use-the-media-loader) covers every route.
 
@@ -392,9 +429,18 @@ group on the native node. Three videos with their sound enabled therefore use
 your whole audio allowance. The loader shows both counters — files and ♪ audio —
 and warns when either is exceeded.
 
-Reference clips should also run 2–15 seconds each, with no more than 15 seconds
-of video and 15 seconds of audio in total, and audio can't be sent without at
-least one image or video alongside it. The loader flags all of these.
+Reference clips should also run 2–15 seconds each, and — this is the one people
+miss — **15 seconds is the total across all clips of a type, not a per-clip
+allowance**. Three 15-second audio clips is 45 seconds and three times over
+budget; three clips only fit if they average about five seconds each. A split
+soundtrack spends from both totals at once: a 12-second video with its audio on
+uses 12 of your 15 video seconds *and* 12 of your 15 audio seconds, leaving 3
+seconds of audio for anything else.
+
+Audio also can't be sent without at least one image or video alongside it.
+
+The loader flags all of these, and the ✂ trim is usually the fix — see
+[Trimming and cropping clips](#trimming-and-cropping-clips).
 
 Go over twelve and you get a red warning. The node deliberately won't drop
 anything for you — removing a reference renumbers every tag after it, which
