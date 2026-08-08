@@ -179,6 +179,65 @@ if PromptServer is not None and web is not None:
             "height": info.get("height"),
         })
 
+    def _output_root():
+        if folder_paths is None:
+            raise RuntimeError("folder_paths unavailable")
+        return os.path.realpath(folder_paths.get_output_directory())
+
+    def _safe_dir(rel):
+        """Resolve a browser path, refusing anything outside the output dir."""
+        root = _output_root()
+        target = os.path.realpath(os.path.join(root, rel or ""))
+        if target != root and not target.startswith(root + os.sep):
+            return root, ""                     # escape attempt -> back to root
+        if target == root:
+            return root, ""
+        return target, os.path.relpath(target, root).replace(os.sep, "/")
+
+    @routes.get("/minimax_h3/browse")
+    async def browse(request):
+        """List folders under the output directory, for the folder picker."""
+        rel = request.query.get("path", "")
+        try:
+            target, rel = _safe_dir(rel)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+        dirs = []
+        try:
+            with os.scandir(target) as it:
+                for entry in it:
+                    if entry.is_dir() and not entry.name.startswith("."):
+                        dirs.append(entry.name)
+        except Exception as exc:
+            return web.json_response({"error": f"unreadable: {exc}"}, status=500)
+        dirs.sort(key=str.lower)
+        return web.json_response({"path": "" if rel in (".", "") else rel,
+                                  "dirs": dirs})
+
+    @routes.post("/minimax_h3/mkdir")
+    async def mkdir(request):
+        """Create a folder from the picker, inside the output directory."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name = re.sub(r"[^A-Za-z0-9 ._-]+", "_", str(body.get("name") or "")).strip()
+        if not name:
+            return web.json_response({"error": "give the folder a name"},
+                                     status=400)
+        try:
+            parent, _ = _safe_dir(body.get("path", ""))
+            path = os.path.realpath(os.path.join(parent, name))
+            root = _output_root()
+            if not path.startswith(root + os.sep):
+                return web.json_response({"error": "outside the output folder"},
+                                         status=400)
+            os.makedirs(path, exist_ok=True)
+        except Exception as exc:
+            return web.json_response({"error": f"could not create: {exc}"},
+                                     status=500)
+        return web.json_response({"created": name})
+
     @routes.get("/minimax_h3/capabilities")
     async def capabilities(request):
         caps = media_io.backends()

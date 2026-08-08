@@ -8,8 +8,16 @@ reference slot, so the builder can sit inline between your loaders and
 """
 
 import json
+import os
+import re
+import time
 
 from . import media_io
+
+try:                       # available inside ComfyUI, absent in bare tests
+    import folder_paths
+except Exception:
+    folder_paths = None
 
 PICTURES = 9
 VIDEOS = 3
@@ -83,8 +91,12 @@ class MiniMaxH3PromptBuilder:
         + ("IMAGE",) * VIDEOS
         + ("AUDIO",) * VIDEO_AUDIOS
         + ("AUDIO",) * AUDIOS
+        + ("H3_REFS",)
     )
-    RETURN_NAMES = ("prompt",) + tuple(_media_names())
+    RETURN_NAMES = ("prompt",) + tuple(_media_names()) + ("references",)
+    # references (slot 19) is the gated bundle passthrough: what this node's
+    # individual outputs carry, reassembled for a Reference Splitter. Appended
+    # last — inserting earlier would renumber slots in every saved workflow.
     FUNCTION = "build"
 
     @classmethod
@@ -191,9 +203,13 @@ class MiniMaxH3PromptBuilder:
         mode = _mode_of(builder_state)
         needed = []
         want_bundle = False
+        # Slot 19 is the bundle passthrough; if anything reads it, every
+        # media input contributes and must be evaluated.
+        ref_out = len(_media_names()) + 1
+        all_media = consumed is not None and ref_out in consumed
         for idx, name in enumerate(_media_names()):
             slot = idx + 1  # slot 0 is the prompt string
-            if consumed is not None and slot not in consumed:
+            if consumed is not None and slot not in consumed and not all_media:
                 continue
             if linked is None or name in linked:
                 if kwargs.get(name) is None:
@@ -230,24 +246,28 @@ class MiniMaxH3PromptBuilder:
         self, prompt_text, builder_state, references=None,
         prompt=None, unique_id=None, **kwargs
     ):
-        # Pass everything through. The editor and validator surface what a
-        # mode can't use; silently dropping media here proved worse than the
-        # problem it solved — a stale builder_state (mode changed without a
-        # re-save) made connected audio vanish with no error anywhere.
+        # The saved mode decides what the outputs carry. Mode and prompt are
+        # written together by the editor's Save, so they can't disagree; if
+        # the state is missing or unreadable, _mode_of falls back to REF and
+        # the gate FAILS OPEN (everything passes). Withholding is always
+        # printed, never silent — the two properties whose absence made the
+        # original version of this gate dangerous.
         mode = _mode_of(builder_state)
-        media, dropped = [], []
+        media, withheld = [], []
         for name in _media_names():
             value = kwargs.get(name)
             if value is None:
                 value = self._from_bundle(references, name)
-            media.append(value)
             if value is not None and not _usable(name, mode):
-                dropped.append(name)
-        if dropped:
+                withheld.append(name)
+                value = None
+            media.append(value)
+        if withheld:
             print(
-                f"[MiniMaxH3 PromptBuilder] note: {', '.join(dropped)} "
-                f"connected while builder_state says {mode}; passing through "
-                "unchanged. If this is stale, re-save the prompt in the editor."
+                f"[MiniMaxH3 PromptBuilder] mode {mode}: "
+                f"{', '.join(withheld)} connected but not sent \u2014 this "
+                "mode doesn't use them. Switch mode in the editor (and Save) "
+                "to send them."
             )
         def _short(v):
             # Never index a tensor speculatively — type-check first.
@@ -269,7 +289,16 @@ class MiniMaxH3PromptBuilder:
               f"{'yes' if references is not None else 'no'} -> "
               + ("; ".join(sent) if sent else
                  "NO media on any output — check the loader lines above"))
-        return (prompt_text.strip(),) + tuple(media)
+        a = PICTURES
+        b = a + VIDEOS
+        c = b + VIDEO_AUDIOS
+        out_bundle = {
+            "pictures": media[:a],
+            "videos": media[a:b],
+            "video_audios": media[b:c],
+            "audios": media[c:],
+        }
+        return (prompt_text.strip(),) + tuple(media) + (out_bundle,)
 
 
 class MiniMaxH3MediaLoader:
@@ -463,14 +492,151 @@ class MiniMaxH3ReferenceSplitter:
         )
 
 
+
+# Order matters: longer tokens first so "yyyy" isn't eaten by "yy".
+_DATE_TOKENS = (
+    ("yyyy", "%Y"), ("yy", "%y"), ("MM", "%m"), ("dd", "%d"),
+    ("hh", "%H"), ("mm", "%M"), ("ss", "%S"),
+)
+
+
+def resolve_date_tokens(text, now=None):
+    """Expand ComfyUI-style %date:...% blocks and bare strftime codes.
+
+    Accepts either dialect, so a prefix copied from a Save Image node works
+    unchanged: "runs/%date:yyyy-MM-dd%/vid" and "runs/%Y-%m-%d/vid" are
+    equivalent. Unknown text is left alone.
+    """
+    now = now or time.localtime()
+
+    def _block(match):
+        fmt = match.group(1)
+        for token, code in _DATE_TOKENS:
+            fmt = fmt.replace(token, code)
+        try:
+            return time.strftime(fmt, now)
+        except Exception:
+            return match.group(0)
+
+    out = re.sub(r"%date:([^%]*)%", _block, str(text or ""))
+
+    # Substitute only recognised strftime codes, so a stray "%" in something
+    # like "100%_good" survives instead of being mangled by strftime.
+    def _code(match):
+        c = match.group(1)
+        if c == "%":
+            return "%"
+        try:
+            return time.strftime("%" + c, now)
+        except Exception:
+            return match.group(0)
+
+    out = re.sub(r"%([%YyGmdjHIMSpaAbBcxXZUWuw])", _code, out)
+    # Keep the result inside the output directory.
+    out = out.replace("\\", "/").replace("..", "").lstrip("/")
+    return re.sub(r"/{2,}", "/", out)
+
+
+# Labels are format descriptions, not example dates: the chosen label is what
+# gets saved in the workflow, so it has to mean the same thing tomorrow.
+DATE_FOLDER_FORMATS = {
+    "off": None,
+    "YYYY-MM-DD": "%Y-%m-%d",
+    "YYYY_MM_DD": "%Y_%m_%d",
+    "YYYYMMDD": "%Y%m%d",
+    "YYYY-MM": "%Y-%m",
+    "YYYY/MM/DD": "%Y/%m/%d",
+    "YYYY-MM-DD_HH-MM": "%Y-%m-%d_%H-%M",
+}
+
+
+
+
+class MiniMaxH3FilenamePrefix:
+    """Assemble a save prefix: folder, optional date folder, filename.
+
+    Save nodes only expand %date:...% from their own widget, so a prefix piped
+    in from elsewhere arrives verbatim and you get a folder literally named
+    "%date:yyyy-MM-dd%". This node resolves everything up front and hands the
+    save node a plain string that survives any amount of wiring.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "folder": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "Folder under ComfyUI's output directory. "
+                               "Use Browse\u2026 to pick one, or type a path.",
+                }),
+                "subfolder": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "Optional extra folders, e.g. 'Ref2V' or "
+                               "'client/act2'. Created if missing.",
+                }),
+                "date_folder": (list(DATE_FOLDER_FORMATS), {
+                    "default": "YYYY-MM-DD",
+                    "tooltip": "Add a dated folder inside the one above, so "
+                               "each day's renders land together.",
+                }),
+                "filename": ("STRING", {
+                    "default": "vid",
+                    "multiline": False,
+                    "tooltip": "Start of the file name. The save node still "
+                               "appends its own counter.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("filename_prefix",)
+    FUNCTION = "build"
+    CATEGORY = "conditioning/video_models"
+    DESCRIPTION = (
+        "Builds a save prefix — folder / optional dated folder / filename — "
+        "with the date already resolved, for save nodes that only expand date "
+        "tokens typed directly into their widget."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, folder, subfolder, date_folder, filename):
+        # Nothing here changes between runs, so ComfyUI would cache the first
+        # result and keep handing back a stale date. Always re-evaluate.
+        return time.time()
+
+    def build(self, folder, subfolder="", date_folder="off", filename="vid"):
+        now = time.localtime()
+        parts = []
+        if folder and folder.strip():
+            parts.append(resolve_date_tokens(folder.strip(), now))
+        if subfolder.strip():
+            parts.append(resolve_date_tokens(subfolder.strip(), now))
+        fmt = DATE_FOLDER_FORMATS.get(date_folder)
+        if fmt:
+            parts.append(time.strftime(fmt, now))
+
+        name = resolve_date_tokens((filename or "").strip(), now) or "vid"
+        name = name.strip("/")
+        prefix = "/".join([p for p in parts if p] + [name])
+        prefix = prefix.replace("\\", "/").replace("..", "")
+        prefix = re.sub(r"/{2,}", "/", prefix).lstrip("/")
+        print(f"[MiniMaxH3 FilenamePrefix] -> {prefix}")
+        return (prefix,)
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3PromptBuilder": MiniMaxH3PromptBuilder,
     "MiniMaxH3MediaLoader": MiniMaxH3MediaLoader,
     "MiniMaxH3ReferenceSplitter": MiniMaxH3ReferenceSplitter,
+    "MiniMaxH3FilenamePrefix": MiniMaxH3FilenamePrefix,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3PromptBuilder": "MiniMax H3 Prompt Builder",
     "MiniMaxH3MediaLoader": "MiniMax H3 Media Loader",
     "MiniMaxH3ReferenceSplitter": "MiniMax H3 Reference Splitter",
+    "MiniMaxH3FilenamePrefix": "MiniMax H3 Filename Prefix",
 }

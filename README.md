@@ -30,6 +30,11 @@ Builder, managing reference media only.*
 automatically adds the tag (like `<Picture 1>`) into the active text field for
 you.*
 
+![Trim and crop editor](docs/7.png)
+
+*Trim and crop clips on the fly without touching the original files, and pull
+any frame straight out of a video into your picture references.*
+
 ---
 
 ## Contents
@@ -56,6 +61,7 @@ Three nodes, all under **conditioning → video_models**:
 | **MiniMax H3 Prompt Builder** | The main one. An editor with fillable fields for every prompt mode, checks your work as you type, and outputs the finished prompt. |
 | **MiniMax H3 Media Loader** | Drag-and-drop your reference images, videos, and audio. Shows exactly which tag each one will get. |
 | **MiniMax H3 Reference Splitter** | Optional. Fans media out into individual slots when you want it to skip the Prompt Builder. |
+| **MiniMax H3 Filename Prefix** | Optional. Builds a save prefix with the date already filled in, for dated output folders. |
 
 Highlights:
 
@@ -74,6 +80,8 @@ Highlights:
 - **A prompt library** — save prompts with categories and favourites, then
   search and reload them.
 - **Media presets** so you can reload a set of references in one click.
+- **Unload media** clears the node in one go (after a confirmation) without
+  deleting the underlying files, so presets pointing at them still work.
 
 ---
 
@@ -283,15 +291,51 @@ disk is never modified** — everything is applied when the clip is decoded, so
 the same file can be treated differently in another workflow, and Reset gives
 you the whole clip back.
 
-For both video and audio you get a timeline with draggable start and end
-handles; the preview follows whichever handle you're dragging, so you can find
-a cut by eye. Audio shows its waveform under the ruler. Play loops just the
+For both video and audio you get a timeline: **click or drag anywhere on the
+bar to scrub** the preview, and drag the two blue handles to set what's kept —
+clicking the bar never moves them. The preview follows whichever handle you're
+dragging, so you can find a cut by eye. An amber playhead shows where the preview is, with its exact time
+below the bar; if you scrub outside the kept range it turns red and says so, so
+a frame you're looking at is never quietly excluded from the output. **◀| |▶** step a frame; **⇤ start** and **end ⇥** snap the range
+to wherever the playhead sits — scrub to a cut, then click. **⏮ First** and
+**Last ⏭** jump the playhead to the clip's own first or last frame, which pairs
+with 📷 for grabbing a continuation frame. Or use the
+keyboard:
+
+| Key | Does |
+|---|---|
+| ← → | Step one frame (hold shift for ten) |
+| space | Play / pause the selected span |
+| `[` `]` | Set start / end to where the playhead is |
+| home / end | Jump to the start / end of the selection |
+| C | Capture the current frame (video only) |
+| esc | Close without applying |
+
+ Audio shows its waveform under the ruler. Play loops just the
 selected span, and the readout warns when the kept span drops under the model's
 2-second minimum.
 
+Video also gets **📷 Use frame**, which grabs the frame currently shown in the
+preview, saves it into ComfyUI's input folder, and adds it to the node as a
+picture reference. That's the easy way to continue from a clip's ending: scrub
+to the frame you want (the very last frame is often the blurriest, so pick a
+good one a little earlier), capture it, and wire that picture to `first_frame`
+on **MiniMax H3 Image to Video** in I2VA mode. If a crop is active the still is
+cropped to match. Capture is refused, with a message, when the picture slots or
+the 12-file limit are already full.
+
+![Capturing a frame in the trim editor](docs/7.png)
+
+![The captured frame in the picture pool](docs/8.png)
+
+*Capture the frame you're looking at, and it lands in the picture pool like any
+other reference — tagged, taggable, and saved with presets.*
+
 Video additionally gets **▣ Crop**: drag a rectangle (with rule-of-thirds
 guides) to send only part of the frame — freeform or locked to 1:1, 16:9, or
-9:16 — with the resulting pixel size shown live. Handy for cutting a subject
+9:16, with the resulting pixel size shown live. Once set, the rectangle stays on
+the preview with everything outside it dimmed, so the framing is always visible;
+pressing ▣ again just puts the handles away. Handy for cutting a subject
 out of wider footage instead of re-exporting.
 
 Two things it's for:
@@ -448,15 +492,32 @@ would quietly invalidate tags already written into your prompt.
 
 ### Does switching mode change what gets sent?
 
-No — the Prompt Builder passes connected media through unchanged in every mode.
-Which references a mode can *use* is shown in the editor: unusable media is
-greyed out in the rail, can't be inserted, and the checks list exactly what will
-be ignored. If media is connected that the saved mode can't use, a note is
-printed to the console at run time, but nothing is silently dropped.
+Yes — the saved mode decides what the outputs carry, so cables can stay
+plugged in permanently. Keep `picture_1` wired to `first_frame`, and a prompt
+saved in T2VA mode sends nothing but the prompt; switch the editor to I2VA and
+Save, and picture 1 flows again. What each mode sends is written right under
+the mode buttons in the editor, unusable media is greyed out in the rail, and
+the console prints exactly what was withheld on each run — so a gated
+reference is visible three ways before a render finishes.
 
-To stop something reaching the model, switch it off with the ◉ toggle on the
-Media Loader or disconnect it — an explicit action, visible in the panel,
-rather than a side effect of changing mode.
+Mode and prompt are saved together by the editor's **Save**, so they can never
+disagree with each other. If the node's state is missing or unreadable, the
+gate fails open and passes everything rather than silently withholding.
+
+For per-item control within a mode, the ◉ toggle on the Media Loader switches
+one reference off without unplugging anything.
+
+### One loader, two pipelines
+
+The builder also has a **references** output (last slot): the same bundle it
+received, gated to the saved mode, ready for a **Reference Splitter**. That
+makes a single Media Loader + Prompt Builder able to drive both an fl2va
+pipeline and a ref2va pipeline — wire the builder's `references` through a
+Set/Get pair into each pipeline's own splitter, keep one pipeline bypassed,
+and the saved mode decides what media flows: switch to FL2VA and Save, and the
+ref2va side's splitter receives only pictures 1–2; switch to REF and the full
+set flows again. Gating lives in one place — the builder — no matter how many
+pipelines fan out from it.
 
 ### Can I wire every output once and leave it?
 
@@ -506,6 +567,38 @@ has to match the length you're actually generating. The editor shows the correct
 frame count for your chosen end time — put that number into the native node's
 `length`. H3 only accepts certain frame counts, and the editor already rounds to
 a valid one.
+
+---
+
+## Dated output folders
+
+Save nodes expand date tokens from their own widget, so a prefix like
+`MiniMaxH3/%date:yyyy-MM-dd%/vid` only works when it's typed straight into the
+save node. Route it through a string node, a switch, or anything else and the
+token arrives verbatim — you get a folder literally named `%date:yyyy-MM-dd%`.
+That's a known issue in VideoHelperSuite among others.
+
+**MiniMax H3 Filename Prefix** builds the prefix from parts and resolves the
+date itself, so what reaches the save node is a plain string that survives any
+amount of wiring:
+
+- **folder** — click **📁 Browse…** for a folder browser that walks your
+  ComfyUI output directory: click a folder to enter it, `..` to go up, and
+  **Create** to make a new one on the spot. Or just type a path.
+- **subfolder** — optional extra levels, created if missing (`Ref2V`,
+  `client/act2`).
+- **date_folder** — off, or a dated folder in your preferred format
+  (`YYYY-MM-DD`, `YYYY/MM/DD`, `YYYY-MM-DD_HH-MM`, and so on).
+- **filename** — the start of the file name; the save node still appends its
+  own counter.
+
+So folder `MiniMaxH3`, subfolder `Ref2V`, date `YYYY-MM-DD`, filename `vid`
+gives `MiniMaxH3/Ref2V/2026-08-07/vid_00001.mp4`.
+
+Date tokens still work inside **subfolder** and **filename** if you want them
+there — `%date:hhmmss%` or strftime `%H%M%S` — so `vid_%date:hhmm%` becomes
+`vid_1409`. The node re-evaluates every run, so the date can't get stuck on
+whatever it was when the workflow was loaded.
 
 ---
 

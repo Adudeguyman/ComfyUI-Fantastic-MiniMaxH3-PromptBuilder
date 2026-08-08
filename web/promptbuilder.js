@@ -14,6 +14,15 @@ const NODE_NAME = "MiniMaxH3PromptBuilder";
 /* Reference data straight from the guides                             */
 /* ------------------------------------------------------------------ */
 
+// What each mode actually sends once saved — mirrors MODE_LIMITS in nodes.py.
+const MODE_SENDS = {
+  T2VA: "Sends: prompt only \u2014 no reference media leaves the node in this mode.",
+  I2VA: "Sends: prompt + picture 1 (first frame). All other media is withheld.",
+  L2VA: "Sends: prompt + picture 1 (last frame). All other media is withheld.",
+  FL2VA: "Sends: prompt + pictures 1\u20132 (first & last frame). All other media is withheld.",
+  REF: "Sends: prompt + every enabled reference.",
+};
+
 const MODES = [
   { id: "T2VA", label: "T2VA", hint: "Text → video+audio" },
   { id: "I2VA", label: "I2VA", hint: "First frame → video" },
@@ -706,6 +715,9 @@ const CSS = `
   border-bottom:1px solid #2a2f3a;background:#1e222a;}
 .mmh3-title{font-weight:600;font-size:14px;letter-spacing:.02em;}
 .mmh3-title small{color:#8a93a3;font-weight:400;margin-left:8px;}
+.mmh3-modesends{padding:4px 14px;font-size:10px;color:#7d8698;
+  background:#171a20;border-bottom:1px solid #23272f;}
+.mmh3-modesends.gated{color:#e0a94c;}
 .mmh3-modes{display:flex;gap:2px;background:#12151b;border:1px solid #2a2f3a;
   border-radius:7px;padding:2px;margin-left:auto;}
 .mmh3-modes button{background:none;border:0;color:#9aa3b2;padding:5px 12px;border-radius:5px;
@@ -1317,6 +1329,7 @@ class Editor {
         title: m.hint,
         onclick: () => { this.state.mode = m.id; this.render(); },
       }, m.label)));
+    this.modeSends = el("div", { class: "mmh3-modesends" });
 
     const copyBtn = el("button", { class: "mmh3-btn", onclick: () => {
       navigator.clipboard?.writeText(generate(this.state))
@@ -1349,6 +1362,7 @@ class Editor {
           this.modeBar,
           el("button", { class: "mmh3-x", onclick: () => this.close() }, "\u2715"),
         ),
+        this.modeSends,
         el("div", { class: "mmh3-body" },
           this.formEl,
           this.pinsEl,
@@ -1805,6 +1819,8 @@ class Editor {
     const scroll = this.formEl.scrollTop;
     [...this.modeBar.children].forEach((b, i) =>
       b.classList.toggle("on", MODES[i].id === this.state.mode));
+    this.modeSends.textContent = MODE_SENDS[this.state.mode] || "";
+    this.modeSends.classList.toggle("gated", this.state.mode !== "REF");
     this.formEl.replaceChildren();
     this.slots = getRefSlots(this.node);
     if (this.state.mode === "REF") this.renderRef();
