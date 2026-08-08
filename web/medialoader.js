@@ -277,6 +277,12 @@ const CSS = `
 .mml-slot.dragging{opacity:.35;}
 .mml-slot.over{outline:1px solid #6f86b8;outline-offset:1px;}
 
+.mml-dims{position:absolute;right:3px;top:3px;padding:1px 4px;border-radius:4px;
+  background:rgba(8,10,14,.85);color:#dfe4ec;font-size:8px;line-height:1.2;
+  font-family:ui-monospace,monospace;pointer-events:none;letter-spacing:0;
+  text-shadow:0 1px 2px rgba(0,0,0,.9);z-index:2;}
+.mml-dims:empty{display:none;}
+.mml-lightdims{font-size:10px;color:#8a93a3;font-family:ui-monospace,monospace;}
 .mml-pic{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   display:block;cursor:zoom-in;background:#0d1015;}
 .mml-picbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;
@@ -1032,12 +1038,25 @@ function lightbox(item, tag) {
   const media = item.kind === "video"
     ? el("video", { src: url, controls: true, autoplay: true, loop: true })
     : el("img", { src: url });
+  if (!item.width) {
+    media.addEventListener(item.kind === "video" ? "loadedmetadata" : "load",
+      () => {
+        const w = media.naturalWidth || media.videoWidth;
+        const h = media.naturalHeight || media.videoHeight;
+        if (!w) return;
+        item.width = w; item.height = h;
+        const cap = overlay.querySelector(".mml-lightdims");
+        if (cap) cap.textContent = dimsLabel(w, h);
+      });
+  }
   const overlay = el("div", { class: "mml-light",
     onclick: (e) => { if (e.target === overlay) overlay.remove(); } },
     el("div", { class: "mml-lightbox" }, media,
       el("div", { class: "mml-lightcap" },
         el("span", { class: `mml-tag ${tag.startsWith("<Video") ? "vid" : "pic"}` }, tag),
         el("span", {}, item.name),
+        el("span", { class: "mml-lightdims" },
+          dimsLabel(item.width, item.height)),
         el("button", { class: "mml-btn", style: { marginLeft: "auto" },
           onclick: () => overlay.remove() }, "Close"))));
   const esc = (e) => {
@@ -1045,6 +1064,50 @@ function lightbox(item, tag) {
   };
   window.addEventListener("keydown", esc);
   document.body.append(overlay);
+}
+
+// The ratios ComfyUI's resolution selector offers, so the badge speaks the
+// same vocabulary as the preset you'd pick to match a reference.
+const ASPECTS = [
+  [1, 1, "Square"], [2, 3, "Portrait Photo"], [3, 2, "Photo"],
+  [3, 4, "Portrait Standard"], [4, 3, "Standard"],
+  [9, 16, "Portrait Widescreen"], [16, 9, "Widescreen"],
+  [9, 21, "Portrait Ultrawide"], [21, 9, "Ultrawide"],
+];
+
+/** Nearest standard ratio to w:h, with how far off it is. */
+function nearestAspect(w, h) {
+  const target = w / h;
+  let best = ASPECTS[0], bestErr = Infinity;
+  for (const a of ASPECTS) {
+    const err = Math.abs(a[0] / a[1] - target) / target;
+    if (err < bestErr) { bestErr = err; best = a; }
+  }
+  return { a: best[0], b: best[1], name: best[2], err: bestErr };
+}
+
+/** Ratio as a decimal, normalised to 1 on the short side: "2.35:1", "1:1.85". */
+function decimalRatio(w, h) {
+  return w >= h ? `${(w / h).toFixed(2)}:1` : `1:${(h / w).toFixed(2)}`;
+}
+
+/** "1290\u00d7720 \u00b7 16:9", "\u224816:9" when close, or a plain decimal
+ *  when no standard ratio is near enough to name honestly. */
+function dimsLabel(w, h) {
+  if (!w || !h) return "";
+  const n = nearestAspect(w, h);
+  if (n.err > 0.10) return `${w}\u00d7${h} \u00b7 ${decimalRatio(w, h)}`;
+  return `${w}\u00d7${h} \u00b7 ${n.err <= 0.005 ? "" : "\u2248"}${n.a}:${n.b}`;
+}
+
+/** Longer form for tooltips: names the preset and the exact ratio. */
+function dimsTitle(name, w, h) {
+  if (!w || !h) return name;
+  const n = nearestAspect(w, h);
+  if (n.err <= 0.005)
+    return `${name}\n${w}\u00d7${h} \u2014 ${n.a}:${n.b} (${n.name})`;
+  return `${name}\n${w}\u00d7${h} \u2014 ${decimalRatio(w, h)}, ` +
+    `closest preset ${n.a}:${n.b} (${n.name}, ${(n.err * 100).toFixed(1)}% off)`;
 }
 
 /* --------------------------------------------------------- audio player */
@@ -1522,8 +1585,26 @@ class LoaderPanel {
       const tag = (tags.get(it) || "").slice(1, -1);
       picCells.push(this.reorderable(el("div",
         { class: "mml-slot filled pic" + (isOn(it) ? "" : " off") },
-        el("img", { class: "mml-pic", src: viewURL(it.file), title: it.name,
-          onclick: () => lightbox(it, tags.get(it) || "") }),
+        (() => {
+          // Badge and img are SIBLINGS in the slot: .mml-pic is absolutely
+          // positioned against the slot, so wrapping it breaks its sizing.
+          const badge = el("span", { class: "mml-dims" },
+            dimsLabel(it.width, it.height));
+          const img = el("img", { class: "mml-pic", src: viewURL(it.file),
+            title: dimsTitle(it.name, it.width, it.height),
+            onload: () => {
+              // Items from before dimensions were stored learn them here.
+              if (!it.width && img.naturalWidth) {
+                it.width = img.naturalWidth;
+                it.height = img.naturalHeight;
+                badge.textContent = dimsLabel(it.width, it.height);
+                img.title = dimsTitle(it.name, it.width, it.height);
+                this.commit();
+              }
+            },
+            onclick: () => lightbox(it, tags.get(it) || "") });
+          return [img, badge];
+        })(),
         el("div", { class: "mml-picbar" },
           this.powerBtn(it),
           el("span", { class: "mml-tag pic" }, isOn(it) ? tag : "off"),

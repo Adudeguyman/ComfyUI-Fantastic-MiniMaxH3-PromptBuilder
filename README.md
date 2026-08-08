@@ -30,6 +30,12 @@ Builder, managing reference media only.*
 automatically adds the tag (like `<Picture 1>`) into the active text field for
 you.*
 
+Picture thumbnails in the Media Loader carry their pixel size and aspect ratio
+in the corner, repeated in the larger preview when you click one. The ratio is
+named from the same list the resolution selectors use (16:9, 4:3, 9:16, 21:9
+and so on), with `≈` when a reference only comes close — so you can see at a
+glance which preset matches it. Hover the thumbnail for the exact figures.
+
 ![Trim and crop editor](docs/7.png)
 
 *Trim and crop clips on the fly without touching the original files, and pull
@@ -508,6 +514,21 @@ For per-item control within a mode, the ◉ toggle on the Media Loader switches
 one reference off without unplugging anything.
 
 ### One loader, two pipelines
+
+An example workflow using this pattern ships with the pack — load
+**MMH3PromptBuilder_AIO_Example** from ComfyUI's workflow browser (Workflows →
+Browse Templates → this pack), or open
+`example_workflows/MMH3PromptBuilder_AIO_Example.json` directly. It needs
+[VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) for
+the video output and
+[KJNodes](https://github.com/kijai/ComfyUI-KJNodes) for the Set/Get nodes.
+
+The example is set up for a 4-step turbo LoRA, with **Sigma Shift at 12 video /
+6 audio**. That audio value is deliberate: the released base configuration is
+12/3, but distilled turbo LoRAs compress the video trajectory, and since the
+audio schedule is derived from the video one, 6 keeps audio aligned at low step
+counts. Running the base FL2VA model without a turbo LoRA? Put it back to 3.
+
 
 The builder also has a **references** output (last slot): the same bundle it
 received, gated to the saved mode, ready for a **Reference Splitter**. That
