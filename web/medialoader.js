@@ -531,6 +531,13 @@ class TrimModal {
       case "]":
         e.preventDefault();
         this.end = Math.max(at, this.start + 0.1); this.layoutTimeline(); break;
+      case "a": case "A":
+        if (this.item.kind === "audio" || this.item.has_audio) {
+          e.preventDefault(); this.useAudio();
+        }
+        break;
+      case "m": case "M":
+        e.preventDefault(); this.toggleMute(); break;
       case "c": case "C":
         if (this.item.kind === "video") { e.preventDefault(); this.captureFrame(); }
         break;
@@ -562,7 +569,8 @@ class TrimModal {
   buildMedia() {
     const url = viewURL(this.item.file);
     if (this.item.kind === "video") {
-      this.media = el("video", { class: "mml-tmvideo", src: url, muted: true,
+      this.media = el("video", { class: "mml-tmvideo", src: url,
+        muted: false, volume: 0.9,
         playsInline: true, loop: false, preload: "auto" });
     } else {
       this.media = el("audio", { src: url, preload: "auto" });
@@ -576,6 +584,9 @@ class TrimModal {
       }
       this.updatePlayhead();
     });
+    this.muteBtn = el("button", { class: "mml-btn mml-sm",
+      title: "Mute the preview (M)",
+      onclick: () => this.toggleMute() }, "\u{1F50A}");
     this.playBtn = el("button", { class: "mml-btn mml-sm",
       onclick: () => {
         if (this.media.paused) {
@@ -587,6 +598,13 @@ class TrimModal {
           this.startTicking();
         } else { this.media.pause(); this.playBtn.textContent = "\u25b6"; }
       } }, "\u25b6");
+  }
+
+  toggleMute() {
+    if (!this.media) return;
+    this.media.muted = !this.media.muted;
+    this.muteBtn.textContent = this.media.muted ? "\u{1F507}" : "\u{1F50A}";
+    this.muteBtn.classList.toggle("on", this.media.muted);
   }
 
   seek(t, pause = true) {
@@ -948,6 +966,54 @@ class TrimModal {
     }
   }
 
+  /* ---- pull the trimmed span out as a standalone audio reference ---- */
+
+  async useAudio() {
+    const panel = this.panel;
+    if (audioCount(panel.items) >= MAX.audio) {
+      panel.say(`All ${MAX.audio} audio clips are in use \u2014 switch one off ` +
+        "or remove it first.", true);
+      panel.render(); this.close(); return;
+    }
+    if (fileCount(panel.items) >= MAX.total) {
+      panel.say(`That would exceed the ${MAX.total}-file limit.`, true);
+      panel.render(); this.close(); return;
+    }
+    const span = this.end - this.start;
+    if (span < CLIP.min) {
+      panel.say(`That range is ${span.toFixed(1)}s. H3 was trained on ` +
+        `${CLIP.min}\u2013${CLIP.max}s reference clips \u2014 widen it first.`, true);
+      panel.render(); return;
+    }
+
+    this.close();
+    panel.busy += 1;
+    panel.say(`Extracting ${span.toFixed(1)}s of audio\u2026`);
+    panel.render();
+    try {
+      const resp = await api.fetchApi("/minimax_h3/extract_audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: this.item.file,
+          start: +this.start.toFixed(3), end: +this.end.toFixed(3) }),
+      });
+      const info = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(info.error || `failed (${resp.status})`);
+      panel.items.push({
+        kind: "audio", file: info.file, name: info.name,
+        duration: info.duration ?? span, has_audio: true, audio_mode: "off",
+      });
+      panel.say(`Added ${(info.duration ?? span).toFixed(1)}s of audio from ` +
+        `${this.item.name} as a standalone reference.`);
+      panel.commit();
+    } catch (err) {
+      panel.say(`Couldn't extract that audio: ${err.message}`, true);
+      panel.render();
+    } finally {
+      panel.busy = Math.max(0, panel.busy - 1);
+    }
+  }
+
   /* ---- assembly ---------------------------------------------------- */
 
   build() {
@@ -980,6 +1046,7 @@ class TrimModal {
             onclick: () => this.seek((this.media?.currentTime || 0) -
               1 / (this.item.fps || TRIM_FPS)) }, "\u25c0|"),
           this.playBtn,
+          this.muteBtn,
           el("button", { class: "mml-btn mml-sm", title: "Next frame (\u2192)",
             onclick: () => this.seek((this.media?.currentTime || 0) +
               1 / (this.item.fps || TRIM_FPS)) }, "|\u25b6"),
@@ -1012,6 +1079,11 @@ class TrimModal {
           isVid ? el("button", { class: "mml-btn mml-sm",
             title: "Add the frame shown above as a picture reference  ( C )",
             onclick: () => this.captureFrame() }, "\u{1F4F7} Use frame") : null,
+          (this.item.kind === "audio" || this.item.has_audio)
+            ? el("button", { class: "mml-btn mml-sm",
+                title: "Save the kept range as its own audio reference  ( A )",
+                onclick: () => this.useAudio() }, "\u{1F3B5} Use audio")
+            : null,
           el("span", { class: "mml-tmspace" }),
           (this.item.trim || this.item.crop)
             ? el("button", { class: "mml-btn mml-sm",
@@ -1026,7 +1098,7 @@ class TrimModal {
             onclick: () => this.close() }, "Cancel")),
         el("div", { class: "mml-tmkeys" },
           "\u2190 \u2192 step a frame (shift = 10) \u00b7 space play \u00b7 " +
-          "[ ] set start/end here \u00b7 home/end jump" +
+          "[ ] set start/end here \u00b7 home/end jump \u00b7 M mute \u00b7 A use audio" +
           (isVid ? " \u00b7 C capture frame" : ""))));
     this.syncCrop();
     this.seek(this.start, false);

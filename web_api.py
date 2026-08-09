@@ -179,6 +179,92 @@ if PromptServer is not None and web is not None:
             "height": info.get("height"),
         })
 
+    @routes.post("/minimax_h3/extract_audio")
+    async def extract_audio_route(request):
+        """Write the trimmed audio of an existing item out as its own WAV.
+
+        Decoding goes through media_io, so this inherits the same channel and
+        scale handling as every other audio path in the pack.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+
+        annotated = str(body.get("file") or "")
+        if not annotated:
+            return web.json_response({"error": "no file given"}, status=400)
+        try:
+            start = float(body.get("start") or 0.0)
+        except (TypeError, ValueError):
+            start = 0.0
+        end = body.get("end")
+        try:
+            end = float(end) if end is not None else None
+        except (TypeError, ValueError):
+            end = None
+
+        kind = kind_for(annotated)
+        try:
+            if kind == "video":
+                data = media_io.extract_audio(annotated, start=start, end=end)
+            else:
+                data = media_io.load_audio(annotated, start=start, end=end)
+        except Exception as exc:
+            return web.json_response(
+                {"error": f"couldn't read audio from that clip: {exc}"}, status=400)
+
+        wave = data.get("waveform")
+        rate = int(data.get("sample_rate") or 0)
+        if wave is None or not rate:
+            return web.json_response({"error": "that clip has no audio"}, status=400)
+
+        try:
+            import numpy as np
+
+            arr = wave.detach().cpu().numpy() if hasattr(wave, "detach") else wave
+            arr = np.asarray(arr)
+            while arr.ndim > 2:                 # [1, C, N] -> [C, N]
+                arr = arr[0]
+            if arr.ndim == 1:
+                arr = arr[None, :]
+            if arr.shape[1] == 0:
+                return web.json_response({"error": "that range is empty"}, status=400)
+            peak = float(np.abs(arr).max()) or 1.0
+            if peak > 1.0:                      # belt and braces; media_io guards too
+                arr = arr / peak
+            pcm = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2")
+            interleaved = pcm.T.reshape(-1)     # [C, N] -> L,R,L,R...
+        except Exception as exc:
+            return web.json_response({"error": f"conversion failed: {exc}"}, status=500)
+
+        base = os.path.splitext(os.path.basename(annotated.split(" [")[0]))[0]
+        span = f"{start:.2f}".replace(".", "-")
+        directory = _target_dir()
+        name = _unique(directory, _safe(f"{base}_audio_{span}s.wav"))
+        path = os.path.join(directory, name)
+        try:
+            import wave as wavemod
+
+            with wavemod.open(path, "wb") as fh:
+                fh.setnchannels(int(arr.shape[0]))
+                fh.setsampwidth(2)
+                fh.setframerate(rate)
+                fh.writeframes(interleaved.tobytes())
+        except Exception as exc:
+            if os.path.exists(path):
+                os.remove(path)
+            return web.json_response({"error": f"write failed: {exc}"}, status=500)
+
+        out = f"{SUBFOLDER}/{name} [input]"
+        info = media_io.probe(out)
+        print(f"[MiniMaxH3] extracted audio -> {name} "
+              f"({arr.shape[0]}ch {rate}Hz {arr.shape[1] / rate:.2f}s)")
+        return web.json_response({
+            "file": out, "name": name, "original": name, "kind": "audio",
+            "duration": info.get("duration"), "has_audio": True,
+        })
+
     def _output_root():
         if folder_paths is None:
             raise RuntimeError("folder_paths unavailable")

@@ -297,8 +297,9 @@ disk is never modified** — everything is applied when the clip is decoded, so
 the same file can be treated differently in another workflow, and Reset gives
 you the whole clip back.
 
-For both video and audio you get a timeline: **click or drag anywhere on the
-bar to scrub** the preview, and drag the two blue handles to set what's kept —
+Video previews play with sound (🔊 mutes them), so you can trim on what you
+hear as well as what you see. For both video and audio you get a timeline:
+**click or drag anywhere on the bar to scrub** the preview, and drag the two blue handles to set what's kept —
 clicking the bar never moves them. The preview follows whichever handle you're
 dragging, so you can find a cut by eye. An amber playhead shows where the preview is, with its exact time
 below the bar; if you scrub outside the kept range it turns red and says so, so
@@ -314,6 +315,8 @@ keyboard:
 | space | Play / pause the selected span |
 | `[` `]` | Set start / end to where the playhead is |
 | home / end | Jump to the start / end of the selection |
+| M | Mute / unmute the preview |
+| A | Save the kept range as an audio reference |
 | C | Capture the current frame (video only) |
 | esc | Close without applying |
 
@@ -329,6 +332,16 @@ good one a little earlier), capture it, and wire that picture to `first_frame`
 on **MiniMax H3 Image to Video** in I2VA mode. If a crop is active the still is
 cropped to match. Capture is refused, with a message, when the picture slots or
 the 12-file limit are already full.
+
+**🎵 Use audio** does the same for sound: it writes the kept range out as its
+own WAV in ComfyUI's input folder and adds it as a standalone audio reference.
+That's how you lift a voice sample out of a longer clip — trim to the sentence
+you want, click, and it appears in the audio slots ready to define as
+`<Audio N>`. It's offered for standalone audio too, so you can cut a long
+recording down to a reference-sized piece without leaving ComfyUI. The
+extraction runs server-side through the same decoder the loader uses, and is
+refused if the audio slots are full or the range is under the 2-second
+minimum.
 
 ![Capturing a frame in the trim editor](docs/7.png)
 
