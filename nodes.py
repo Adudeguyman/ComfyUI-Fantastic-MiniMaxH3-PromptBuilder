@@ -405,7 +405,10 @@ class MiniMaxH3MediaLoader:
 
         pic_t = [media_io.load_image(i["file"]) for i in pictures[:PICTURES]]
         vid_t = [media_io.load_video_frames(i["file"], start=_trim(i)[0],
-                 end=_trim(i)[1], crop=i.get("crop")) for i in videos[:VIDEOS]]
+                 end=_trim(i)[1], crop=i.get("crop"),
+                 mirror=bool(i.get("mirror")),
+                 detail=i.get("detail") or "high")
+                 for i in videos[:VIDEOS]]
         vaud_t = [
             media_io.extract_audio(i["file"], start=_trim(i)[0], end=_trim(i)[1]) if i else None
             for i in video_audios[:VIDEO_AUDIOS]

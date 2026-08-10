@@ -245,6 +245,8 @@ const CSS = `
 .mml-presetwarn{flex:1;min-width:0;font-size:10px;color:#e0a94c;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
 .mml-topspace{flex:1;}
+.mml-detail{background:#12151b;color:#a9b2c2;border:1px solid #2e3440;
+  border-radius:6px;padding:2px 4px;font-size:10px;margin-right:2px;}
 .mml-count{font-size:10px;color:#8a93a3;font-family:ui-monospace,monospace;}
 .mml-count.over{color:#f07070;}
 .mml-msg{flex:0 0 auto;font-size:10px;min-height:12px;color:#e0a94c;overflow:hidden;
@@ -491,6 +493,7 @@ class TrimModal {
     this.start = item.trim?.start || 0;
     this.end = item.trim?.end ?? this.dur;
     this.crop = item.crop ? { ...item.crop } : null;
+    this.mirror = !!item.mirror;
     this.cropMode = false;
     this.aspect = "free";
     this.drag = null;
@@ -560,6 +563,8 @@ class TrimModal {
       end: this.end >= this.dur - eps ? null : +this.end.toFixed(2) };
     if (this.crop && it.kind === "video") it.crop = this.crop;
     else delete it.crop;
+    if (this.mirror && it.kind === "video") it.mirror = true;
+    else delete it.mirror;
     this.close();
     this.panel.commit();
   }
@@ -816,6 +821,12 @@ class TrimModal {
           onmousedown: (e) => { e.stopPropagation(); this.cropDown(e, c); } })));
     this.cropWrap = el("div", { class: "mml-tmcropwrap" }, this.cropRect);
     this.cropInfo = el("span", { class: "mml-tmcropinfo" });
+    this.mirrorBtn = el("button", { class: "mml-btn mml-sm",
+      title: "Flip the clip left-to-right before it's sent",
+      onclick: () => {
+        this.mirror = !this.mirror;
+        this.syncMirror();
+      } }, "\u21c4 Mirror");
     this.cropBtn = el("button", { class: "mml-btn mml-sm",
       title: "Crop the frame",
       onclick: () => {
@@ -832,7 +843,16 @@ class TrimModal {
       [["free", "freeform"], ["1", "1:1"], [String(16 / 9), "16:9"],
        [String(9 / 16), "9:16"]].map(([v, l]) => el("option", { value: v }, l)));
     return el("span", { class: "mml-tmcropbar" },
-      this.cropBtn, this.aspectEl, this.cropInfo);
+      this.mirrorBtn, this.cropBtn, this.aspectEl, this.cropInfo);
+  }
+
+  /** Mirror only the picture: the crop overlay stays in screen space, so a
+   *  rect drawn here means the same region the backend will cut. */
+  syncMirror() {
+    if (this.media) {
+      this.media.style.transform = this.mirror ? "scaleX(-1)" : "";
+    }
+    if (this.mirrorBtn) this.mirrorBtn.classList.toggle("on", this.mirror);
   }
 
   forceAspect() {
@@ -928,7 +948,11 @@ class TrimModal {
 
     const canvas = document.createElement("canvas");
     canvas.width = sw; canvas.height = sh;
-    canvas.getContext("2d").drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+    const g = canvas.getContext("2d");
+    if (this.mirror) { g.translate(sw, 0); g.scale(-1, 1); }
+    // With the crop drawn on the mirrored view, take the mirrored source x.
+    const rx = this.mirror ? (v.videoWidth - sx - sw) : sx;
+    g.drawImage(v, rx, sy, sw, sh, 0, 0, sw, sh);
 
     const at = this.media.currentTime;
     const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
@@ -956,7 +980,8 @@ class TrimModal {
         audio_mode: "off",
       });
       panel.say(`Added ${sw}\u00d7${sh} frame from ${at.toFixed(2)}s` +
-        (c ? " (cropped)" : "") + " as a picture reference.");
+        (c ? " (cropped)" : "") + (this.mirror ? " (mirrored)" : "") +
+        " as a picture reference.");
       panel.commit();
     } catch (err) {
       panel.say(`Capture failed: ${err.message}`, true);
@@ -1089,8 +1114,9 @@ class TrimModal {
             ? el("button", { class: "mml-btn mml-sm",
                 title: "Whole clip, no crop",
                 onclick: () => { this.start = 0; this.end = this.dur;
-                  this.crop = null; this.cropMode = false;
-                  this.syncCrop(); this.layoutTimeline(); } }, "\u21ba Reset")
+                  this.crop = null; this.cropMode = false; this.mirror = false;
+                  this.syncCrop(); this.syncMirror(); this.layoutTimeline(); } },
+                "\u21ba Reset")
             : null,
           el("button", { class: "mml-btn mml-sm primary",
             onclick: () => this.apply() }, "Apply"),
@@ -1101,6 +1127,7 @@ class TrimModal {
           "[ ] set start/end here \u00b7 home/end jump \u00b7 M mute \u00b7 A use audio" +
           (isVid ? " \u00b7 C capture frame" : ""))));
     this.syncCrop();
+    this.syncMirror();
     this.seek(this.start, false);
   }
 }
@@ -1375,6 +1402,21 @@ class LoaderPanel {
 
   count(kind) { return this.items.filter((i) => i.kind === kind).length; }
 
+  /** Video decode detail. Stored per item; the picker sets them together. */
+  detail() {
+    const v = this.items.find((i) => i.kind === "video" && i.detail);
+    return v ? v.detail : "high";
+  }
+
+  setDetail(value) {
+    for (const i of this.items) if (i.kind === "video") i.detail = value;
+    const caps = { full: "source size", high: "1280px", standard: "960px",
+                   low: "640px" };
+    this.say(`Reference video decodes at ${caps[value] || value} on the long ` +
+      "edge. Lower uses less RAM; the model rescales references anyway.");
+    this.commit();
+  }
+
   say(text, isError) {
     this.msg = text || "";
     this.msgErr = !!isError;
@@ -1410,7 +1452,9 @@ class LoaderPanel {
         // stays available, just switched off until room is made.
         const budgetFull = audioCount(this.items) >= MAX.audio;
         const pairable = info.kind === "video" && info.has_audio;
+        const detail = this.detail();
         this.items.push({
+          ...(info.kind === "video" ? { detail } : {}),
           kind: info.kind,
           file: info.file,
           name: info.original || info.name,
@@ -1434,7 +1478,8 @@ class LoaderPanel {
 
   trimBtn(item) {
     if (item.kind === "picture" || !item.duration) return null;
-    const active = (item.trim && (item.trim.start || item.trim.end)) || item.crop;
+    const active = (item.trim && (item.trim.start || item.trim.end))
+      || item.crop || item.mirror;
     return el("span", {
       class: "mml-trimbtn" + (active ? " on" : ""),
       title: active
@@ -1548,6 +1593,15 @@ class LoaderPanel {
       el("span", { style: { fontSize: "10px", color: "#6b7484" } },
         this.busy ? `uploading ${this.busy}\u2026` : "or drop files on any slot"),
       el("span", { class: "mml-topspace" }),
+      (this.count("video") ? el("select", { class: "mml-detail",
+        title: "How much detail to decode from reference video.\n" +
+               "The model rescales references to your generation size anyway, " +
+               "so lower settings mainly save RAM.",
+        onchange: (e) => this.setDetail(e.target.value) },
+        [["high", "detail: high"], ["standard", "detail: standard"],
+         ["low", "detail: low"], ["full", "detail: full"]].map(([v, label]) =>
+          el("option", { value: v, selected: this.detail() === v }, label)))
+        : null),
       this.items.length
         ? el("button", { class: "mml-btn mml-sm",
             title: "Remove every loaded reference from this node",
@@ -1700,6 +1754,7 @@ class LoaderPanel {
       const row = el("div", { class: "mml-row" },
         this.powerBtn(it),
         el("video", { class: "mml-vthumb",
+          style: it.mirror ? { transform: "scaleX(-1)" } : {},
           onloadedmetadata: (e) => {
             const t = it.trim;
             if (t && t.start) try { e.target.currentTime = t.start; } catch (_) {}

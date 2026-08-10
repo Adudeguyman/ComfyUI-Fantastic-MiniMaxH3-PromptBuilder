@@ -185,7 +185,7 @@ function roleHint(text) {
 /** The definition line that defines this label, if there is one. */
 function definitionFor(state, label) {
   const line = (state.ref?.subjectDefs || [])
-    .find((d) => (d.text || "").trim().startsWith(label));
+    .find((d) => !d.off && (d.text || "").trim().startsWith(label));
   return line ? line.text : "";
 }
 
@@ -264,6 +264,8 @@ function defaultState() {
   return {
     version: 1,
     mode: "T2VA",
+    // Sections switched off: kept in the editor, left out of the prompt.
+    off: {},
     duration: 5,
     p2Shot: 1,       // FL2VA: shot index of Picture 2
     lastShot: 1,     // L2VA: shot index of Picture 1 (final shot)
@@ -467,6 +469,15 @@ function getRefSlots(node) {
 /* Prompt generation (formats verbatim from the guides)                */
 /* ------------------------------------------------------------------ */
 
+/** Sections the model tolerates being absent. The description and summary
+ *  always ship — without them there is no prompt. */
+const OPTIONAL_SECTIONS = ["subject_definitions", "retention_analysis",
+                           "overall_soundscape", "non_diegetic_music"];
+
+function sectionOn(state, name) {
+  return !(state.off && state.off[name]);
+}
+
 function genBase(state) {
   const S = fmtSS(snappedSeconds(state.duration));
   let head = "";
@@ -481,34 +492,43 @@ function genBase(state) {
     head = "How the reference pictures align with the target video — " +
       `<Picture 1> (from [Shot ${state.lastShot || 1}]) aligns with the ${S}-second mark of the target video.`;
   }
-  const body =
-    `integrated_multimodal_description: ${state.imd.trim()}\n\n` +
-    `overall_soundscape: ${state.soundscape.trim()}\n\n` +
-    `non_diegetic_music: ${state.music.trim() || "N/A"}`;
+  const parts = [`integrated_multimodal_description: ${state.imd.trim()}`];
+  if (sectionOn(state, "overall_soundscape"))
+    parts.push(`overall_soundscape: ${state.soundscape.trim()}`);
+  if (sectionOn(state, "non_diegetic_music"))
+    parts.push(`non_diegetic_music: ${state.music.trim() || "N/A"}`);
+  const body = parts.join("\n\n");
   return head ? head + "\n\n" + body : body;
 }
 
 function genRef(state) {
   const r = state.ref;
-  const defs = r.subjectDefs.map((d) => d.text.trim()).filter(Boolean).join("\n");
+  const defs = r.subjectDefs
+    .filter((d) => !d.off)
+    .map((d) => d.text.trim()).filter(Boolean).join("\n");
   const types = TASK_TYPES.filter((t) => r.summaryTypes.includes(t)).join(" + ");
   const summary = `[${types || "reference generation"}] ${r.summaryText.trim()}`;
   const retention = r.retention
-    .filter((row) => row.label)
+    .filter((row) => row.label && !row.off)
     .map((row) => {
       const ctx = row.context?.trim() ? ` (${row.context.trim()})` : "";
       return `${row.label}${ctx}: ${row.marker} - ${row.note.trim()}`;
     })
     .join("\n");
   const detail = [r.styleLine.trim(), r.detail.trim()].filter(Boolean).join("\n");
-  return (
-    `subject_definitions:\n${defs}\n\n` +
-    `summary:\n${summary}\n\n` +
-    `retention_analysis:\n${retention}\n\n` +
-    `detailed_description:\n${detail}\n\n` +
-    `overall_soundscape:\n${r.soundscape.trim()}\n\n` +
-    `non_diegetic_music:\n${r.music.trim() || "N/A"}`
-  );
+  const on = (name) => sectionOn(state, name);
+  const blocks = [];
+  if (on("subject_definitions"))
+    blocks.push(`subject_definitions:\n${defs}`);
+  blocks.push(`summary:\n${summary}`);
+  if (on("retention_analysis"))
+    blocks.push(`retention_analysis:\n${retention}`);
+  blocks.push(`detailed_description:\n${detail}`);
+  if (on("overall_soundscape"))
+    blocks.push(`overall_soundscape:\n${r.soundscape.trim()}`);
+  if (on("non_diegetic_music"))
+    blocks.push(`non_diegetic_music:\n${r.music.trim() || "N/A"}`);
+  return blocks.join("\n\n");
 }
 
 function generate(state) {
@@ -662,16 +682,20 @@ function validate(state, slots) {
   }
 
   if (state.mode === "REF") {
-    const defText = state.ref.subjectDefs.map((d) => d.text).join("\n");
+    // Switched-off lines aren't in the prompt, so they don't count as
+    // defined and can't be missing a retention entry.
+    const liveDefs = state.ref.subjectDefs.filter((d) => !d.off);
+    const liveRet = state.ref.retention.filter((r) => !r.off);
+    const defText = liveDefs.map((d) => d.text).join("\n");
     const subjects = new Set([...defText.matchAll(/<Subject (\d+)>/g)].map((m) => m[1]));
-    const retLabels = new Set(state.ref.retention.map((r) => r.label));
+    const retLabels = new Set(liveRet.map((r) => r.label));
     for (const n of subjects) {
       if (![...retLabels].some((l) => l === `<Subject ${n}>`))
         warn(`<Subject ${n}> has no retention_analysis entry.`);
     }
     // The guide requires the marker to sit inside the role the definition
     // already states, so a plain contradiction is worth flagging.
-    state.ref.retention.forEach((row) => {
+    liveRet.forEach((row) => {
       const def = definitionFor(state, row.label);
       if (!def || !row.marker) return;
       const copies = /\breused\b|\bcopied\b|\bcopy\b|1:1/i.test(def);
@@ -778,6 +802,19 @@ const CSS = `
 .mmh3-form{overflow-y:auto;padding:14px 16px 24px;min-width:0;}
 .mmh3-side{border-left:1px solid #2a2f3a;display:flex;flex-direction:column;min-height:0;background:#15181e;}
 .mmh3-sec{margin-bottom:16px;}
+.mmh3-rowpow{cursor:pointer;font-size:11px;color:#3f4855;user-select:none;
+  flex-shrink:0;line-height:1;text-align:center;}
+.mmh3-defrow .mmh3-rowpow{align-self:flex-start;margin-top:11px;}
+.mmh3-rowpow.on{color:#6fbf73;}
+.mmh3-rowpow:hover{filter:brightness(1.35);}
+.mmh3-defrow.off textarea, .mmh3-retrow.off select, .mmh3-retrow.off input{
+  opacity:.4;text-decoration:line-through;}
+.mmh3-secpow{cursor:pointer;font-size:11px;margin-right:6px;color:#3f4855;
+  user-select:none;vertical-align:baseline;}
+.mmh3-secpow.on{color:#6fbf73;}
+.mmh3-secpow:hover{filter:brightness(1.35);}
+.mmh3-sec>label.off{opacity:.45;text-decoration:line-through;}
+.mmh3-sec>label.off ~ *{opacity:.45;}
 .mmh3-sec>label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
   color:#8a93a3;margin-bottom:5px;}
 .mmh3-sec .hint{font-size:11px;color:#6b7484;margin-top:4px;line-height:1.4;}
@@ -843,7 +880,8 @@ const CSS = `
 .mmh3-ttypes{display:flex;flex-wrap:wrap;gap:4px 12px;margin-bottom:6px;}
 .mmh3-ttypes label{display:flex;gap:5px;align-items:center;font-size:12px;color:#c9cfda;
   text-transform:none;letter-spacing:0;cursor:pointer;}
-.mmh3-retrow{display:grid;grid-template-columns:150px 1fr 160px 26px;gap:6px;margin-bottom:6px;}
+.mmh3-retrow{display:grid;grid-template-columns:14px 150px 1fr 160px 26px;gap:6px;
+  margin-bottom:6px;align-items:center;}
 .mmh3-retrow input,.mmh3-retrow select{font-size:12px;}
 .mmh3-retnote{grid-column:1/-1;margin-top:-2px;}
 .mmh3-preview{flex:1;overflow:auto;margin:0;padding:12px 14px;font:12px/1.55 ui-monospace,
@@ -1880,14 +1918,14 @@ class Editor {
         "\"[Shot N] At MM:SS.mmm, the shot cuts to ...\". Write camera moves as natural sentences.")));
 
     f.append(el("div", { class: "mmh3-sec" },
-      el("label", {}, "overall_soundscape"),
+      this.secLabel("overall_soundscape"),
       el("div", { class: "mmh3-row" },
         this.ta(s, "soundscape", 3,
           "1\u20134 sentences: ambience, physical action sounds, non-verbal human sounds."),
         this.naButton(s, "soundscape"))));
 
     f.append(el("div", { class: "mmh3-sec" },
-      el("label", {}, "non_diegetic_music"),
+      this.secLabel("non_diegetic_music"),
       el("div", { class: "mmh3-row" },
         this.ta(s, "music", 3,
           "1\u20133 sentences: instrumentation, tempo, rhythm, dynamics. No abstract mood words."),
@@ -1992,12 +2030,12 @@ class Editor {
           placeholder: "<Subject 1> is the ... in <Picture 1>, with ...",
           oninput: (e) => { d.text = e.target.value; d.role = null; paintMini(); } });
         paintMini();
-        defsWrap.append(
-          el("div", { class: "mmh3-defrow" }, ta,
-            el("button", { class: "mmh3-btn ghost", title: "Remove line",
-              onclick: () => { r.subjectDefs.splice(i, 1); drawDefs(); this.updatePreview(); },
-            }, "\u2715")),
-          mini, roleRow);
+        const row = el("div", { class: "mmh3-defrow" + (d.off ? " off" : "") },
+          this.rowPower(d, drawDefs), ta,
+          el("button", { class: "mmh3-btn ghost", title: "Remove line",
+            onclick: () => { r.subjectDefs.splice(i, 1); drawDefs(); this.updatePreview(); },
+          }, "\u2715"));
+        defsWrap.append(row, mini, roleRow);
       });
     };
     drawDefs();
@@ -2009,7 +2047,7 @@ class Editor {
       this.updatePreview();
     };
     f.append(el("div", { class: "mmh3-sec" },
-      el("label", {}, "subject_definitions"),
+      this.secLabel("subject_definitions"),
       defsWrap,
       el("div", { class: "mmh3-tools" },
         el("button", { class: "mmh3-btn",
@@ -2079,7 +2117,8 @@ class Editor {
       r.retention.forEach((row, i) => {
         const markers = row.label?.startsWith("<Audio") ? AUDIO_MARKERS : VISUAL_MARKERS;
         if (!markers.includes(row.marker)) row.marker = markers[0];
-        retWrap.append(el("div", { class: "mmh3-retrow" },
+        retWrap.append(el("div", { class: "mmh3-retrow" + (row.off ? " off" : "") },
+          this.rowPower(row, drawRet),
           el("select", {
             onchange: (e) => { row.label = e.target.value; drawRet(); this.updatePreview(); } },
             knownLabels().map((l) =>
@@ -2106,7 +2145,7 @@ class Editor {
     };
     drawRet();
     f.append(el("div", { class: "mmh3-sec" },
-      el("label", {}, "retention_analysis"),
+      this.secLabel("retention_analysis"),
       retWrap,
       el("div", { class: "mmh3-tools" },
         el("button", { class: "mmh3-btn", onclick: () => {
@@ -2172,14 +2211,14 @@ class Editor {
 
     /* audio sections ---------------------------------------------------- */
     f.append(el("div", { class: "mmh3-sec" },
-      el("label", {}, "overall_soundscape"),
+      this.secLabel("overall_soundscape"),
       el("div", { class: "mmh3-row" },
         this.ta(r, "soundscape", 3,
           "Ambience + physical sounds. If copying ambience: \"The copied ambience layer " +
           "from <Audio 1> continues throughout the target video.\""),
         this.naButton(r, "soundscape"))));
     f.append(el("div", { class: "mmh3-sec" },
-      el("label", {}, "non_diegetic_music"),
+      this.secLabel("non_diegetic_music"),
       el("div", { class: "mmh3-row" },
         this.ta(r, "music", 3,
           "Audience-only score. If reused: \"<Audio 2> is directly reused as the complete " +
@@ -2188,6 +2227,43 @@ class Editor {
   }
 
   /* ---------- preview + validation ---------- */
+
+  /** Small on/off switch for a single line. Off keeps the row in the editor
+   *  but leaves it out of the prompt — for when the media it describes is
+   *  temporarily unplugged. */
+  rowPower(obj, redraw) {
+    const dot = el("span", {
+      class: "mmh3-rowpow" + (obj.off ? "" : " on"),
+      title: obj.off ? "Left out of the prompt \u2014 click to include"
+                     : "Included \u2014 click to leave out of the prompt",
+      onclick: () => {
+        obj.off = !obj.off;
+        redraw();
+        this.updatePreview();
+      },
+    }, obj.off ? "\u25cb" : "\u25c9");
+    return dot;
+  }
+
+  /** Section heading with an on/off switch. Off keeps the text but stops the
+   *  section reaching the prompt — handy while media comes and goes. */
+  secLabel(name, text) {
+    const state = this.state;
+    state.off = state.off || {};
+    const on = !state.off[name];
+    const dot = el("span", {
+      class: "mmh3-secpow" + (on ? " on" : ""),
+      title: on ? "Included \u2014 click to leave it out of the prompt"
+                : "Left out of the prompt \u2014 click to include it again",
+      onclick: () => {
+        if (state.off[name]) delete state.off[name];
+        else state.off[name] = true;
+        this.render();
+        this.updatePreview();
+      },
+    }, on ? "\u25c9" : "\u25cb");
+    return el("label", { class: on ? "" : "off" }, dot, text || name);
+  }
 
   updatePreview() {
     this._paintSubjChips?.();

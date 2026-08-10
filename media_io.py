@@ -278,6 +278,23 @@ def _audio_via_ffmpeg(path):
 
 # --- video ------------------------------------------------------------------
 
+def _apply_mirror(frames, mirror):
+    """Flip [T, H, W, C] frames left-to-right.
+
+    Applied BEFORE the crop, because the crop rect is drawn on the mirrored
+    preview — so what you framed on screen is what gets sent.
+    """
+    if not mirror:
+        return frames
+    try:
+        out = torch.flip(frames, dims=[2])
+        print("[MiniMaxH3 media_io] mirrored horizontally")
+        return out
+    except Exception as exc:
+        print(f"[MiniMaxH3 media_io] mirror ignored ({exc})")
+        return frames
+
+
 def _apply_crop(frames, crop):
     """Crop [T, H, W, C] frames by a normalised {x, y, w, h} rect (0..1).
 
@@ -306,7 +323,7 @@ def _apply_crop(frames, crop):
 
 
 def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None,
-                      crop=None):
+                      crop=None, mirror=False, detail="high"):
     """Decode to an IMAGE batch [N, H, W, 3] resampled to `fps`.
 
     `start`/`end` (seconds) trim the source before sampling; only the trimmed
@@ -314,22 +331,61 @@ def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None,
     {x, y, w, h} rect applied after decode.
     """
     path = resolve(annotated)
+    cap = DETAIL_CAPS.get(str(detail or "high"), DETAIL_CAPS["high"])
     if _have_av():
         try:
-            return _apply_crop(_frames_via_av(path, fps, max_frames, start, end),
-                               crop)
+            return _apply_crop(
+                _apply_mirror(
+                    _frames_via_av(path, fps, max_frames, start, end, cap),
+                    mirror), crop)
         except Exception:
             pass
     if _ffmpeg():
-        return _apply_crop(_frames_via_ffmpeg(path, fps, max_frames, start, end),
-                           crop)
+        return _apply_crop(
+            _apply_mirror(
+                _frames_via_ffmpeg(path, fps, max_frames, start, end, cap),
+                mirror), crop)
     raise RuntimeError(
         f"Can't decode {os.path.basename(path)}: install PyAV (pip install av) "
         "or put ffmpeg on PATH."
     )
 
 
-def _frames_via_av(path, fps, max_frames, start=None, end=None):
+# Long-edge caps for reference video. The native H3 node rescales every
+# reference to the generation's pixel area anyway, so decoding above this
+# spends RAM on detail the model never sees.
+DETAIL_CAPS = {"full": 0, "high": 1280, "standard": 960, "low": 640}
+
+
+def _scaled_size(w, h, cap):
+    """Target size for a long-edge cap, even numbers, never upscaling."""
+    if not cap or not w or not h or max(w, h) <= cap:
+        return None
+    scale = cap / float(max(w, h))
+    nw = max(16, int(round(w * scale / 2)) * 2)
+    nh = max(16, int(round(h * scale / 2)) * 2)
+    return nw, nh
+
+
+def _frames_to_tensor(frames):
+    """[uint8 HxWx3, ...] -> float32 [N, H, W, 3] in 0..1.
+
+    Fills one preallocated buffer and releases each source frame as it goes.
+    The obvious `np.stack(x).astype(np.float32) / 255` costs three arrays at
+    once (uint8 stack, float copy, divided copy) — on a 1080p clip that is
+    gigabytes of avoidable peak.
+    """
+    if not frames:
+        raise RuntimeError("no frames to convert")
+    h, w, c = frames[0].shape
+    out = np.empty((len(frames), h, w, c), dtype=np.float32)
+    for i in range(len(frames)):
+        np.divide(frames[i], 255.0, out=out[i])
+        frames[i] = None          # drop the uint8 frame immediately
+    return torch.from_numpy(out)
+
+
+def _frames_via_av(path, fps, max_frames, start=None, end=None, cap=0):
     """Sample frames on the target-fps time grid using frame timestamps.
 
     Timestamp-based sampling handles variable-frame-rate sources correctly
@@ -343,6 +399,8 @@ def _frames_via_av(path, fps, max_frames, start=None, end=None):
     with av.open(path) as container:
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
+        target = _scaled_size(stream.codec_context.width,
+                              stream.codec_context.height, cap)
         if t0 > 0:
             # Lands on the keyframe at or before t0; frames before t0 are
             # decoded (they must be, for reference frames) but not kept.
@@ -358,7 +416,11 @@ def _frames_via_av(path, fps, max_frames, start=None, end=None):
                 break
             if t < want - grid / 2:
                 continue
-            out.append(frame.to_ndarray(format="rgb24"))
+            # Scale inside the decoder: the full-size frame is never turned
+            # into a numpy array, so peak memory follows the target size.
+            out.append(frame.to_ndarray(format="rgb24", width=target[0],
+                                        height=target[1])
+                       if target else frame.to_ndarray(format="rgb24"))
             want += grid
             if max_frames and len(out) >= max_frames:
                 break
@@ -366,13 +428,15 @@ def _frames_via_av(path, fps, max_frames, start=None, end=None):
         raise RuntimeError(
             "No video frames decoded"
             + (f" in {t0:.2f}-{end:.2f}s" if (start or end) else "") + ".")
-    arr = np.stack(out).astype(np.float32) / 255.0
-    return torch.from_numpy(arr)
+    return _frames_to_tensor(out)
 
 
-def _frames_via_ffmpeg(path, fps, max_frames, start=None, end=None):
+def _frames_via_ffmpeg(path, fps, max_frames, start=None, end=None, cap=0):
     exe = _ffmpeg()
     w, h = _dimensions(path)
+    target = _scaled_size(w, h, cap)
+    if target:
+        w, h = target
     cmd = [exe, "-v", "error"]
     if start:
         cmd += ["-ss", f"{float(start):.3f}"]     # before -i: keyframe-fast seek
@@ -382,7 +446,10 @@ def _frames_via_ffmpeg(path, fps, max_frames, start=None, end=None):
         if span <= 0:
             raise RuntimeError(f"Video trim {start}-{end}s selects nothing.")
         cmd += ["-t", f"{span:.3f}"]
-    cmd += ["-vf", f"fps={fps}", "-f", "rawvideo", "-pix_fmt", "rgb24"]
+    vf = f"fps={fps}"
+    if target:
+        vf += f",scale={target[0]}:{target[1]}:flags=lanczos"
+    cmd += ["-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24"]
     if max_frames:
         cmd += ["-frames:v", str(int(max_frames))]
     cmd += ["-"]
@@ -390,7 +457,13 @@ def _frames_via_ffmpeg(path, fps, max_frames, start=None, end=None):
     if not raw:
         raise RuntimeError(f"No video frames decoded from {os.path.basename(path)}.")
     arr = np.frombuffer(raw, dtype=np.uint8).reshape(-1, h, w, 3)
-    return torch.from_numpy(arr.astype(np.float32) / 255.0)
+    # Convert in one pass into a preallocated buffer; astype() followed by a
+    # division would hold two float copies of the whole clip at once.
+    out = np.empty(arr.shape, dtype=np.float32)
+    for i in range(arr.shape[0]):
+        np.divide(arr[i], 255.0, out=out[i])
+    del raw
+    return torch.from_numpy(out)
 
 
 def _dimensions(path):

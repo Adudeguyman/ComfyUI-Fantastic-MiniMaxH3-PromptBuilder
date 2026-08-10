@@ -88,6 +88,8 @@ Highlights:
 - **Media presets** so you can reload a set of references in one click.
 - **Unload media** clears the node in one go (after a confirmation) without
   deleting the underlying files, so presets pointing at them still work.
+- **Detail control for reference video** — decode big clips at a smaller size
+  so a long 4K reference doesn't eat gigabytes of RAM.
 
 ---
 
@@ -290,6 +292,53 @@ treated as part of the video or as a separate audio reference. The **?** button
 by the videos heading explains the choice, and there's a
 [summary in the FAQ](#what-do-off--paired--alone-do).
 
+### Video detail and memory
+
+Reference video is decoded to raw float frames, so memory is
+`width x height x 3 x 4 bytes x frames` — a 15-second 1080p clip is about 9 GB,
+and three of those will hurt.
+
+The **detail** picker in the Media Loader's top row caps the long edge while
+decoding, so full-size frames are never built:
+
+| Setting | Long edge | 15s of 1080p |
+|---|---|---|
+| full | source size | ~9.0 GB |
+| high *(default)* | 1280 px | ~4.0 GB |
+| standard | 960 px | ~2.2 GB |
+| low | 640 px | ~1.0 GB |
+
+Lower settings cost less than you'd think, because the native H3 node rescales
+every reference to your generation's pixel area regardless — feeding it 1080p
+while generating at 832x480 spends the memory and then throws the detail away.
+Clips already smaller than the cap are left alone.
+
+The setting applies to every video in the node and is remembered for new ones;
+individual clips keep their own value if you set one. Trimming helps too, and
+multiplies with this: detail and duration are independent factors.
+
+### Switching lines off
+
+Every line in `subject_definitions` and every row in `retention_analysis` has
+its own ◉ switch. Click it and the line greys out and **drops out of the
+generated prompt**, while staying exactly where it is in the editor.
+
+That's for the in-between moments: you pull a reference out of the loader to
+try something, and the lines describing it would now be pointing at media
+that isn't there. Switch those two lines off, run the test, switch them back
+on — no deleting and retyping.
+
+The checks follow suit: a switched-off definition doesn't count as defined, so
+you won't be told a subject is missing its retention entry when both of its
+lines are off together.
+
+Whole sections have the same switch on their heading — `subject_definitions`,
+`retention_analysis`, `overall_soundscape` and `non_diegetic_music` — for when
+you want the lot gone at once. `summary` and the description can't be switched
+off; without them there's no prompt.
+
+All of it saves with the workflow and with prompt presets.
+
 ### Trimming and cropping clips
 
 The ✂ button on any video or audio row opens a popout editor. **The file on
@@ -349,6 +398,15 @@ minimum.
 
 *Capture the frame you're looking at, and it lands in the picture pool like any
 other reference — tagged, taggable, and saved with presets.*
+
+Video also gets **⇄ Mirror**, which flips the clip left-to-right before it's
+sent. The preview flips with it, and so does the row thumbnail, so you always
+see what the model will get. Worth knowing what mirroring does to a reference:
+any text in frame becomes reversed, and asymmetric details swap sides — a
+parting, a scar, which hand holds something, which way a subject faces. That
+makes it useful for getting a pose or composition facing the other way, and a
+poor idea for identity references you're keeping consistent across a chain,
+where the flipped side-details will fight your unmirrored ones.
 
 Video additionally gets **▣ Crop**: drag a rectangle (with rule-of-thirds
 guides) to send only part of the frame — freeform or locked to 1:1, 16:9, or
