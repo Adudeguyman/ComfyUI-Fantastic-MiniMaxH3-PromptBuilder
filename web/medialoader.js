@@ -279,6 +279,16 @@ const CSS = `
 .mml-slot.dragging{opacity:.35;}
 .mml-slot.over{outline:1px solid #6f86b8;outline-offset:1px;}
 
+/* Crop rects are relative to the DRAWN image, which object-fit:contain
+   letterboxes inside its element — so the overlay needs a box of exactly
+   those bounds. CSS can't contain-fit an empty div (aspect-ratio only fills
+   in a dimension that isn't already set), so an invisible image of the right
+   intrinsic size does the sizing, exactly as the real one does. */
+.mml-cropfit{position:absolute;inset:0;pointer-events:none;}
+.mml-cropbox{position:absolute;line-height:0;}
+.mml-cropmark{position:absolute;border:1px solid rgba(76,195,224,.9);
+  box-shadow:0 0 0 2000px rgba(6,8,12,.55);pointer-events:none;z-index:1;}
+.mml-dims.cut{color:#9fe3f5;}
 .mml-dims{position:absolute;right:3px;top:3px;padding:1px 4px;border-radius:4px;
   background:rgba(8,10,14,.85);color:#dfe4ec;font-size:8px;line-height:1.2;
   font-family:ui-monospace,monospace;pointer-events:none;letter-spacing:0;
@@ -288,7 +298,15 @@ const CSS = `
 .mml-pic{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   display:block;cursor:zoom-in;background:#0d1015;}
 .mml-picbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;
-  gap:4px;padding:1px 4px;background:rgba(10,12,16,.82);min-width:0;overflow:hidden;}
+  gap:3px;padding:1px 4px;background:rgba(10,12,16,.82);min-width:0;overflow:hidden;}
+/* The label gives way first: controls must never be pushed out of the bar. */
+.mml-picbar .mml-tag{flex:1 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;}
+.mml-picbar .mml-power,
+.mml-picbar .mml-trimbtn,
+.mml-picbar .mml-drag,
+.mml-picbar .mml-x{flex:0 0 auto;}
+.mml-picbar .mml-trimbtn{font-size:12px;}
 .mml-tag{font-family:ui-monospace,monospace;font-size:9px;white-space:nowrap;}
 .mml-tag.pic{color:#e0a94c;} .mml-tag.vid{color:#4cc3e0;} .mml-tag.aud{color:#b48ce8;}
 .mml-x{cursor:pointer;color:#7a8393;font-size:11px;line-height:1;}
@@ -342,6 +360,7 @@ const CSS = `
 .mml-tmstage{position:relative;background:#000;line-height:0;}
 .mml-tmvideo{width:100%;max-height:340px;object-fit:contain;display:block;}
 .mml-tmcropwrap{position:absolute;inset:0;}
+
 .mml-tmcrop{position:absolute;border:1.5px dashed #4cc3e0;cursor:move;
   background:
     linear-gradient(rgba(76,195,224,.25),rgba(76,195,224,.25)) 33.33% 0/1px 100% no-repeat,
@@ -505,6 +524,11 @@ class TrimModal {
 
   /** Keyboard control. Typing in a field always wins. */
   key(e) {
+    if (this.isStill) {
+      if (e.key === "Escape" && !(e.target && /^(INPUT|TEXTAREA|SELECT)$/
+          .test(e.target.tagName))) this.close();
+      return;
+    }
     const typing = e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     if (e.key === "Escape") {
       if (!typing) this.close();
@@ -549,6 +573,7 @@ class TrimModal {
   }
 
   close() {
+    if (this.stopFit) this.stopFit();
     if (this.raf) cancelAnimationFrame(this.raf);
     window.removeEventListener("keydown", this.onKey);
     try { this.media?.pause?.(); } catch (e) {}
@@ -558,12 +583,18 @@ class TrimModal {
   apply() {
     const it = this.item;
     const eps = 0.05;
-    if (this.start <= eps && this.end >= this.dur - eps) delete it.trim;
-    else it.trim = { start: +this.start.toFixed(2),
-      end: this.end >= this.dur - eps ? null : +this.end.toFixed(2) };
-    if (this.crop && it.kind === "video") it.crop = this.crop;
+    if (this.isStill) {
+      delete it.trim;
+    } else if (this.start <= eps && this.end >= this.dur - eps) {
+      delete it.trim;
+    } else {
+      it.trim = { start: +this.start.toFixed(2),
+        end: this.end >= this.dur - eps ? null : +this.end.toFixed(2) };
+    }
+    const visual = it.kind === "video" || it.kind === "picture";
+    if (this.crop && visual) it.crop = this.crop;
     else delete it.crop;
-    if (this.mirror && it.kind === "video") it.mirror = true;
+    if (this.mirror && visual) it.mirror = true;
     else delete it.mirror;
     this.close();
     this.panel.commit();
@@ -571,8 +602,21 @@ class TrimModal {
 
   /* ---- media preview ---------------------------------------------- */
 
+  get isStill() { return this.item.kind === "picture"; }
+
   buildMedia() {
     const url = viewURL(this.item.file);
+    if (this.isStill) {
+      this.media = el("img", { class: "mml-tmvideo", src: url });
+      this.media.addEventListener("load", () => {
+        if (!this.item.width) {
+          this.item.width = this.media.naturalWidth;
+          this.item.height = this.media.naturalHeight;
+        }
+        this.syncCrop();
+      });
+      return;
+    }
     if (this.item.kind === "video") {
       this.media = el("video", { class: "mml-tmvideo", src: url,
         muted: false, volume: 0.9,
@@ -613,6 +657,7 @@ class TrimModal {
   }
 
   seek(t, pause = true) {
+    if (this.isStill || !this.media) return;
     if (pause && !this.media.paused) {
       this.media.pause(); this.playBtn.textContent = "\u25b6";
     }
@@ -755,6 +800,7 @@ class TrimModal {
   }
 
   layoutTimeline() {
+    if (this.isStill) return;
     const p = (t) => `${(this.dur ? t / this.dur : 0) * 100}%`;
     this.selEl.style.left = p(this.start);
     this.selEl.style.width = p(this.end - this.start);
@@ -777,7 +823,7 @@ class TrimModal {
   }
 
   updatePlayhead() {
-    if (!this.playhead || !this.dur) return;
+    if (this.isStill || !this.playhead || !this.dur) return;
     const t = this.media?.currentTime || 0;
     // Clamp a little inside the bar: at exactly 0% or 100% the centred
     // marker is half outside and reads as missing.
@@ -789,7 +835,7 @@ class TrimModal {
 
   /** Warn when the previewed frame falls outside what will be sent. */
   checkOutside(t) {
-    if (!this.outside) return;
+    if (this.isStill || !this.outside) return;
     const at = t === undefined ? (this.media?.currentTime || 0) : t;
     const out = at < this.start - 0.001 || at > this.end + 0.001;
     this.outside.textContent = out
@@ -813,13 +859,18 @@ class TrimModal {
   /* ---- crop -------------------------------------------------------- */
 
   buildCrop() {
-    if (this.item.kind !== "video") return null;
+    if (this.item.kind !== "video" && !this.isStill) return null;
     this.cropRect = el("div", { class: "mml-tmcrop",
       onmousedown: (e) => this.cropDown(e, "move") },
       ...["nw", "ne", "sw", "se"].map((c) =>
         el("div", { class: `mml-tmcorner ${c}`,
           onmousedown: (e) => { e.stopPropagation(); this.cropDown(e, c); } })));
-    this.cropWrap = el("div", { class: "mml-tmcropwrap" }, this.cropRect);
+    this.cropBox = el("div", { class: "mml-cropbox" }, this.cropRect);
+    this.cropWrap = el("div", { class: "mml-tmcropwrap" }, this.cropBox);
+    requestAnimationFrame(() => {
+      this.stopFit = fitToMedia(this.media, this.cropBox,
+                                this.item.width, this.item.height);
+    });
     this.cropInfo = el("span", { class: "mml-tmcropinfo" });
     this.mirrorBtn = el("button", { class: "mml-btn mml-sm",
       title: "Flip the clip left-to-right before it's sent",
@@ -840,8 +891,12 @@ class TrimModal {
       } }, "\u25a3 Crop");
     this.aspectEl = el("select", { class: "mml-tmaspect",
       onchange: (e) => { this.aspect = e.target.value; this.forceAspect(); } },
-      [["free", "freeform"], ["1", "1:1"], [String(16 / 9), "16:9"],
-       [String(9 / 16), "9:16"]].map(([v, l]) => el("option", { value: v }, l)));
+      [["free", "freeform"], ["1", "1:1"],
+       [String(16 / 9), "16:9"], [String(9 / 16), "9:16"],
+       [String(4 / 3), "4:3"], [String(3 / 4), "3:4"],
+       [String(3 / 2), "3:2"], [String(2 / 3), "2:3"],
+       [String(21 / 9), "21:9"], [String(9 / 21), "9:21"],
+      ].map(([v, l]) => el("option", { value: v }, l)));
     return el("span", { class: "mml-tmcropbar" },
       this.mirrorBtn, this.cropBtn, this.aspectEl, this.cropInfo);
   }
@@ -858,15 +913,29 @@ class TrimModal {
   forceAspect() {
     if (this.aspect === "free" || !this.crop) return;
     const target = parseFloat(this.aspect);
+    if (!target) return;
     const vw = this.item.width || 16, vh = this.item.height || 9;
-    this.crop.h = Math.min(1 - this.crop.y, this.crop.w * (vw / vh) / target);
+    const px = vw / vh;                 // pixels per unit of normalised space
+    const c = this.crop;
+
+    // Height that gives the requested pixel aspect for the current width.
+    let h = (c.w * px) / target;
+    if (h > 1 - c.y) {
+      // Too tall to fit: keep the ratio by narrowing instead of squashing —
+      // otherwise a portrait crop on a landscape source silently comes out
+      // the wrong shape.
+      h = 1 - c.y;
+      c.w = Math.min(1 - c.x, (h * target) / px);
+      h = (c.w * px) / target;
+    }
+    c.h = Math.max(0.02, Math.min(h, 1 - c.y));
     this.syncCrop();
   }
 
   cropDown(e, mode) {
     if (!this.cropMode) return;
     e.preventDefault();
-    const wrap = this.cropWrap.getBoundingClientRect();
+    const wrap = (this.cropBox || this.cropWrap).getBoundingClientRect();
     const c0 = { ...this.crop, mx: e.clientX, my: e.clientY };
     const move = (ev) => {
       const dx = (ev.clientX - c0.mx) / wrap.width;
@@ -1044,8 +1113,10 @@ class TrimModal {
   build() {
     this.buildMedia();
     const isVid = this.item.kind === "video";
-    const stage = isVid
-      ? el("div", { class: "mml-tmstage" }, this.media, this.cropBar = null,
+    const isStill = this.isStill;
+    // Pictures need the stage too — it holds the image and the crop overlay.
+    const stage = (isVid || isStill)
+      ? el("div", { class: "mml-tmstage" }, this.media,
           (this.cropUI = this.buildCrop(), this.cropWrap))
       : null;
 
@@ -1056,17 +1127,18 @@ class TrimModal {
           this.seek(this.start); this.layoutTimeline(); } },
         `last ${secs}s`) : null);
 
+    const still = this.isStill;
     this.overlay = el("div", { class: "mml-tmover",
       onmousedown: (e) => { if (e.target === this.overlay) this.close(); } },
-      el("div", { class: "mml-tmmodal" + (isVid ? "" : " audio") },
+      el("div", { class: "mml-tmmodal" + (isVid || still ? "" : " audio") },
         el("div", { class: "mml-tmhead" },
           el("span", { class: "mml-tmtitle" },
-            `\u2702 ${this.item.name}`),
-          isVid ? this.cropUI : null,
+            `${still ? "\u25a3" : "\u2702"} ${this.item.name}`),
+          (isVid || still) ? this.cropUI : null,
           el("button", { class: "mml-x", onclick: () => this.close() }, "\u2715")),
         stage,
-        this.buildTimeline(),
-        el("div", { class: "mml-tmfoot" },
+        still ? null : this.buildTimeline(),
+        still ? null : el("div", { class: "mml-tmfoot" },
           el("button", { class: "mml-btn mml-sm", title: "Previous frame (\u2190)",
             onclick: () => this.seek((this.media?.currentTime || 0) -
               1 / (this.item.fps || TRIM_FPS)) }, "\u25c0|"),
@@ -1100,11 +1172,11 @@ class TrimModal {
               this.dur - 1 / (this.item.fps || TRIM_FPS))) },
             "Last \u23ed")),
         el("div", { class: "mml-tmfoot act" },
-          ...chips,
-          isVid ? el("button", { class: "mml-btn mml-sm",
+          ...(still ? [] : chips),
+          (isVid && !still) ? el("button", { class: "mml-btn mml-sm",
             title: "Add the frame shown above as a picture reference  ( C )",
             onclick: () => this.captureFrame() }, "\u{1F4F7} Use frame") : null,
-          (this.item.kind === "audio" || this.item.has_audio)
+          (!still && (this.item.kind === "audio" || this.item.has_audio))
             ? el("button", { class: "mml-btn mml-sm",
                 title: "Save the kept range as its own audio reference  ( A )",
                 onclick: () => this.useAudio() }, "\u{1F3B5} Use audio")
@@ -1122,13 +1194,19 @@ class TrimModal {
             onclick: () => this.apply() }, "Apply"),
           el("button", { class: "mml-btn mml-sm",
             onclick: () => this.close() }, "Cancel")),
-        el("div", { class: "mml-tmkeys" },
+        still ? el("div", { class: "mml-tmkeys" },
+          "Drag a box to crop \u00b7 \u25a3 toggles editing \u00b7 esc closes")
+        : el("div", { class: "mml-tmkeys" },
           "\u2190 \u2192 step a frame (shift = 10) \u00b7 space play \u00b7 " +
           "[ ] set start/end here \u00b7 home/end jump \u00b7 M mute \u00b7 A use audio" +
           (isVid ? " \u00b7 C capture frame" : ""))));
+    if (still) {
+      this.cropMode = true;
+      if (!this.crop) this.crop = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
+    }
     this.syncCrop();
     this.syncMirror();
-    this.seek(this.start, false);
+    if (!still) this.seek(this.start, false);
   }
 }
 
@@ -1173,6 +1251,52 @@ const ASPECTS = [
   [9, 16, "Portrait Widescreen"], [16, 9, "Widescreen"],
   [9, 21, "Portrait Ultrawide"], [21, 9, "Ultrawide"],
 ];
+
+/** Where object-fit:contain actually draws inside an element, in element
+ *  coordinates. CSS can't express this (percentage max-heights need a
+ *  definite parent, and aspect-ratio won't override a set dimension), so the
+ *  overlay boxes are measured and positioned in script. */
+function drawnBox(mediaEl, natW, natH) {
+  const bw = mediaEl.clientWidth, bh = mediaEl.clientHeight;
+  const nw = natW || mediaEl.naturalWidth || mediaEl.videoWidth;
+  const nh = natH || mediaEl.naturalHeight || mediaEl.videoHeight;
+  if (!bw || !bh || !nw || !nh) return null;
+  const nat = nw / nh, box = bw / bh;
+  const w = nat > box ? bw : bh * nat;
+  const h = nat > box ? bw / nat : bh;
+  return { x: (bw - w) / 2, y: (bh - h) / 2, w, h };
+}
+
+/** Keep an overlay box glued to the drawn media, now and on every resize. */
+function fitToMedia(mediaEl, boxEl, natW, natH) {
+  const place = () => {
+    const d = drawnBox(mediaEl, natW, natH);
+    if (!d) return;
+    Object.assign(boxEl.style, {
+      left: `${d.x}px`, top: `${d.y}px`,
+      width: `${d.w}px`, height: `${d.h}px`,
+    });
+  };
+  place();
+  mediaEl.addEventListener("load", place);
+  mediaEl.addEventListener("loadedmetadata", place);
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(place);
+    ro.observe(mediaEl);
+    return () => ro.disconnect();
+  }
+  return () => {};
+}
+
+/** Size actually sent after a crop, for badges and tooltips. */
+function outSize(item) {
+  const w = item.width, h = item.height;
+  if (!w || !h) return [w, h];
+  const c = item.crop;
+  if (!c) return [w, h];
+  return [Math.max(16, Math.round(w * (c.w ?? 1))),
+          Math.max(16, Math.round(h * (c.h ?? 1)))];
+}
 
 /** Nearest standard ratio to w:h, with how far off it is. */
 function nearestAspect(w, h) {
@@ -1477,19 +1601,24 @@ class LoaderPanel {
   }
 
   trimBtn(item) {
-    if (item.kind === "picture" || !item.duration) return null;
+    const still = item.kind === "picture";
+    if (!still && !item.duration) return null;
     const active = (item.trim && (item.trim.start || item.trim.end))
       || item.crop || item.mirror;
+    const what = [];
+    if (item.crop) what.push("cropped");
+    if (item.mirror) what.push("mirrored");
+    if (item.trim && (item.trim.start || item.trim.end)) what.push(fmtSpan(item));
     return el("span", {
       class: "mml-trimbtn" + (active ? " on" : ""),
-      title: active
-        ? `Trimmed to ${fmtSpan(item)} — click to edit`
-        : "Use only part of this clip",
+      title: active ? `${what.join(", ")} \u2014 click to edit`
+        : (still ? "Crop or mirror this picture"
+                 : "Use only part of this clip"),
       onclick: (e) => {
         e.stopPropagation();
         new TrimModal(this, item);
       },
-    }, "\u2702");
+    }, still ? "\u25a3" : "\u2702");
   }
 
 
@@ -1714,26 +1843,49 @@ class LoaderPanel {
         (() => {
           // Badge and img are SIBLINGS in the slot: .mml-pic is absolutely
           // positioned against the slot, so wrapping it breaks its sizing.
-          const badge = el("span", { class: "mml-dims" },
-            dimsLabel(it.width, it.height));
+          const [ow, oh] = outSize(it);
+          const badge = el("span", { class: "mml-dims" + (it.crop ? " cut" : "") },
+            dimsLabel(ow, oh));
+          // The file is untouched, so the thumbnail shows the whole picture
+          // with everything outside the crop dimmed — you can see what was
+          // dropped, not just what's left.
+          let marquee = null;
+          if (it.crop) {
+            const box = el("div", { class: "mml-cropbox" },
+              el("div", { class: "mml-cropmark", style: {
+                left: `${(it.crop.x ?? 0) * 100}%`,
+                top: `${(it.crop.y ?? 0) * 100}%`,
+                width: `${(it.crop.w ?? 1) * 100}%`,
+                height: `${(it.crop.h ?? 1) * 100}%`,
+              } }));
+            marquee = el("div", { class: "mml-cropfit",
+              style: it.mirror ? { transform: "scaleX(-1)" } : {} }, box);
+            // measured once the image reports its natural size
+            requestAnimationFrame(() => fitToMedia(img, box, it.width, it.height));
+          }
           const img = el("img", { class: "mml-pic", src: viewURL(it.file),
-            title: dimsTitle(it.name, it.width, it.height),
+            style: it.mirror ? { transform: "scaleX(-1)" } : {},
+            title: dimsTitle(it.name, it.width, it.height)
+              + (it.crop ? `\ncropped to ${ow}\u00d7${oh}` : "")
+              + (it.mirror ? "\nmirrored" : ""),
             onload: () => {
               // Items from before dimensions were stored learn them here.
               if (!it.width && img.naturalWidth) {
                 it.width = img.naturalWidth;
                 it.height = img.naturalHeight;
-                badge.textContent = dimsLabel(it.width, it.height);
+                const [nw, nh] = outSize(it);
+                badge.textContent = dimsLabel(nw, nh);
                 img.title = dimsTitle(it.name, it.width, it.height);
                 this.commit();
               }
             },
             onclick: () => lightbox(it, tags.get(it) || "") });
-          return [img, badge];
+          return [img, marquee, badge];
         })(),
         el("div", { class: "mml-picbar" },
           this.powerBtn(it),
           el("span", { class: "mml-tag pic" }, isOn(it) ? tag : "off"),
+          this.trimBtn(it),
           el("span", { class: "mml-drag", title: "Drag to reorder" }, "\u2630"),
           el("span", { class: "mml-x", title: "Remove",
             onclick: () => this.remove(it) }, "\u2715"))), it));

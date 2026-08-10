@@ -317,6 +317,32 @@ The setting applies to every video in the node and is remembered for new ones;
 individual clips keep their own value if you set one. Trimming helps too, and
 multiplies with this: detail and duration are independent factors.
 
+### Picture roles
+
+Start a definition line with `<Picture N>` and role chips appear under it, the
+same way audio lines work. Each one writes the definition, sets the matching
+retention marker and context, and adds the right summary task type:
+
+| Chip | Marker | Task type |
+|---|---|---|
+| First frame | `fully_preserved` | keyframe completion |
+| Last frame | `fully_preserved` | keyframe completion |
+| Composition | `weak_reference` | reference generation |
+| Look / style | `weak_reference` | reference generation |
+| Setting | `partially_preserved` | reference generation |
+| Attribute → subject | `attribute_transfer` | reference generation |
+| Storyboard | `weak_reference` | reference generation |
+
+There's deliberately no "identity" chip: a picture that simply shows what a
+character looks like belongs cited *inside* that subject's line
+(`<Subject 1> is the woman in <Picture 1>, with ...`), not as a standalone
+`<Picture N>` definition. Standalone picture lines are for pictures playing a
+role in their own right.
+
+Note that `attribute transfer` is a retention marker, not a task type — the
+chip sets `attribute_transfer` on the retention row while the summary stays
+`reference generation`.
+
 ### Switching lines off
 
 Every line in `subject_definitions` and every row in `retention_analysis` has
@@ -399,6 +425,16 @@ minimum.
 *Capture the frame you're looking at, and it lands in the picture pool like any
 other reference — tagged, taggable, and saved with presets.*
 
+**Pictures get the same treatment.** The ▣ button on a picture tile opens the
+editor with just the crop and mirror tools — no timeline, since there's nothing
+to trim. Back on the tile, the kept region is outlined and everything outside
+it is dimmed, so you can see what was dropped as well as what's left, and the
+corner badge switches to the **cropped** pixel size and ratio. Mirrored
+pictures show flipped. Crop a subject out of a wider shot, or flip a reference, without
+touching the file: the rect is stored on the item and applied when the image is
+decoded, and PIL crops before the float conversion, so a small crop of a huge
+photo costs a fraction of the memory the whole frame would.
+
 Video also gets **⇄ Mirror**, which flips the clip left-to-right before it's
 sent. The preview flips with it, and so does the row thumbnail, so you always
 see what the model will get. Worth knowing what mirroring does to a reference:
@@ -409,8 +445,7 @@ poor idea for identity references you're keeping consistent across a chain,
 where the flipped side-details will fight your unmirrored ones.
 
 Video additionally gets **▣ Crop**: drag a rectangle (with rule-of-thirds
-guides) to send only part of the frame — freeform or locked to 1:1, 16:9, or
-9:16, with the resulting pixel size shown live. Once set, the rectangle stays on
+guides) to send only part of the frame freeform or locked to 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 21:9 or 9:21, with the resulting pixel size shown live. Once set, the rectangle stays on
 the preview with everything outside it dimmed, so the framing is always visible;
 pressing ▣ again just puts the handles away. Handy for cutting a subject
 out of wider footage instead of re-exporting.

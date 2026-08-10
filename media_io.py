@@ -71,13 +71,36 @@ def resolve(annotated):
 
 # --- images -----------------------------------------------------------------
 
-def load_image(annotated):
+def load_image(annotated, crop=None, mirror=False):
+    """Decode a still to [1, H, W, 3].
+
+    `crop` (normalised x/y/w/h) and `mirror` are applied here rather than to
+    the file, so the picture on disk is never modified. Cropping happens in
+    PIL before the float conversion, so a small crop of a huge photo costs a
+    fraction of the memory the full frame would.
+    """
     from PIL import Image, ImageOps
 
     path = resolve(annotated)
     img = Image.open(path)
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
+    if mirror:
+        img = ImageOps.mirror(img)          # before crop: rect is screen-space
+    if crop:
+        try:
+            W, H = img.size
+            x = float(crop.get("x", 0.0)); y = float(crop.get("y", 0.0))
+            x0 = max(0, min(W - 16, int(round(x * W))))
+            y0 = max(0, min(H - 16, int(round(y * H))))
+            x1 = min(W, max(x0 + 16, int(round((x + float(crop.get("w", 1.0))) * W))))
+            y1 = min(H, max(y0 + 16, int(round((y + float(crop.get("h", 1.0))) * H))))
+            if (x0, y0, x1, y1) != (0, 0, W, H):
+                img = img.crop((x0, y0, x1, y1))
+                print(f"[MiniMaxH3 media_io] picture crop {W}x{H} -> "
+                      f"{x1 - x0}x{y1 - y0} at ({x0},{y0})")
+        except Exception as exc:
+            print(f"[MiniMaxH3 media_io] picture crop ignored ({exc})")
     arr = np.asarray(img).astype(np.float32) / 255.0
     return torch.from_numpy(arr)[None, ...]  # [1, H, W, 3]
 

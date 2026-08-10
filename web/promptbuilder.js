@@ -74,6 +74,86 @@ const VISUAL_MARKERS = [
 ];
 const AUDIO_MARKERS = ["fully_copy", "partially_copy", "reference", "weak_reference"];
 
+
+/* Picture reference roles (guide §2.2.2 / §2.3 / §2.4.1).
+   A standalone <Picture N> line is for a picture playing a role in its own
+   right — a frame anchor, a layout, a look. A picture that just shows what a
+   character looks like belongs cited inside that subject's line instead, so
+   there is deliberately no "identity" chip here. */
+const PICTURE_ROLES = [
+  {
+    id: "first", label: "First frame",
+    title: "The image is the opening frame of a shot",
+    marker: "fully_preserved", task: "keyframe completion",
+    text: (c) => `<Picture ${c.n}> is the first frame of [Shot ${c.shot}], ` +
+      "showing ",
+    note: (c) => `it is used as the opening frame of [Shot ${c.shot}] exactly as given.`,
+    context: (c) => `[Shot ${c.shot}] first frame`,
+  },
+  {
+    id: "last", label: "Last frame",
+    title: "The image is the closing frame of a shot",
+    marker: "fully_preserved", task: "keyframe completion",
+    text: (c) => `<Picture ${c.n}> is the last frame of [Shot ${c.shot}], ` +
+      "showing ",
+    note: (c) => `it is used as the closing frame of [Shot ${c.shot}] exactly as given.`,
+    context: (c) => `[Shot ${c.shot}] last frame`,
+  },
+  {
+    id: "composition", label: "Composition",
+    title: "Framing, layout and camera position are echoed; content is not copied",
+    marker: "weak_reference", task: "reference generation",
+    text: (c) => `<Picture ${c.n}> is a composition reference for [Shot ${c.shot}] ` +
+      "\u2014 its framing, subject placement and camera height are echoed; " +
+      "its own content is not reproduced.",
+    note: () => "only the framing and layout are echoed; its subjects and " +
+      "setting are not reproduced.",
+    context: (c) => `[Shot ${c.shot}] framing`,
+  },
+  {
+    id: "style", label: "Look / style",
+    title: "Palette, grade and lighting character are echoed",
+    marker: "weak_reference", task: "reference generation",
+    text: (c) => `<Picture ${c.n}> is a look reference \u2014 its palette, ` +
+      "contrast and lighting character guide the grade of the target video; " +
+      "its subjects and layout are not used.",
+    note: () => "only its palette, contrast and lighting character carry over.",
+    context: () => "look and grade",
+  },
+  {
+    id: "setting", label: "Setting",
+    title: "The location or environment the shot takes place in",
+    marker: "partially_preserved", task: "reference generation",
+    text: (c) => `<Picture ${c.n}> is the setting reference \u2014 the target ` +
+      "video takes place in this location, seen from other angles as the " +
+      "camera moves.",
+    note: () => "the location is kept; framing and viewpoint change with the " +
+      "camera.",
+    context: () => "location",
+  },
+  {
+    id: "attribute", label: "Attribute \u2192 subject",
+    title: "A garment, hairstyle or marking from this picture is worn by a subject",
+    marker: "attribute_transfer", task: "reference generation", needsSubject: true,
+    text: (c) => `<Picture ${c.n}> supplies the ` +
+      `\u2039describe the garment / hairstyle / marking\u203a worn by ${c.subj}; ` +
+      "nothing else from this picture is used.",
+    note: (c) => `the named attribute is transferred to ${c.subj}, whose own ` +
+      "identity is unchanged.",
+    context: (c) => `attribute for ${c.subj}`,
+  },
+  {
+    id: "storyboard", label: "Storyboard",
+    title: "A panel showing a beat the shot should hit, not an exact frame",
+    marker: "weak_reference", task: "reference generation",
+    text: (c) => `<Picture ${c.n}> is a storyboard panel for [Shot ${c.shot}] ` +
+      "\u2014 it shows the beat to hit, not an exact frame to reproduce.",
+    note: (c) => `it guides the staging of [Shot ${c.shot}] without being ` +
+      "reproduced as a frame.",
+    context: (c) => `[Shot ${c.shot}] staging`,
+  },
+];
+
 /* Audio reference roles (guide §2.2.4 / §2.4.2 / §2.3).
    Each role knows how to phrase the definition, which retention marker it
    implies, and which summary task type it belongs to. */
@@ -2001,6 +2081,22 @@ class Editor {
       this.render();
     };
 
+    const applyPictureRole = (d, n, role) => {
+      const ctx = { n, subj: firstTag("Subject", "<Subject 1>"), shot: 1 };
+      d.text = role.text(ctx);
+      d.role = role.id;
+
+      const label = `<Picture ${n}>`;
+      let row = r.retention.find((x) => x.label === label);
+      if (!row) { row = { label, context: "", marker: "", note: "" }; r.retention.push(row); }
+      row.marker = role.marker;
+      row.note = role.note(ctx);
+      if (!row.context) row.context = role.context(ctx);
+
+      if (!r.summaryTypes.includes(role.task)) r.summaryTypes.push(role.task);
+      this.render();
+    };
+
     const drawDefs = () => {
       defsWrap.replaceChildren();
       r.subjectDefs.forEach((d, i) => {
@@ -2011,9 +2107,21 @@ class Editor {
             ...[...d.text.matchAll(/<(Subject|Picture|Video|Audio) (\d+)>/g)]
               .map((m) => el("span",
                 { class: `mmh3-minitag ${TAG_CLASS[m[1]]}` }, `${m[1]} ${m[2]}`)));
-          // Audio lines get one-click role presets.
+          // Lines get one-click role presets for the tag they define.
           const am = d.text.match(/<Audio (\d+)>/);
+          const pm = d.text.trim().match(/^<Picture (\d+)>/);
           roleRow.replaceChildren();
+          if (pm && !am) {
+            const n = pm[1];
+            roleRow.append(el("span", { class: "mmh3-rolelabel" }, "role:"));
+            PICTURE_ROLES.forEach((role) => {
+              roleRow.append(el("span", {
+                class: "mmh3-rolechip" + (d.role === role.id ? " on" : ""),
+                title: role.title + ` \u2014 sets ${role.marker} + ${role.task}`,
+                onclick: () => applyPictureRole(d, n, role),
+              }, role.label));
+            });
+          }
           if (am) {
             const n = am[1];
             roleRow.append(el("span", { class: "mmh3-rolelabel" }, "role:"));
