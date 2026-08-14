@@ -383,7 +383,9 @@ const CSS = `
 .mml-tmcorner.sw{left:-6px;bottom:-6px;cursor:nesw-resize;}
 .mml-tmcorner.se{right:-6px;bottom:-6px;cursor:nwse-resize;}
 .mml-tmcropbar{display:flex;align-items:center;gap:6px;}
-.mml-tmcropinfo{font-size:10px;color:#4cc3e0;font-family:ui-monospace,monospace;}
+.mml-tmcropinfo{font-size:10px;color:#8a93a3;font-family:ui-monospace,monospace;
+  white-space:nowrap;}
+.mml-tmcropinfo.changed{color:#4cc3e0;}
 .mml-tmaspect{background:#12151b;color:#c9cfda;border:1px solid #2e3440;
   border-radius:6px;padding:2px 5px;font-size:11px;}
 .mml-btn.on{background:#173642;border-color:#4cc3e0;color:#9fe3f5;}
@@ -954,6 +956,19 @@ class TrimModal {
 
   /** Mirror only the picture: the crop overlay stays in screen space, so a
    *  rect drawn here means the same region the backend will cut. */
+  /** Source size, and what will actually be sent when they differ. */
+  showSize() {
+    if (!this.cropInfo) return;
+    const sw = this.item.width, sh = this.item.height;
+    if (!sw || !sh) { this.cropInfo.textContent = ""; return; }
+    const [ow, oh] = outSize({ ...this.item, crop: this.crop, rotate: 0,
+                               resize: this.resize });
+    this.cropInfo.textContent = (ow === sw && oh === sh)
+      ? `${sw} \u00d7 ${sh}`
+      : `${sw} \u00d7 ${sh} \u2192 ${ow} \u00d7 ${oh}`;
+    this.cropInfo.classList.toggle("changed", ow !== sw || oh !== sh);
+  }
+
   /** Say something inside the modal. Panel messages sit behind the overlay,
    *  so a refusal printed there is invisible until the modal closes. */
   modalSay(text, bad = false) {
@@ -977,6 +992,7 @@ class TrimModal {
       }
     }
     if (this.rotBtn) this.rotBtn.classList.toggle("on", !!this.rotate);
+    this.showSize();
   }
 
   syncMirror() {
@@ -1054,17 +1070,8 @@ class TrimModal {
         left: `${c.x * 100}%`, top: `${c.y * 100}%`,
         width: `${c.w * 100}%`, height: `${c.h * 100}%`,
       });
-      const vw = this.item.width, vh = this.item.height;
-      if (vw) {
-        const [ow, oh] = outSize({ ...this.item, crop: c, rotate: 0,
-                                   resize: this.resize });
-        this.cropInfo.textContent = `${ow} \u00d7 ${oh}`;
-      } else this.cropInfo.textContent = "";
-    } else if (this.isStill && this.item.width) {
-      const [ow, oh] = outSize({ ...this.item, crop: null, rotate: 0,
-                                 resize: this.resize });
-      this.cropInfo.textContent = `${ow} \u00d7 ${oh}`;
-    } else this.cropInfo.textContent = "";
+    }
+    this.showSize();
   }
 
   /* ---- capture the displayed frame as a picture reference ---------- */
@@ -1302,10 +1309,11 @@ class TrimModal {
           "\u2190 \u2192 step a frame (shift = 10) \u00b7 space play \u00b7 " +
           "[ ] set start/end here \u00b7 home/end jump \u00b7 M mute \u00b7 A use audio" +
           (isVid ? " \u00b7 C capture frame" : ""))));
-    if (still) {
-      this.cropMode = true;
-      if (!this.crop) this.crop = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
-    }
+    // Opening straight into crop editing made sense when cropping was the
+    // only reason to be here; rotate and size mean it no longer is. Start in
+    // whatever state the picture is already in.
+    if (still && this.crop) this.cropMode = false;
+    this.showSize();
     this.syncCrop();
     this.syncMirror();
     this.syncRotate();
