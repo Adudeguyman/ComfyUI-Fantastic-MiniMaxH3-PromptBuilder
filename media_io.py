@@ -71,13 +71,15 @@ def resolve(annotated):
 
 # --- images -----------------------------------------------------------------
 
-def load_image(annotated, crop=None, mirror=False):
+def load_image(annotated, crop=None, mirror=False, rotate=0, resize=0):
     """Decode a still to [1, H, W, 3].
 
-    `crop` (normalised x/y/w/h) and `mirror` are applied here rather than to
-    the file, so the picture on disk is never modified. Cropping happens in
-    PIL before the float conversion, so a small crop of a huge photo costs a
-    fraction of the memory the full frame would.
+    `rotate` (0/90/180/270, clockwise), `mirror` and `crop` (normalised
+    x/y/w/h) are applied here rather than to the file, so the picture on disk
+    is never modified. Order matches what the editor shows: rotate, then
+    mirror, then crop — the crop rect is drawn on the already-turned image.
+    Cropping happens in PIL before the float conversion, so a small crop of a
+    huge photo costs a fraction of the memory the full frame would.
     """
     from PIL import Image, ImageOps
 
@@ -85,6 +87,14 @@ def load_image(annotated, crop=None, mirror=False):
     img = Image.open(path)
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
+    try:
+        turn = int(rotate or 0) % 360
+    except (TypeError, ValueError):
+        turn = 0
+    if turn in (90, 180, 270):
+        # expand=True so the canvas grows: a quarter turn swaps w/h.
+        img = img.rotate(-turn, expand=True)   # PIL turns anticlockwise
+        print(f"[MiniMaxH3 media_io] rotated {turn}\u00b0 -> {img.size[0]}x{img.size[1]}")
     if mirror:
         img = ImageOps.mirror(img)          # before crop: rect is screen-space
     if crop:
@@ -101,6 +111,20 @@ def load_image(annotated, crop=None, mirror=False):
                       f"{x1 - x0}x{y1 - y0} at ({x0},{y0})")
         except Exception as exc:
             print(f"[MiniMaxH3 media_io] picture crop ignored ({exc})")
+    try:
+        cap = int(resize or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    if cap > 0:
+        w, h = img.size
+        if max(w, h) > cap:
+            scale = cap / float(max(w, h))
+            nw = max(16, int(round(w * scale)))
+            nh = max(16, int(round(h * scale)))
+            img = img.resize((nw, nh), Image.LANCZOS)
+            print(f"[MiniMaxH3 media_io] resized {w}x{h} -> {nw}x{nh} "
+                  f"(long edge {cap})")
+
     arr = np.asarray(img).astype(np.float32) / 255.0
     return torch.from_numpy(arr)[None, ...]  # [1, H, W, 3]
 

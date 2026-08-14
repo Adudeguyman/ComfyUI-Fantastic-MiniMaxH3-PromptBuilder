@@ -405,8 +405,13 @@ picture reference. That's the easy way to continue from a clip's ending: scrub
 to the frame you want (the very last frame is often the blurriest, so pick a
 good one a little earlier), capture it, and wire that picture to `first_frame`
 on **MiniMax H3 Image to Video** in I2VA mode. If a crop is active the still is
-cropped to match. Capture is refused, with a message, when the picture slots or
-the 12-file limit are already full.
+cropped to match.
+
+If all 12 references are already in use, the frame is still captured — it just
+arrives **switched off**, with a message saying so. Free a slot (a video's
+soundtrack counts as one, so setting it to `off` is often the easiest) and
+switch the picture on with ◉. Capture is only refused outright when all nine
+picture slots are taken, since there'd be nowhere to put it.
 
 **🎵 Use audio** does the same for sound: it writes the kept range out as its
 own WAV in ComfyUI's input folder and adds it as a standalone audio reference.
@@ -426,8 +431,24 @@ minimum.
 other reference — tagged, taggable, and saved with presets.*
 
 **Pictures get the same treatment.** The ▣ button on a picture tile opens the
-editor with just the crop and mirror tools — no timeline, since there's nothing
-to trim. Back on the tile, the kept region is outlined and everything outside
+editor with the rotate, crop and mirror tools — no timeline, since there's nothing
+to trim. The **size** dropdown caps the long edge of what's actually sent. A 4K photo is
+decoded and rescaled on *every* generation, which costs real time and memory —
+and the native H3 node downsizes references to your generation's pixel area
+anyway, so the detail is discarded regardless. Capping a 4K reference at
+1280 px cuts its decoded tensor from about 100 MB to 11 MB. The reported size
+updates live, and it never upscales: a picture already under the cap is left
+alone.
+
+One exception worth respecting: a picture used as `first_frame` or `last_frame`
+should stay **at least as large as your generation**, or the model will be
+upscaling it back and you'll see the softness.
+
+**↻ Rotate** turns the picture 90° clockwise per click (shift-click goes
+anticlockwise), for phone photos that came in sideways. The crop rect turns
+with the picture, so a region you framed stays on the same part of the image,
+and the reported size swaps to match. Back on the tile, the kept region is
+outlined and everything outside
 it is dimmed, so you can see what was dropped as well as what's left, and the
 corner badge switches to the **cropped** pixel size and ratio. Mirrored
 pictures show flipped. Crop a subject out of a wider shot, or flip a reference, without

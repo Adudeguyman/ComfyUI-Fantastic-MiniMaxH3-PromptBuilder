@@ -404,7 +404,9 @@ class MiniMaxH3MediaLoader:
             return num(t.get("start")), num(t.get("end"))
 
         pic_t = [media_io.load_image(i["file"], crop=i.get("crop"),
-                                     mirror=bool(i.get("mirror")))
+                                     mirror=bool(i.get("mirror")),
+                                     rotate=i.get("rotate") or 0,
+                                     resize=i.get("resize") or 0)
                  for i in pictures[:PICTURES]]
         vid_t = [media_io.load_video_frames(i["file"], start=_trim(i)[0],
                  end=_trim(i)[1], crop=i.get("crop"),
