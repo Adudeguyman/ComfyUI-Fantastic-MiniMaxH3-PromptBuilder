@@ -15,6 +15,21 @@ const NODE_NAME = "MiniMaxH3PromptBuilder";
 /* ------------------------------------------------------------------ */
 
 // What each mode actually sends once saved — mirrors MODE_LIMITS in nodes.py.
+// Reference tags the editor knows how to chip: <Picture 1>, <Video 2>,
+// <Audio 3>, <Subject 1>.
+const TAG_RE = /<(?:Picture|Video|Audio|Subject) \d+>/g;
+
+/* One pass over a field paints three things: dialogue blocks, reference tags
+   and speaker IDs. Dialogue is matched first so tags inside a spoken line
+   aren't chipped out of it. */
+const PAINT_RE = new RegExp([
+  "<d>[\\s\\S]*?<\\/d>",                      // a spoken line
+  "<(?:Picture|Video|Audio|Subject) \\d+>",     // a reference tag
+  "\\(S\\d+(?:\\s*,\\s*S\\d+)*\\)",           // (S1) or (S1,S2)
+].join("|"), "g");
+
+const LANG_RE = /^(\s*\[[^\]\n]+\])/;
+
 const MODE_SENDS = {
   T2VA: "Sends: prompt only \u2014 no reference media leaves the node in this mode.",
   I2VA: "Sends: prompt + picture 1 (first frame). All other media is withheld.",
@@ -828,6 +843,8 @@ const CSS = `
   cursor:pointer;font-size:12px;}
 .mmh3-modes button.on{background:#2f3947;color:#fff;}
 .mmh3-x{background:none;border:0;color:#8a93a3;font-size:18px;cursor:pointer;padding:2px 8px;}
+/* Close always sits at the far right, as every other window does. */
+.mmh3-head .mmh3-x{margin-left:auto;}
 .mmh3-x:hover{color:#fff;}
 .mmh3-body{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 0 440px;min-height:0;
   transition:grid-template-columns .16s ease;}
@@ -879,7 +896,9 @@ const CSS = `
   text-overflow:ellipsis;white-space:nowrap;}
 .mmh3-peekbtns{display:flex;gap:5px;}
 .mmh3-peekbtns .mmh3-btn{flex:1;padding:3px 6px;font-size:10px;}
-.mmh3-form{overflow-y:auto;padding:14px 16px 24px;min-width:0;}
+/* No top padding: the sticky media bar owns that space, so it can pin flush
+   to the top of the scroll area with nothing able to scroll past it. */
+.mmh3-form{overflow-y:auto;padding:0 16px 24px;min-width:0;}
 .mmh3-side{border-left:1px solid #2a2f3a;display:flex;flex-direction:column;min-height:0;background:#15181e;}
 .mmh3-sec{margin-bottom:16px;}
 .mmh3-rowpow{cursor:pointer;font-size:11px;color:#3f4855;user-select:none;
@@ -911,8 +930,17 @@ const CSS = `
 .mmh3-clearnote{font-size:11px;color:#a08878;}
 .mmh3-clearbar .mmh3-btn{margin-left:auto;}
 .mmh3-clearbar .mmh3-btn + .mmh3-btn{margin-left:0;}
-.mmh3-chipbar{position:sticky;top:0;z-index:5;background:#191c22;padding:8px 0 10px;
-  border-bottom:1px solid #242a34;margin-bottom:14px;}
+/* Full-bleed: negative side margins cancel the form's padding, so the bar's
+   background covers the gutters too. Text used to scroll visibly through
+   them and through the strip above the bar. */
+.mmh3-dialogrow{margin-top:6px;}
+.mmh3-toollabel{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+  color:#7d8698;align-self:center;}
+.mmh3-toolsep{width:1px;height:18px;background:#2e3440;align-self:center;}
+.mmh3-btn.ghost{opacity:.7;border-style:dashed;}
+.mmh3-chipbar{position:sticky;top:0;z-index:5;background:#191c22;
+  padding:12px 16px 10px;margin:0 -16px 14px;
+  border-bottom:1px solid #242a34;}
 .mmh3-chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:3px;align-items:flex-start;}
 .mmh3-chips::-webkit-scrollbar{height:6px;}
 .mmh3-chips::-webkit-scrollbar-thumb{background:#2e3440;border-radius:3px;}
@@ -996,6 +1024,9 @@ const CSS = `
 .mmh3-saveform{background:#1d222b;border:1px solid #3a4252;border-radius:8px;
   padding:8px;margin-bottom:8px;}
 .mmh3-saverow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+.mmh3-savecat{background:#12151b;color:#d7dbe2;border:1px solid #2e3440;
+  border-radius:7px;padding:6px 8px;font-size:12px;max-width:190px;}
+.mmh3-savecat:focus{outline:none;border-color:#4a5568;}
 .mmh3-saverow input[type=text]{flex:1;min-width:130px;background:#12151b;
   color:#dde2ea;border:1px solid #2e3440;border-radius:6px;padding:5px 9px;
   font-size:12px;}
@@ -1033,6 +1064,78 @@ const CSS = `
 .mmh3-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:10001;
   background:#2b3140;color:#fff;border:1px solid #4a5568;border-radius:8px;
   padding:8px 16px;font-size:13px;}
+
+/* Reference chips. The mirror div sits under a textarea whose own text is
+   transparent, so the browser keeps selection/undo/IME while the tags get
+   styled. Every metric below is copied from .mmh3-form textarea — any
+   difference and the chips drift off the words as lines wrap. This block is
+   last, and uses .mmh3-chiptext, so it wins over the generic form rules. */
+.mmh3-chipwrap{position:relative;display:block;}
+/* Those two sections put the field in a flex row beside an N/A button; the
+   wrapper has to claim the space the bare textarea used to. */
+.mmh3-row .mmh3-chipwrap{flex:1;min-width:0;}
+.mmh3-chipmirror,
+.mmh3-chipwrap textarea.mmh3-chiptext{
+  width:100%;box-sizing:border-box;border:1px solid #2e3440;border-radius:6px;
+  padding:7px 9px;font-size:13px;font-family:inherit;line-height:1.7;
+  letter-spacing:normal;white-space:pre-wrap;overflow-wrap:break-word;
+  word-break:normal;tab-size:4;}
+.mmh3-chipmirror{position:absolute;inset:0;overflow:hidden;pointer-events:none;
+  color:#dde2ea;background:#12151b;border-color:transparent;}
+.mmh3-chipwrap textarea.mmh3-chiptext{position:relative;display:block;
+  background:transparent;color:transparent;caret-color:#dde2ea;
+  resize:vertical;}
+.mmh3-chipwrap textarea.mmh3-chiptext:focus{outline:none;border-color:#4a5568;}
+.mmh3-chipwrap textarea.mmh3-chiptext::selection{
+  background:rgba(96,140,210,.45);color:#fff;}
+.mmh3-chipwrap textarea.mmh3-chiptext::placeholder{color:#5c6472;}
+/* Layout-neutral by construction. The mirror only lines up with the textarea
+   if a chip advances the text exactly as its bare glyphs would, so there is
+   no padding, no margin and no border here — the breathing room is an OUTER
+   box-shadow spread, which paints beyond the box without occupying space.
+   Anything that changes the advance shifts wrap points, and the error
+   compounds line after line. */
+.mmh3-reftag{border-radius:3px;background:rgba(224,169,76,.18);color:#e0a94c;
+  box-shadow:0 0 0 2px rgba(224,169,76,.18), inset 0 0 0 1px rgba(224,169,76,.45);
+  -webkit-box-decoration-break:clone;box-decoration-break:clone;}
+.mmh3-reftag.vid{background:rgba(76,195,224,.18);color:#4cc3e0;
+  box-shadow:0 0 0 2px rgba(76,195,224,.18), inset 0 0 0 1px rgba(76,195,224,.45);}
+.mmh3-reftag.aud{background:rgba(180,140,232,.18);color:#b48ce8;
+  box-shadow:0 0 0 2px rgba(180,140,232,.18), inset 0 0 0 1px rgba(180,140,232,.45);}
+.mmh3-reftag.subj{background:rgba(111,191,115,.18);color:#6fbf73;
+  box-shadow:0 0 0 2px rgba(111,191,115,.18), inset 0 0 0 1px rgba(111,191,115,.45);}
+.mmh3-reftag.unknown{background:rgba(240,112,112,.16);color:#f07070;
+  box-shadow:0 0 0 2px rgba(240,112,112,.16), inset 0 0 0 1px rgba(240,112,112,.5);}
+.mmh3-reftag.spk{background:rgba(126,167,216,.16);color:#7ea7d8;
+  box-shadow:0 0 0 2px rgba(126,167,216,.16), inset 0 0 0 1px rgba(126,167,216,.4);}
+/* Spoken lines. The band shows how much of a paragraph is actually speech;
+   the markers dim because they're syntax, not words the model will say.
+   box-decoration-break keeps the band intact when a line wraps. */
+.mmh3-dblock{background:rgba(126,167,216,.10);border-radius:3px;
+  box-shadow:0 0 0 2px rgba(126,167,216,.10),
+             inset 0 0 0 1px rgba(126,167,216,.28);
+  -webkit-box-decoration-break:clone;box-decoration-break:clone;}
+.mmh3-dmark{color:#5f7899;}
+.mmh3-dlang{color:#9dc0e4;background:rgba(126,167,216,.16);border-radius:3px;
+  box-shadow:0 0 0 1px rgba(126,167,216,.16);}
+.mmh3-dtext{color:#e8eef6;}
+.mmh3-chippeek{position:fixed;z-index:10003;width:220px;background:#1e222a;
+  border:1px solid #3a4252;border-radius:9px;overflow:hidden;
+  box-shadow:0 16px 40px rgba(0,0,0,.55);pointer-events:none;}
+.mmh3-chippeekmedia{width:100%;max-height:150px;object-fit:contain;display:block;
+  background:#000;}
+.mmh3-chippeekcap{display:flex;align-items:center;gap:6px;padding:5px 8px;
+  font-size:9px;color:#6b7484;}
+.mmh3-chippeekcap span:last-child{overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;}
+.mmh3-chippeekcap.col{flex-direction:column;align-items:flex-start;gap:4px;}
+.mmh3-chippeekcap.col span:last-child{overflow:visible;white-space:normal;}
+.mmh3-chiprow{display:flex;align-items:baseline;gap:5px;flex-wrap:wrap;}
+.mmh3-chiplabel{font-size:9px;color:#6b7484;min-width:26px;}
+.mmh3-chipspk{font-size:9px;color:#7ea7d8;font-family:ui-monospace,monospace;}
+.mmh3-chiptags{display:flex;flex-wrap:wrap;gap:3px;}
+.mmh3-chiptags .mmh3-tagname{font-size:9px;}
+.mmh3-chipnone{color:#6b7484;font-style:italic;}
 `;
 
 let cssInjected = false;
@@ -1171,8 +1274,25 @@ class Library {
     const ed = this.editor;
     const name = el("input", { type: "text", placeholder: "Prompt name",
       value: ed.libraryName || `${ed.state.mode} prompt` });
-    const category = el("input", { type: "text", list: this.formId,
-      placeholder: "Category (optional)", value: ed.libraryCategory || "" });
+    // Existing categories as a list, so saving into one is a pick rather
+    // than retyping it exactly; "(new category…)" reveals a text field.
+    const known = [...this.categories];
+    const current = ed.libraryCategory || "";
+    if (current && !known.includes(current)) known.unshift(current);
+    const catNew = el("input", { type: "text", placeholder: "New category name",
+      style: { display: "none" } });
+    const category = el("select", { class: "mmh3-savecat",
+      onchange: () => {
+        const isNew = category.value === "\u0000new";
+        catNew.style.display = isNew ? "" : "none";
+        if (isNew) setTimeout(() => catNew.focus(), 0);
+      } },
+      el("option", { value: "" }, "No category"),
+      known.map((c) => el("option",
+        { value: c, selected: c === current }, c)),
+      el("option", { value: "\u0000new" }, "(new category\u2026)"));
+    const categoryValue = () =>
+      (category.value === "\u0000new" ? catNew.value : category.value).trim();
     const fav = el("input", { type: "checkbox" });
     const err = el("span", { class: "mmh3-saveerr" });
 
@@ -1183,7 +1303,7 @@ class Library {
         const res = await libApi("/save", {
           name: value,
           rename_from: ed.libraryId,
-          category: category.value.trim(),
+          category: categoryValue(),
           favorite: fav.checked,
           mode: ed.state.mode,
           refs: ed.slots.filter((s) => s.tag).length,
@@ -1192,21 +1312,19 @@ class Library {
         });
         ed.libraryId = res.id;
         ed.libraryName = res.name;
-        ed.libraryCategory = category.value.trim();
+        ed.libraryCategory = categoryValue();
         this.saveOpen = false;
         toast(`Saved "${res.name}"`);
         this.refresh();
       } catch (e2) { err.textContent = e2.message; }
     };
     name.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); });
-    category.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); });
+    catNew.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); });
     setTimeout(() => { name.focus(); name.select(); }, 0);
 
     return el("div", { class: "mmh3-saveform" },
       el("div", { class: "mmh3-saverow" },
-        name, category,
-        el("datalist", { id: this.formId },
-          this.categories.map((c) => el("option", { value: c }))),
+        name, category, catNew,
         el("label", { class: "mmh3-savefav" }, fav, "favourite"),
         el("button", { class: "mmh3-btn primary", onclick: commit }, "Save"),
         el("button", { class: "mmh3-btn",
@@ -1467,7 +1585,7 @@ class Editor {
       onmousedown: (e) => { if (e.target === this.overlay) this.close(); } },
       el("div", { class: "mmh3-modal" },
         el("div", { class: "mmh3-head" },
-          el("div", { class: "mmh3-title" }, "MiniMax H3 Prompt Builder",
+          el("div", { class: "mmh3-title" }, "Fantastic H3 Prompt Builder",
             el("small", {}, "guide-conformant output")),
           guideBtn,
           el("button", { class: "mmh3-btn",
@@ -1567,11 +1685,206 @@ class Editor {
   /* ---------- shared UI pieces ---------- */
 
   ta(obj, key, rows, placeholder) {
-    return el("textarea", {
+    const box = el("textarea", {
       rows, placeholder,
       value: obj[key] ?? "",
       oninput: (e) => { obj[key] = e.target.value; },
     });
+    return this.chipField(box);
+  }
+
+  /* --- reference tags as chips ------------------------------------- */
+
+  /** Wrap a textarea so <Picture 1> and friends read as chips.
+   *
+   *  A textarea can't contain elements, so a mirror div renders the same
+   *  text underneath with the tags wrapped in spans. The textarea keeps its
+   *  own text transparent, which leaves selection, undo, IME and paste
+   *  exactly as the browser implements them — a contenteditable rewrite
+   *  would put all of that on us. */
+  chipField(box) {
+    const mirror = el("div", { class: "mmh3-chipmirror", "aria-hidden": "true" });
+    const wrap = el("div", { class: "mmh3-chipwrap" }, mirror, box);
+    box.classList.add("mmh3-chiptext");
+
+    const paint = () => {
+      const text = box.value || "";
+      mirror.replaceChildren();
+      let last = 0;
+      PAINT_RE.lastIndex = 0;
+      let m;
+      while ((m = PAINT_RE.exec(text)) !== null) {
+        if (m.index > last)
+          mirror.append(document.createTextNode(text.slice(last, m.index)));
+        mirror.append(...this.paintToken(m[0]));
+        last = m.index + m[0].length;
+      }
+      // The trailing newline keeps the mirror's last line height in step with
+      // the textarea's when the text ends mid-line.
+      mirror.append(document.createTextNode(text.slice(last) + "\n"));
+      mirror.scrollTop = box.scrollTop;
+      mirror.scrollLeft = box.scrollLeft;
+    };
+
+    box.addEventListener("input", paint);
+    box.addEventListener("scroll", () => {
+      mirror.scrollTop = box.scrollTop;
+      mirror.scrollLeft = box.scrollLeft;
+    });
+    // Hover a chip for its thumbnail. The mirror can't take pointer events
+    // (it sits under the textarea), so hit-test the chip boxes directly.
+    box.addEventListener("mousemove", (e) => this.chipHover(e, mirror));
+    box.addEventListener("mouseleave", () => this.chipLeave());
+
+    this._chipFields = this._chipFields || [];
+    this._chipFields.push(paint);
+    paint();
+    return wrap;
+  }
+
+  /** Render one matched token as the spans the mirror shows. */
+  paintToken(tok) {
+    if (tok.startsWith("<d>")) {
+      const inner = tok.slice(3, -4);
+      const kids = [el("span", { class: "mmh3-dmark" }, "<d>")];
+      const lang = inner.match(LANG_RE);
+      const body = lang ? inner.slice(lang[0].length) : inner;
+      if (lang) kids.push(el("span", { class: "mmh3-dlang" }, lang[1]));
+      kids.push(el("span", { class: "mmh3-dtext" }, body));
+      kids.push(el("span", { class: "mmh3-dmark" }, "</d>"));
+      return [el("span", { class: "mmh3-dblock" }, ...kids)];
+    }
+    if (tok.startsWith("(")) {
+      return [el("span", { class: "mmh3-reftag spk", dataset: { tag: tok } }, tok)];
+    }
+    let cls;
+    if (tok.startsWith("<Subject")) {
+      cls = this.subjectInfo(tok) ? "subj" : "unknown";
+    } else {
+      const slot = this.slotFor(tok);
+      cls = slot ? (slot.cls || "pic") : "unknown";
+    }
+    return [el("span", { class: "mmh3-reftag " + cls, dataset: { tag: tok } }, tok)];
+  }
+
+  /** What a <Subject N> chip should show: the first picture its definition
+   *  cites, plus every media tag that line mentions. */
+  subjectInfo(tag) {
+    const defs = this.state?.ref?.subjectDefs || [];
+    const line = defs.find((d) => !d.off &&
+      (d.text || "").trim().startsWith(tag));
+    if (!line) return null;
+    const tags = [...new Set((line.text.match(TAG_RE) || [])
+      .filter((t) => t !== tag))];
+
+    // A voice reference is usually declared the other way round — the audio's
+    // own line names the subject ("<Audio 1> is the voice-timbre reference
+    // for <Subject 1> (S1)") — so the attachment has to be read from every
+    // other definition that mentions this subject, not just its own.
+    const voices = [], speakers = [];
+    for (const d of defs) {
+      if (d === line || d.off) continue;
+      const text = d.text || "";
+      if (!text.includes(tag)) continue;
+      for (const t of text.match(TAG_RE) || [])
+        if (t.startsWith("<Audio") && !tags.includes(t) && !voices.includes(t))
+          voices.push(t);
+      for (const m of text.matchAll(/\((S\d+(?:\s*,\s*S\d+)*)\)/g))
+        if (!speakers.includes(m[0])) speakers.push(m[0]);
+    }
+    for (const m of (line.text || "").matchAll(/\((S\d+(?:\s*,\s*S\d+)*)\)/g))
+      if (!speakers.includes(m[0])) speakers.push(m[0]);
+
+    const slot = tags.map((t) => this.slotFor(t))
+      .find((sl) => sl && sl.preview?.url && sl.preview.type === "img")
+      || tags.map((t) => this.slotFor(t)).find((sl) => sl && sl.preview?.url);
+    return { slot, tags, voices, speakers, line };
+  }
+
+  slotFor(tag) {
+    if (!this._slotMap || this._slotMapAt !== this.slots)
+      this._slotMap = new Map((this.slots || []).map((s) => [s.tag, s]));
+    this._slotMapAt = this.slots;
+    return this._slotMap.get(tag);
+  }
+
+  chipHover(e, mirror) {
+    let hit = null;
+    for (const chip of mirror.querySelectorAll(".mmh3-reftag")) {
+      const r = chip.getBoundingClientRect();
+      if (e.clientX >= r.left && e.clientX <= r.right &&
+          e.clientY >= r.top && e.clientY <= r.bottom) { hit = chip; break; }
+    }
+    if (!hit) { this.chipLeave(); return; }
+    if (this._chipOpenFor === hit.dataset.tag) return;
+    this.chipLeave();
+    const tag = hit.dataset.tag;
+    let slot = null, subject = null;
+    if (tag.startsWith("<Subject")) {
+      subject = this.subjectInfo(tag);
+      if (!subject) return;                  // undefined subject: nothing to show
+      slot = subject.slot;
+    } else {
+      slot = this.slotFor(tag);
+      if (!slot || !slot.preview?.url) return;
+    }
+    this._chipOpenFor = tag;
+    this._chipTimer = setTimeout(
+      () => this.openChipPeek(hit, slot, tag, subject), 180);
+  }
+
+  chipLeave() {
+    clearTimeout(this._chipTimer);
+    this._chipOpenFor = null;
+    if (this._chipPeek) { this._chipPeek.remove(); this._chipPeek = null; }
+  }
+
+  /** Small thumbnail beside the chip. Deliberately not interactive: it must
+   *  never steal the pointer while you're typing. */
+  openChipPeek(chip, slot, tag, subject) {
+    const media = !slot ? null
+      : slot.preview.type === "video"
+      ? el("video", { src: slot.preview.url, muted: true, loop: true,
+          autoplay: true, class: "mmh3-chippeekmedia" })
+      : slot.preview.type === "audio"
+        ? this.mediaThumb(slot, true)
+        : el("img", { src: slot.preview.url, class: "mmh3-chippeekmedia" });
+    const tagRow = (label, list) => list.length
+      ? el("span", { class: "mmh3-chiprow" },
+          el("span", { class: "mmh3-chiplabel" }, label),
+          el("span", { class: "mmh3-chiptags" },
+            list.map((t) => {
+              const sl = this.slotFor(t);
+              return el("span", {
+                class: `mmh3-tagname ${sl ? (sl.cls || "pic") : "unknown"}`,
+              }, t);
+            })))
+      : null;
+    const caption = subject
+      ? el("div", { class: "mmh3-chippeekcap col" },
+          el("span", { class: "mmh3-chiprow" },
+            el("span", { class: "mmh3-tagname subj" }, tag),
+            subject.speakers.length
+              ? el("span", { class: "mmh3-chipspk" }, subject.speakers.join(" "))
+              : null),
+          tagRow("cites", subject.tags),
+          tagRow("voice", subject.voices),
+          (!subject.tags.length && !subject.voices.length)
+            ? el("span", { class: "mmh3-chipnone" }, "no media attached")
+            : null)
+      : el("div", { class: "mmh3-chippeekcap" },
+          el("span", { class: `mmh3-tagname ${slot.cls}` }, slot.tag),
+          el("span", {}, slot.source || ""));
+    const box = el("div", { class: "mmh3-chippeek" }, media, caption);
+    const r = chip.getBoundingClientRect();
+    box.style.left = `${Math.min(r.left, window.innerWidth - 240)}px`;
+    box.style.top = `${r.bottom + 6}px`;
+    document.body.append(box);
+    // Flip above the chip when there's no room below.
+    const bb = box.getBoundingClientRect();
+    if (bb.bottom > window.innerHeight - 8)
+      box.style.top = `${Math.max(8, r.top - bb.height - 6)}px`;
+    this._chipPeek = box;
   }
 
   /* Waveforms make audio identifiable at a glance; a generic mic icon does not.
@@ -1679,9 +1992,7 @@ class Editor {
           el("div", { class: "mmh3-peekbtns" },
             el("button", { class: "mmh3-btn", onclick: () => {
               this.insert(s.tag); this.closePeek(); } }, "Insert tag"),
-            el("button", { class: "mmh3-btn", onclick: () => {
-              this.togglePin(s.tag); this.closePeek(); } },
-              this.pins.includes(s.tag) ? "Unpin" : "Pin"))));
+            )));
 
       const r = card.getBoundingClientRect();
       box.style.left = `${Math.min(r.left, window.innerWidth - 250)}px`;
@@ -1738,6 +2049,11 @@ class Editor {
 
   drawPins() {
     if (!this.pinsEl) return;
+    // Chips in the text carry the previews now, so the rail never opens —
+    // it used to widen the body and shove every field sideways.
+    this.pinsEl.replaceChildren();
+    this.pinsEl.parentElement?.classList.remove("haspins");
+    if (true) return;
     const shown = [];
     if (this.autoPin && !this.pins.includes(this.autoPin)) shown.push(this.autoPin);
     shown.push(...this.pins);
@@ -1890,14 +2206,79 @@ class Editor {
       extraChips.length
         ? el("div", { class: "mmh3-subjrow" }, extraChips) : null,
       el("div", { class: "mmh3-tools" },
-        timeIn, shotBtn, camMove, camAmp, camSpd, camBtn,
-        spk, lang, diaBtn, voBtn,
-        el("button", { class: "mmh3-btn", title: "Dialogue crossing a cut",
-          onclick: () => this.insert("<scenetrans>") }, "+ scenetrans"),
-        el("button", { class: "mmh3-btn", title: "Speech truncated by video end",
-          onclick: () => this.insert("<cutoff>") }, "+ cutoff"),
-        styleSel,
-      ));
+        timeIn, shotBtn, camMove, camAmp, camSpd, camBtn, styleSel),
+      this.dialogueRow(lang));
+  }
+
+  /** Speaker IDs already used in the prompt, in numeric order. */
+  usedSpeakers() {
+    const text = JSON.stringify(this.state || {});
+    const found = new Set();
+    for (const m of text.matchAll(/\((S\d+(?:\s*,\s*S\d+)*)\)/g)) {
+      for (const id of m[1].split(",")) found.add(id.trim());
+    }
+    return [...found].sort((a, b) => (+a.slice(1)) - (+b.slice(1)));
+  }
+
+  /** Dialogue controls: language, one button per speaker already in use plus
+   *  the next unused ID, a voiceover toggle, and the two continuity markers.
+   *  Speaker IDs follow the target video's speaking order, so offering a
+   *  fixed S1-S4 would invent numbers the prompt has no use for. */
+  dialogueRow(lang) {
+    const used = this.usedSpeakers();
+    const next = `S${used.length ? Math.max(...used.map((s) => +s.slice(1))) + 1 : 1}`;
+
+    const vo = el("button", {
+      class: "mmh3-btn" + (this.voiceover ? " primary" : ""),
+      title: "Off-screen voiceover. While on, inserted lines use the guide's " +
+             "exact phrasing and append the lips-closed clause, which is " +
+             "required on every voiceover line.",
+      onclick: () => { this.voiceover = !this.voiceover; this.render(); },
+    }, "\u{1F399} voiceover");
+
+    const line = (id) => {
+      const said = this.voiceover
+        ? `(${id}) says in an off-screen voiceover: `
+        : `(${id}) says: `;
+      const tail = this.voiceover
+        ? " while their lips remain completely closed."
+        : "";
+      // insert() parks the caret before </d> and starts a new line for us.
+      return `${said}<d>[${lang.value}] </d>${tail}`;
+    };
+
+    const spkBtn = (id, isNew) => el("button", {
+      class: "mmh3-btn" + (isNew ? " ghost" : ""),
+      title: isNew
+        ? `Add ${id} \u2014 the next speaker in the video's speaking order`
+        : `Insert a line for ${id}`,
+      onclick: () => this.insert(line(id), { newline: true }),
+    }, isNew ? `+ (${id})` : `(${id})`);
+
+    const pair = used.length >= 2
+      ? el("button", { class: "mmh3-btn",
+          title: "Two speakers vocalising together",
+          onclick: () => this.insert(line(`${used[0]},${used[1]}`),
+            { newline: true }) },
+          `(${used[0]},${used[1]})`)
+      : null;
+
+    return el("div", { class: "mmh3-tools mmh3-dialogrow" },
+      el("span", { class: "mmh3-toollabel" }, "Dialogue:"),
+      lang,
+      ...used.map((id) => spkBtn(id, false)),
+      spkBtn(next, true),
+      pair,
+      vo,
+      el("span", { class: "mmh3-toolsep" }),
+      el("button", { class: "mmh3-btn",
+        title: "A line crossing a cut. Use it twice \u2014 once at the end of " +
+               "the pre-cut half, once at the start of the post-cut half \u2014 " +
+               "and say the audio continues.",
+        onclick: () => this.insert("<scenetrans>") }, "\u2933 scenetrans"),
+      el("button", { class: "mmh3-btn",
+        title: "Speech truncated by the end of the video",
+        onclick: () => this.insert("<cutoff>") }, "\u2301 cutoff"));
   }
 
   durationRow() {
@@ -1924,8 +2305,15 @@ class Editor {
   naButton(obj, key) {
     return el("button", { class: "mmh3-btn", style: { alignSelf: "flex-start" },
       onclick: (e) => {
-        obj[key] = "N/A";
-        e.target.closest(".mmh3-sec").querySelector("textarea").value = "N/A";
+        const box = e.target.closest(".mmh3-sec").querySelector("textarea");
+        if (box) {
+          box.value = "N/A";
+          // Let the field's own handlers run: they update the state and
+          // repaint the chip mirror. Assigning .value fires nothing.
+          box.dispatchEvent(new Event("input", { bubbles: true }));
+        } else {
+          obj[key] = "N/A";
+        }
         this.updatePreview();
       } }, "N/A");
   }
@@ -1937,6 +2325,8 @@ class Editor {
     const scroll = this.formEl.scrollTop;
     [...this.modeBar.children].forEach((b, i) =>
       b.classList.toggle("on", MODES[i].id === this.state.mode));
+    this._slotMap = null;                 // slots may have changed
+    (this._chipFields || []).forEach((paint) => { try { paint(); } catch (e) {} });
     this.modeSends.textContent = MODE_SENDS[this.state.mode] || "";
     this.modeSends.classList.toggle("gated", this.state.mode !== "REF");
     this.formEl.replaceChildren();

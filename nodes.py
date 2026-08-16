@@ -411,7 +411,7 @@ class MiniMaxH3MediaLoader:
         vid_t = [media_io.load_video_frames(i["file"], start=_trim(i)[0],
                  end=_trim(i)[1], crop=i.get("crop"),
                  mirror=bool(i.get("mirror")),
-                 detail=i.get("detail") or "high")
+                 resize=i.get("resize"))
                  for i in videos[:VIDEOS]]
         vaud_t = [
             media_io.extract_audio(i["file"], start=_trim(i)[0], end=_trim(i)[1]) if i else None
@@ -642,8 +642,8 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MiniMaxH3PromptBuilder": "MiniMax H3 Prompt Builder",
-    "MiniMaxH3MediaLoader": "MiniMax H3 Media Loader",
-    "MiniMaxH3ReferenceSplitter": "MiniMax H3 Reference Splitter",
-    "MiniMaxH3FilenamePrefix": "MiniMax H3 Filename Prefix",
+    "MiniMaxH3PromptBuilder": "Fantastic H3 Prompt Builder",
+    "MiniMaxH3MediaLoader": "Fantastic H3 Media Loader",
+    "MiniMaxH3ReferenceSplitter": "Fantastic H3 Reference Splitter",
+    "MiniMaxH3FilenamePrefix": "Fantastic H3 Filename Prefix",
 }

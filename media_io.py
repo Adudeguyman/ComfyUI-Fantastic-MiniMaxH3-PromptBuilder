@@ -370,7 +370,7 @@ def _apply_crop(frames, crop):
 
 
 def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None,
-                      crop=None, mirror=False, detail="high"):
+                      crop=None, mirror=False, resize=None):
     """Decode to an IMAGE batch [N, H, W, 3] resampled to `fps`.
 
     `start`/`end` (seconds) trim the source before sampling; only the trimmed
@@ -378,7 +378,10 @@ def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None,
     {x, y, w, h} rect applied after decode.
     """
     path = resolve(annotated)
-    cap = DETAIL_CAPS.get(str(detail or "high"), DETAIL_CAPS["high"])
+    try:
+        cap = max(0, int(resize or 0))       # 0 / unset = decode as-is
+    except (TypeError, ValueError):
+        cap = 0
     if _have_av():
         try:
             return _apply_crop(
@@ -401,7 +404,9 @@ def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None,
 # Long-edge caps for reference video. The native H3 node rescales every
 # reference to the generation's pixel area anyway, so decoding above this
 # spends RAM on detail the model never sees.
-DETAIL_CAPS = {"full": 0, "high": 1280, "standard": 960, "low": 640}
+# No default cap: a clip is decoded at its own resolution unless its size is
+# set in the trim editor. Nothing here resizes media the user didn't ask to
+# have resized.
 
 
 def _scaled_size(w, h, cap):

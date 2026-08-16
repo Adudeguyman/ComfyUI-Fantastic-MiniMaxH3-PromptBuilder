@@ -1,4 +1,4 @@
-# ComfyUI Fantastic MiniMax H3 Prompt Builder
+# ComfyUI Fantastic H3 Prompt Builder
 
 Guided prompt writing and reference-media handling for the open-weight
 **MiniMax H3** video model in ComfyUI.
@@ -64,10 +64,10 @@ Three nodes, all under **conditioning → video_models**:
 
 | Node | What it's for |
 |---|---|
-| **MiniMax H3 Prompt Builder** | The main one. An editor with fillable fields for every prompt mode, checks your work as you type, and outputs the finished prompt. |
-| **MiniMax H3 Media Loader** | Drag-and-drop your reference images, videos, and audio. Shows exactly which tag each one will get. |
-| **MiniMax H3 Reference Splitter** | Optional. Fans media out into individual slots when you want it to skip the Prompt Builder. |
-| **MiniMax H3 Filename Prefix** | Optional. Builds a save prefix with the date already filled in, for dated output folders. |
+| **Fantastic H3 Prompt Builder** | The main one. An editor with fillable fields for every prompt mode, checks your work as you type, and outputs the finished prompt. |
+| **Fantastic H3 Media Loader** | Drag-and-drop your reference images, videos, and audio. Shows exactly which tag each one will get. |
+| **Fantastic H3 Reference Splitter** | Optional. Fans media out into individual slots when you want it to skip the Prompt Builder. |
+| **Fantastic H3 Filename Prefix** | Optional. Builds a save prefix with the date already filled in, for dated output folders. |
 
 Highlights:
 
@@ -79,6 +79,19 @@ Highlights:
   you connected but never mentioned — flagged while you write, not after a
   failed render.
 - **The official guide is built in.** A 📖 button opens the full PDF.
+- **Reference tags read as chips** in the text, colour-coded by kind, with the
+  thumbnail on hover — no side panel opening and shifting the layout. Hovering
+  a `<Subject N>` shows the first picture its definition cites, the media it
+  references, its speaker ID, and any `<Audio N>` attached to it — including
+  voice references declared the other way round, in the audio's own line. Tags
+  with nothing behind them show red as you type.
+- **A dialogue row** with a language picker and one button per speaker already
+  in the prompt, plus the next unused ID — and a voiceover toggle that writes
+  the guide's exact phrasing including the lips-closed clause.
+- **Spoken lines are shaded** — `<d>…</d>` blocks get a blue band matching the
+  speaker chips, with the markers dimmed and the language tag picked out, so you can see at a glance
+  what the model will actually say and catch delivery notes that drifted
+  inside the tags. Speaker IDs like `(S1)` are chipped too.
 - **Drag-and-drop media** with previews, playback, and reorderable slots.
 - **Non-destructive trim and crop** — a popout editor sends just a slice of a
   clip (like its last 3 seconds), or just a region of the frame, without
@@ -88,6 +101,9 @@ Highlights:
 - **Media presets** so you can reload a set of references in one click.
 - **Unload media** clears the node in one go (after a confirmation) without
   deleting the underlying files, so presets pointing at them still work.
+- **Node size presets** — a `size` button steps the whole node through L, XL
+  (+25%) and XXL (+40%) when you want more room for the media grid, and
+  **Open loader…** puts the same panel in a full-size window.
 - **Detail control for reference video** — decode big clips at a smaller size
   so a long 4K reference doesn't eat gigabytes of RAM.
 
@@ -117,7 +133,7 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/Adudeguyman/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder
 ```
 
-**Via ComfyUI Manager** — search for "Fantastic MiniMax H3 Prompt Builder" and install.
+**Via ComfyUI Manager** — search for "Fantastic H3 Prompt Builder" and install.
 
 **Manually** — download the ZIP and extract into `ComfyUI/custom_nodes/` so you
 end up with `ComfyUI/custom_nodes/ComfyUI-Fantastic-MiniMaxH3-PromptBuilder/`.
@@ -134,7 +150,7 @@ above should be listed.
 
 This is the same for every mode:
 
-1. Add a **MiniMax H3 Prompt Builder**.
+1. Add a **Fantastic H3 Prompt Builder**.
 2. Click **Edit prompt…**, pick your mode along the top, and fill in the fields.
    The finished prompt builds live in the right-hand panel.
 3. Click **Save to node**.
@@ -292,30 +308,34 @@ treated as part of the video or as a separate audio reference. The **?** button
 by the videos heading explains the choice, and there's a
 [summary in the FAQ](#what-do-off--paired--alone-do).
 
-### Video detail and memory
+### Video size and memory
 
 Reference video is decoded to raw float frames, so memory is
 `width x height x 3 x 4 bytes x frames` — a 15-second 1080p clip is about 9 GB,
 and three of those will hurt.
 
-The **detail** picker in the Media Loader's top row caps the long edge while
-decoding, so full-size frames are never built:
+**Nothing is resized unless you ask.** A clip is decoded at its own resolution
+until you set a **size** in its ✂ editor, which caps the long edge while
+decoding so full-size frames are never built:
 
-| Setting | Long edge | 15s of 1080p |
-|---|---|---|
-| full | source size | ~9.0 GB |
-| high *(default)* | 1280 px | ~4.0 GB |
-| standard | 960 px | ~2.2 GB |
-| low | 640 px | ~1.0 GB |
+| Cap on a 15s 1080p clip | Memory |
+|---|---|
+| full *(default)* | ~9.0 GB |
+| 1280 px | ~4.0 GB |
+| 1024 px | ~2.5 GB |
+| 832 px | ~1.7 GB |
 
-Lower settings cost less than you'd think, because the native H3 node rescales
+It costs less quality than you'd expect, because the native H3 node rescales
 every reference to your generation's pixel area regardless — feeding it 1080p
 while generating at 832x480 spends the memory and then throws the detail away.
 Clips already smaller than the cap are left alone.
 
-The setting applies to every video in the node and is remembered for new ones;
-individual clips keep their own value if you set one. Trimming helps too, and
-multiplies with this: detail and duration are independent factors.
+Two cases where you should leave it at full: a video used as a **motion-context
+continuation source**, and any clip whose framing you're matching closely —
+both want to be at least as large as your generation.
+
+Trimming helps too, and multiplies with this: size and duration are
+independent factors.
 
 ### Picture roles
 
@@ -432,7 +452,11 @@ other reference — tagged, taggable, and saved with presets.*
 
 **Pictures get the same treatment.** The ▣ button on a picture tile opens the
 editor with the rotate, crop and mirror tools — no timeline, since there's nothing
-to trim. The **size** dropdown caps the long edge of what's actually sent. A 4K photo is
+to trim. The **size** dropdown caps the long edge of what's actually sent. Videos have
+the same control in their ✂ editor, where it matters more — a cap saves that
+memory on *every frame*, so a 15-second clip capped at 1280 px costs a fraction
+of the same clip at 4K. Both default to full — media is only resized when you
+set a size. A 4K photo is
 decoded and rescaled on *every* generation, which costs real time and memory —
 and the native H3 node downsizes references to your generation's pixel area
 anyway, so the detail is discarded regardless. Capping a 4K reference at
@@ -726,7 +750,7 @@ save node. Route it through a string node, a switch, or anything else and the
 token arrives verbatim — you get a folder literally named `%date:yyyy-MM-dd%`.
 That's a known issue in VideoHelperSuite among others.
 
-**MiniMax H3 Filename Prefix** builds the prefix from parts and resolves the
+**Fantastic H3 Filename Prefix** builds the prefix from parts and resolves the
 date itself, so what reaches the save node is a plain string that survives any
 amount of wiring:
 

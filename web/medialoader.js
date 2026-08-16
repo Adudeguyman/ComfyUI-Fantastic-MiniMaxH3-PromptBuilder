@@ -203,6 +203,59 @@ export function safeCanvasFocus(node) {
 export const PANEL_H = 476;
 export const NODE_W = 660;
 
+// Node size presets. L is the natural size; the others scale both axes so
+// the media grid gets proportionally roomier rather than just wider.
+export const SIZE_PRESETS = [
+  ["L", 1.0], ["XL", 1.25], ["XXL", 1.4],
+];
+
+/** Resize the node to a preset. Unlike applyCanvasSizing this sets an exact
+ *  size, so stepping back down to L actually shrinks the node. */
+export function applyNodeSize(node, factor) {
+  const w = Math.round(NODE_W * factor);
+  const h = Math.round(PANEL_H * factor);
+  try {
+    const widget = node._mmlWidget;
+    if (widget) {
+      widget.computedHeight = h;
+      widget.computeSize = () => [w, h];
+      // The DOM element carries the height on the classic canvas, where the
+      // node is drawn from the widget's box rather than from node.size.
+      const elx = widget.element || widget.inputEl;
+      if (elx && elx.style) {
+        elx.style.height = `${h}px`;
+        elx.style.minHeight = `${h}px`;
+      }
+    }
+    if (node._mmlPanel?.root?.style) {
+      node._mmlPanel.root.style.height = `${h}px`;
+    }
+
+    // Height still has to clear the built-in widgets above the panel.
+    const min = node.computeSize?.();
+    const target = [w, Math.max(min?.[1] || 0, h)];
+    // setSize is the supported route and fires the renderer's own hooks;
+    // assigning node.size alone only moves on Nodes 2.0.
+    if (typeof node.setSize === "function") node.setSize(target);
+    else { node.size[0] = target[0]; node.size[1] = target[1]; }
+    node.onResize?.(node.size);
+    node.setDirtyCanvas?.(true, true);
+    node.graph?.setDirtyCanvas?.(true, true);
+  } catch (e) {
+    /* Vue owns layout in Nodes 2.0; the panel's own CSS keeps it usable. */
+  }
+}
+
+/** Which preset the node is currently closest to. */
+export function currentPreset(node) {
+  const ratio = (node?.size?.[0] || NODE_W) / NODE_W;
+  let best = SIZE_PRESETS[0];
+  for (const p of SIZE_PRESETS) {
+    if (Math.abs(p[1] - ratio) < Math.abs(best[1] - ratio)) best = p;
+  }
+  return best[0];
+}
+
 const CSS = `
 .mml-panel{font-family:system-ui,sans-serif;color:#d7dbe2;font-size:12px;
   background:#191c22;border:1px solid #2a2f3a;border-radius:8px;padding:8px;
@@ -213,7 +266,7 @@ const CSS = `
 .mml-modal .mml-panel{border:0;height:100%;min-height:0;}
 .mml-overlay{position:fixed;inset:0;z-index:10040;background:rgba(8,10,14,.62);
   display:flex;align-items:center;justify-content:center;}
-.mml-modal{width:min(760px,94vw);height:min(520px,92vh);background:#191c22;
+.mml-modal{width:min(1140px,96vw);height:min(780px,92vh);background:#191c22;
   border:1px solid #303642;border-radius:10px;display:flex;flex-direction:column;
   overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.55);}
 .mml-modalhead{display:flex;align-items:center;gap:10px;padding:9px 13px;
@@ -245,8 +298,6 @@ const CSS = `
 .mml-presetwarn{flex:1;min-width:0;font-size:10px;color:#e0a94c;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
 .mml-topspace{flex:1;}
-.mml-detail{background:#12151b;color:#a9b2c2;border:1px solid #2e3440;
-  border-radius:6px;padding:2px 4px;font-size:10px;margin-right:2px;}
 .mml-count{font-size:10px;color:#8a93a3;font-family:ui-monospace,monospace;}
 .mml-count.over{color:#f07070;}
 .mml-msg{flex:0 0 auto;font-size:10px;min-height:12px;color:#e0a94c;overflow:hidden;
@@ -610,7 +661,7 @@ class TrimModal {
     else delete it.mirror;
     if (this.rotate && visual) it.rotate = this.rotate;
     else delete it.rotate;
-    if (this.resize && it.kind === "picture") it.resize = this.resize;
+    if (this.resize && visual) it.resize = this.resize;
     else delete it.resize;
     this.close();
     this.panel.commit();
@@ -934,18 +985,19 @@ class TrimModal {
       ].map(([v, l]) => el("option", { value: v }, l)));
     // Pictures get a size cap: a 4K reference is decoded and rescaled on
     // every run, and the model downsizes it to the generation area anyway.
-    this.sizeEl = this.isStill
+    this.sizeEl = (this.isStill || this.item.kind === "video")
       ? el("select", { class: "mml-tmaspect",
           title: "Cap the long edge of what's sent. The model rescales " +
                  "references anyway, so this mostly saves decode time and RAM " +
-                 "\u2014 but keep a keyframe at least as large as your " +
-                 "generation.",
+                 "\u2014 and on video it saves both per frame. Keep a keyframe " +
+                 "or a continuation source at least as large as your generation.",
           onchange: (e) => {
             this.resize = parseInt(e.target.value, 10) || 0;
             this.syncCrop();
           } },
-          [[0, "size: full"], [2048, "max 2048px"], [1600, "max 1600px"],
-           [1280, "max 1280px"], [1024, "max 1024px"], [832, "max 832px"]]
+          [[0, "size: full"], [2048, "max 2048px"], [1920, "max 1920px"],
+           [1600, "max 1600px"], [1280, "max 1280px"], [1024, "max 1024px"],
+           [832, "max 832px"]]
             .map(([v, label]) => el("option",
               { value: String(v), selected: this.resize === v }, label)))
       : null;
@@ -1666,20 +1718,15 @@ class LoaderPanel {
 
   count(kind) { return this.items.filter((i) => i.kind === kind).length; }
 
-  /** Video decode detail. Stored per item; the picker sets them together. */
-  detail() {
-    const v = this.items.find((i) => i.kind === "video" && i.detail);
-    return v ? v.detail : "high";
+  /** Step to the next node size preset. */
+  cycleSize() {
+    const now = currentPreset(this.node);
+    const i = SIZE_PRESETS.findIndex(([name]) => name === now);
+    const [, factor] = SIZE_PRESETS[(i + 1) % SIZE_PRESETS.length];
+    applyNodeSize(this.node, factor);
+    this.render();
   }
 
-  setDetail(value) {
-    for (const i of this.items) if (i.kind === "video") i.detail = value;
-    const caps = { full: "source size", high: "1280px", standard: "960px",
-                   low: "640px" };
-    this.say(`Reference video decodes at ${caps[value] || value} on the long ` +
-      "edge. Lower uses less RAM; the model rescales references anyway.");
-    this.commit();
-  }
 
   say(text, isError) {
     this.msg = text || "";
@@ -1716,9 +1763,7 @@ class LoaderPanel {
         // stays available, just switched off until room is made.
         const budgetFull = audioCount(this.items) >= MAX.audio;
         const pairable = info.kind === "video" && info.has_audio;
-        const detail = this.detail();
         this.items.push({
-          ...(info.kind === "video" ? { detail } : {}),
           kind: info.kind,
           file: info.file,
           name: info.original || info.name,
@@ -1864,15 +1909,11 @@ class LoaderPanel {
       el("span", { style: { fontSize: "10px", color: "#6b7484" } },
         this.busy ? `uploading ${this.busy}\u2026` : "or drop files on any slot"),
       el("span", { class: "mml-topspace" }),
-      (this.count("video") ? el("select", { class: "mml-detail",
-        title: "How much detail to decode from reference video.\n" +
-               "The model rescales references to your generation size anyway, " +
-               "so lower settings mainly save RAM.",
-        onchange: (e) => this.setDetail(e.target.value) },
-        [["high", "detail: high"], ["standard", "detail: standard"],
-         ["low", "detail: low"], ["full", "detail: full"]].map(([v, label]) =>
-          el("option", { value: v, selected: this.detail() === v }, label)))
-        : null),
+      el("button", { class: "mml-btn mml-sm",
+        title: "Node size \u2014 click to step through L, XL and XXL",
+        onclick: () => this.cycleSize() },
+        `size ${currentPreset(this.node)}`),
+
       this.items.length
         ? el("button", { class: "mml-btn mml-sm",
             title: "Remove every loaded reference from this node",
@@ -2276,7 +2317,7 @@ export function openLoaderModal(node) {
   const overlay = el("div", { class: "mml-overlay",
     onmousedown: (e) => { if (e.target === overlay) close(); } },
     el("div", { class: "mml-modal" },
-      el("div", { class: "mml-modalhead" }, "MiniMax H3 Media Loader",
+      el("div", { class: "mml-modalhead" }, "Fantastic H3 Media Loader",
         el("button", { title: "Close", onclick: close }, "\u2715")),
       el("div", { class: "mml-modalbody" }, panel.root)));
   window.addEventListener("keydown", esc);
@@ -2310,6 +2351,7 @@ app.registerExtension({
       this._mmlPanel = new LoaderPanel(this);
       const widget = this.addDOMWidget("mml_panel", "div", this._mmlPanel.root,
         { serialize: false });
+      this._mmlWidget = widget;
       applyCanvasSizing(this, widget, NODE_W, PANEL_H);
       return r;
     };
