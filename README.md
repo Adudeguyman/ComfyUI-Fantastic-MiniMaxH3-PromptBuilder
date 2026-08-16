@@ -384,7 +384,8 @@ a click. The **Phrases** row sits under the dialogue controls:
 - The two dropdowns filter by category and pick the phrase; hovering the
   phrase picker shows the whole wording, since the list only has room for the
   name.
-- **+ Phrase** drops it in at the caret.
+- **+ Phrase** drops it in at the caret, on the same line — line breaks in a
+  saved phrase are flattened, because the model reads them as shot cuts.
 - **Delete** removes the selected one.
 
 Phrases are stored with ComfyUI rather than in the workflow, so they follow the

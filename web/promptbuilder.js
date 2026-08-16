@@ -1206,24 +1206,28 @@ const CSS = `
    styled. Every metric below is copied from .mmh3-form textarea — any
    difference and the chips drift off the words as lines wrap. This block is
    last, and uses .mmh3-chiptext, so it wins over the generic form rules. */
-.mmh3-chipwrap{position:relative;display:block;}
+/* The wrapper carries the field's frame; the textarea inside is invisible
+   except for its caret and selection. */
+.mmh3-chipwrap{position:relative;display:block;background:#12151b;
+  border:1px solid #2e3440;border-radius:6px;}
+.mmh3-chipwrap:focus-within{border-color:#4a5568;}
 /* Those two sections put the field in a flex row beside an N/A button; the
    wrapper has to claim the space the bare textarea used to. */
 .mmh3-row .mmh3-chipwrap{flex:1;min-width:0;}
 .mmh3-chipmirror,
 .mmh3-chipwrap textarea.mmh3-chiptext{
-  width:100%;box-sizing:border-box;border:1px solid #2e3440;border-radius:6px;
-  padding:7px 9px;font-size:13px;font-family:inherit;line-height:1.7;
-  letter-spacing:normal;white-space:pre-wrap;overflow-wrap:break-word;
-  word-break:normal;tab-size:4;}
+  width:100%;box-sizing:border-box;border:1px solid transparent;
+  border-radius:6px;padding:7px 9px;font-size:13px;font-family:inherit;
+  line-height:1.7;letter-spacing:normal;white-space:pre-wrap;
+  overflow-wrap:break-word;word-break:normal;tab-size:4;}
 .mmh3-chipmirror{position:absolute;inset:0;overflow:hidden;pointer-events:none;
-  color:#dde2ea;background:#12151b;border-color:transparent;}
+  color:#dde2ea;background:transparent;z-index:1;}
 .mmh3-chipwrap textarea.mmh3-chiptext{position:relative;display:block;
   background:transparent;color:transparent;caret-color:#dde2ea;
-  resize:vertical;}
-.mmh3-chipwrap textarea.mmh3-chiptext:focus{outline:none;border-color:#4a5568;}
+  resize:vertical;z-index:0;}
+.mmh3-chipwrap textarea.mmh3-chiptext:focus{outline:none;}
 .mmh3-chipwrap textarea.mmh3-chiptext::selection{
-  background:rgba(96,140,210,.45);color:#fff;}
+  background:rgba(96,140,210,.38);color:transparent;}
 .mmh3-chipwrap textarea.mmh3-chiptext::placeholder{color:#5c6472;}
 /* Layout-neutral by construction. The mirror only lines up with the textarea
    if a chip advances the text exactly as its bare glyphs would, so there is
@@ -1683,6 +1687,8 @@ class Editor {
     const end = t.selectionEnd ?? start;
     let before = t.value.slice(0, start);
     let pad;
+    // opts.newline is for [Shot N] and nothing else. A line break anywhere
+    // else reads to the model as a cut, which silently splits the clip.
     if (opts.newline) {
       before = before.replace(/\s+$/, "");
       pad = before ? "\n" : "";
@@ -1959,7 +1965,11 @@ class Editor {
    *  would put all of that on us. */
   chipField(box) {
     const mirror = el("div", { class: "mmh3-chipmirror", "aria-hidden": "true" });
-    const wrap = el("div", { class: "mmh3-chipwrap" }, mirror, box);
+    // Order matters: the mirror is painted ON TOP of the textarea so the
+    // selection band (drawn by the textarea) sits behind the glyphs instead
+    // of covering them. It's click-through, so the textarea still gets every
+    // pointer event.
+    const wrap = el("div", { class: "mmh3-chipwrap" }, box, mirror);
     box.classList.add("mmh3-chiptext");
 
     const paint = () => {
@@ -2606,7 +2616,15 @@ class Editor {
 
   insertPhrase() {
     const p = this.selectedPhrase();
-    if (p) this.insert(p.text);
+    if (!p) return;
+    // A phrase saved from a multi-line selection would otherwise carry cuts
+    // into the description, since the model reads a line break as a new shot.
+    const flat = p.text.replace(/\s*\n+\s*/g, " ").trim();
+    this.insert(flat);
+    if (flat !== p.text.trim()) {
+      toast("Line breaks in that phrase were flattened \u2014 they read as " +
+            "shot cuts", 4500);
+    }
   }
 
   closeCtx() {
@@ -2788,7 +2806,9 @@ class Editor {
       const tail = this.voiceover
         ? " while their lips remain completely closed."
         : "";
-      // insert() parks the caret before </d> and starts a new line for us.
+      // Deliberately NOT on its own line: the model reads a line break as a
+      // shot boundary, so only [Shot N] may introduce one. Dialogue joins the
+      // description it belongs to.
       return `${said}<d>[${lang.value}] </d>${tail}`;
     };
 
@@ -2797,14 +2817,13 @@ class Editor {
       title: isNew
         ? `Add ${id} \u2014 the next speaker in the video's speaking order`
         : `Insert a line for ${id}`,
-      onclick: () => this.insert(line(id), { newline: true }),
+      onclick: () => this.insert(line(id)),
     }, isNew ? `+ (${id})` : `(${id})`);
 
     const pair = used.length >= 2
       ? el("button", { class: "mmh3-btn",
           title: "Two speakers vocalising together",
-          onclick: () => this.insert(line(`${used[0]},${used[1]}`),
-            { newline: true }) },
+          onclick: () => this.insert(line(`${used[0]},${used[1]}`)) },
           `(${used[0]},${used[1]})`)
       : null;
 
