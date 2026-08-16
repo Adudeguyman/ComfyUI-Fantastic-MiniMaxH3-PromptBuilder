@@ -80,10 +80,10 @@ Highlights:
   failed render.
 - **The official guide is built in.** A 📖 button opens the full PDF.
 - **Your work isn't lost by a stray click.** Closing with unsaved changes asks
-  first — **Save to node**, **Discard**, or **Keep editing** — and reopening
-  picks up where you left off either way; the node keeps its last saved prompt
-  until you save. The ⚙ menu turns off click-outside-to-close, or the warning
-  itself, if you'd rather work another way.
+  first — **Save to node**, **Discard**, or **Keep editing**. Only *Save to
+  node* changes what the node sends; ✕, Cancel and Escape discard. The ⚙ menu
+  turns off click-outside-to-close, or the warning itself, if you'd rather work
+  another way.
 - **Reference tags read as chips** in the text, colour-coded by kind, with the
   thumbnail on hover — no side panel opening and shifting the layout. Hovering
   a `<Subject N>` shows the first picture its definition cites, the media it
@@ -369,6 +369,27 @@ role in their own right.
 Note that `attribute transfer` is a retention marker, not a task type — the
 chip sets `attribute_transfer` on the retention row while the summary stays
 `reference generation`.
+
+### Phrases
+
+Bits of wording you write over and over — a house style line, a camera move you
+like, a soundscape you always start from — can be saved once and inserted with
+a click. The **Phrases** row sits under the dialogue controls:
+
+- **+ New** opens a small window to compose the phrase — prefilled if you had
+  text selected, empty and ready to type if not — with a name and an optional
+  category. Ctrl+Enter saves, Esc closes.
+- **Right-click a selection** in any field for *Save selection as phrase…*,
+  which opens the same window with the text already in it.
+- The two dropdowns filter by category and pick the phrase; hovering the
+  phrase picker shows the whole wording, since the list only has room for the
+  name.
+- **+ Phrase** drops it in at the caret.
+- **Delete** removes the selected one.
+
+Phrases are stored with ComfyUI rather than in the workflow, so they follow the
+install and are shared by every prompt you write. They're plain text — for
+saving a whole prompt, use the [prompt library](#prompt-library) instead.
 
 ### Switching lines off
 
@@ -780,6 +801,25 @@ there — `%date:hhmmss%` or strftime `%H%M%S` — so `vid_%date:hhmm%` becomes
 whatever it was when the workflow was loaded.
 
 ---
+
+## Troubleshooting
+
+### The node appears but has no panel or buttons
+
+The Python side registered fine — you can see `media_state` or `builder_state`
+as a plain text widget — but the interface didn't build. That's the frontend
+script failing, and almost always one of:
+
+1. **A stale browser cache.** Python reloads on restart, JavaScript doesn't.
+   Hard-refresh with Ctrl+Shift+R, or try an incognito window.
+2. **Another extension throwing during load,** which can stop later ones
+   registering. Open the browser console (F12) — the first red error usually
+   names the culprit, and it often isn't this pack.
+3. **A partial install.** `custom_nodes/<this pack>/web/` should contain
+   `promptbuilder.js`, `medialoader.js`, `fileprefix.js` and the guide PDF.
+
+If this pack itself is the one failing, the node now shows a **⚠ UI failed**
+button — click it for the error, and include that text in a bug report.
 
 ## Troubleshooting
 

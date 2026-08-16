@@ -2334,26 +2334,38 @@ app.registerExtension({
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
-      const r = onNodeCreated?.apply(this, arguments);
-      injectCSS();
-      const w = this.widgets?.find((w) => w.name === "media_state");
-      if (w) {
-        w.hidden = true;
-        w.type = "hidden";
-        w.computeSize = () => [0, -4];
-      }
-      // Built-in widgets go first: in Nodes 2.0 a widget added after a DOM
-      // widget anchors to the node's bottom and leaves a gap on resize.
-      this.addWidget("button", "Open loader\u2026", null, () => openLoaderModal(this));
-      this.addWidget("button", "+ Native-output splitter", null,
-        () => addSplitter(this));
+      try {
+        const r = onNodeCreated?.apply(this, arguments);
+        injectCSS();
+        const w = this.widgets?.find((w) => w.name === "media_state");
+        if (w) {
+          w.hidden = true;
+          w.type = "hidden";
+          w.computeSize = () => [0, -4];
+        }
+        // Built-in widgets go first: in Nodes 2.0 a widget added after a DOM
+        // widget anchors to the node's bottom and leaves a gap on resize.
+        this.addWidget("button", "Open loader\u2026", null, () => openLoaderModal(this));
+        this.addWidget("button", "+ Native-output splitter", null,
+          () => addSplitter(this));
 
-      this._mmlPanel = new LoaderPanel(this);
-      const widget = this.addDOMWidget("mml_panel", "div", this._mmlPanel.root,
-        { serialize: false });
-      this._mmlWidget = widget;
-      applyCanvasSizing(this, widget, NODE_W, PANEL_H);
-      return r;
+        this._mmlPanel = new LoaderPanel(this);
+        const widget = this.addDOMWidget("mml_panel", "div", this._mmlPanel.root,
+          { serialize: false });
+        this._mmlWidget = widget;
+        applyCanvasSizing(this, widget, NODE_W, PANEL_H);
+        return r;
+      } catch (err) {
+        // Without this the node still registers but none of the UI
+        // appears, which looks like "the node did not load".
+        console.error("[Fantastic H3 Media Loader] setup failed for this node:", err);
+        try { this.addWidget("button", "\u26a0 UI failed \u2014 click", null, () => {
+          alert("Fantastic H3 Media Loader could not build its interface.\n\n" + err +
+            "\n\nOpen the browser console for the full trace.");
+        }); } catch (e2) { /* nothing more we can do */ }
+        return undefined;
+      }
+
     };
 
     // Canvas-only: Vue owns sizing there, so failure here must be harmless.

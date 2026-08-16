@@ -87,6 +87,32 @@ def _prompt_dir():
     return path
 
 
+def _phrase_file():
+    """One JSON file holding every saved phrase.
+
+    Phrases are short and there may be many, so a single file beats a file
+    each — unlike prompts, which are large and edited one at a time.
+    """
+    return os.path.join(os.path.dirname(_prompt_dir()), "minimax_h3_phrases.json")
+
+
+def _read_phrases():
+    try:
+        with open(_phrase_file(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _write_phrases(items):
+    path = _phrase_file()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(items, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)          # never leave a half-written library
+
+
 def _slug(text):
     out = re.sub(r"[^A-Za-z0-9 ._-]+", "_", str(text or "")).strip(" ._-")
     return out[:80] or None
@@ -405,6 +431,62 @@ if PromptServer is not None and web is not None:
         return web.json_response({"deleted": name})
 
     # -- prompt library ---------------------------------------------------
+
+    @routes.get("/minimax_h3/phrases")
+    async def list_phrases(request):
+        items = _read_phrases()
+        cats = sorted({(i.get("category") or "").strip()
+                       for i in items if (i.get("category") or "").strip()},
+                      key=str.lower)
+        return web.json_response({"phrases": items, "categories": cats})
+
+    @routes.post("/minimax_h3/phrases/save")
+    async def save_phrase(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name = str(body.get("name") or "").strip()
+        text = str(body.get("text") or "")
+        if not name:
+            return web.json_response({"error": "give the phrase a name"}, status=400)
+        if not text.strip():
+            return web.json_response({"error": "the phrase is empty"}, status=400)
+
+        items = _read_phrases()
+        entry = {
+            "id": str(body.get("id") or "").strip() or f"p{int(time.time() * 1000)}",
+            "name": name[:120],
+            "category": str(body.get("category") or "").strip()[:80],
+            "text": text,
+            "updated": int(time.time()),
+        }
+        items = [i for i in items if i.get("id") != entry["id"]]
+        items.append(entry)
+        items.sort(key=lambda i: ((i.get("category") or "").lower(),
+                                  (i.get("name") or "").lower()))
+        try:
+            _write_phrases(items)
+        except Exception as exc:
+            return web.json_response({"error": f"could not save: {exc}"}, status=500)
+        return web.json_response({"saved": entry["id"]})
+
+    @routes.post("/minimax_h3/phrases/delete")
+    async def delete_phrase(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        pid = str(body.get("id") or "").strip()
+        items = _read_phrases()
+        keep = [i for i in items if i.get("id") != pid]
+        if len(keep) == len(items):
+            return web.json_response({"error": "no such phrase"}, status=404)
+        try:
+            _write_phrases(keep)
+        except Exception as exc:
+            return web.json_response({"error": f"could not delete: {exc}"}, status=500)
+        return web.json_response({"deleted": pid})
 
     @routes.get("/minimax_h3/prompts")
     async def list_prompts(request):
