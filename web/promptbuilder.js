@@ -24,6 +24,8 @@ const TAG_RE = /<(?:Picture|Video|Audio|Subject) \d+>/g;
    aren't chipped out of it. */
 const PAINT_RE = new RegExp([
   "<d>[\\s\\S]*?<\\/d>",                      // a spoken line
+  // a cut marker, with its timestamp when one follows
+  "\\[Shot \\d+\\](?:\\s+at\\s+\\d{1,2}:\\d{2}(?:\\.\\d{1,3})?)?",
   "<(?:Picture|Video|Audio|Subject) \\d+>",     // a reference tag
   "\\(S\\d+(?:\\s*,\\s*S\\d+)*\\)",           // (S1) or (S1,S2)
 ].join("|"), "g");
@@ -1108,6 +1110,12 @@ const CSS = `
   box-shadow:0 0 0 2px rgba(240,112,112,.16), inset 0 0 0 1px rgba(240,112,112,.5);}
 .mmh3-reftag.spk{background:rgba(126,167,216,.16);color:#7ea7d8;
   box-shadow:0 0 0 2px rgba(126,167,216,.16), inset 0 0 0 1px rgba(126,167,216,.4);}
+/* Cut markers are the loudest thing in a prompt, so they're the only SOLID
+   chip: every other tag is a translucent tint. The weight does the work, which
+   also means the hue doesn't have to compete with audio's violet or the red
+   that means "undefined tag". */
+.mmh3-reftag.shot{background:#a34b7d;color:#ffe9f4;font-weight:700;
+  box-shadow:0 0 0 2px #a34b7d, inset 0 0 0 1px rgba(255,255,255,.18);}
 /* Spoken lines. The band shows how much of a paragraph is actually speech;
    the markers dim because they're syntax, not words the model will say.
    box-decoration-break keeps the band intact when a line wraps. */
@@ -1753,6 +1761,9 @@ class Editor {
       kids.push(el("span", { class: "mmh3-dtext" }, body));
       kids.push(el("span", { class: "mmh3-dmark" }, "</d>"));
       return [el("span", { class: "mmh3-dblock" }, ...kids)];
+    }
+    if (tok.startsWith("[Shot")) {
+      return [el("span", { class: "mmh3-reftag shot" }, tok)];
     }
     if (tok.startsWith("(")) {
       return [el("span", { class: "mmh3-reftag spk", dataset: { tag: tok } }, tok)];

@@ -88,6 +88,8 @@ Highlights:
 - **A dialogue row** with a language picker and one button per speaker already
   in the prompt, plus the next unused ID — and a voiceover toggle that writes
   the guide's exact phrasing including the lips-closed clause.
+- **Cut markers are chipped too** — `[Shot 2] at 00:03.000` reads as one unit,
+  in a neutral slate, so the structure of a multi-shot prompt is scannable.
 - **Spoken lines are shaded** — `<d>…</d>` blocks get a blue band matching the
   speaker chips, with the markers dimmed and the language tag picked out, so you can see at a glance
   what the model will actually say and catch delivery notes that drifted

@@ -1,6 +1,6 @@
 [project]
 name = "fantastic-minimax-h3-prompt-builder"
-version = "1.5.0"
+version = "1.5.1"
 description = "Guided prompt writing and reference media handling for the MiniMax H3 video model: fillable templates for every mode, live checking against MiniMax's prompt guide, and a drag-and-drop media loader that keeps reference tags straight."
 license = { file = "LICENSE" }
 requires-python = ">=3.9"
