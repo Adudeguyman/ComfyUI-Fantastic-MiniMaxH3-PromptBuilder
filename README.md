@@ -79,6 +79,11 @@ Highlights:
   you connected but never mentioned — flagged while you write, not after a
   failed render.
 - **The official guide is built in.** A 📖 button opens the full PDF.
+- **Your work isn't lost by a stray click.** Closing with unsaved changes asks
+  first — **Save to node**, **Discard**, or **Keep editing** — and reopening
+  picks up where you left off either way; the node keeps its last saved prompt
+  until you save. The ⚙ menu turns off click-outside-to-close, or the warning
+  itself, if you'd rather work another way.
 - **Reference tags read as chips** in the text, colour-coded by kind, with the
   thumbnail on hover — no side panel opening and shifting the layout. Hovering
   a `<Subject N>` shows the first picture its definition cites, the media it

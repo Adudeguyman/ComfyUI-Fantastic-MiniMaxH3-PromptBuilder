@@ -292,6 +292,61 @@ const TAG_CLASS = { Subject: "subj", Picture: "pic", Video: "vid", Audio: "aud" 
 /* Small DOM helpers                                                   */
 /* ------------------------------------------------------------------ */
 
+/* Editor preferences. Kept in localStorage so they follow the person rather
+   than the workflow — they're about how the window behaves, not about any
+   particular prompt. */
+const PREF_KEY = "mmh3.editorPrefs";
+const PREF_DEFAULTS = { closeOnBackdrop: true, warnUnsaved: true };
+
+function loadPrefs() {
+  try {
+    return { ...PREF_DEFAULTS, ...JSON.parse(localStorage.getItem(PREF_KEY) || "{}") };
+  } catch (e) {
+    return { ...PREF_DEFAULTS };
+  }
+}
+
+function savePrefs(prefs) {
+  try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); }
+  catch (e) { /* private mode: the session's choice still applies */ }
+}
+
+/** Copy text, working outside a secure context.
+ *
+ *  navigator.clipboard only exists on https or localhost. ComfyUI started
+ *  with --listen is usually reached over plain http at a LAN address, where
+ *  the API is simply absent — the old call short-circuited on `?.` and then
+ *  threw on `.then`, so copying failed silently. execCommand is deprecated
+ *  but still the only thing that works there. */
+async function copyText(text) {
+  try {
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {
+    /* fall through to the textarea route */
+  }
+  try {
+    const holder = document.createElement("textarea");
+    holder.value = text;
+    holder.setAttribute("readonly", "");
+    Object.assign(holder.style, {
+      position: "fixed", top: "0", left: "-9999px", opacity: "0",
+    });
+    document.body.append(holder);
+    const prev = document.activeElement;
+    holder.select();
+    holder.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    holder.remove();
+    try { prev?.focus?.(); } catch (e) { /* focus is best effort */ }
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
 function el(tag, props = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
@@ -932,6 +987,21 @@ const CSS = `
 .mmh3-clearnote{font-size:11px;color:#a08878;}
 .mmh3-clearbar .mmh3-btn{margin-left:auto;}
 .mmh3-clearbar .mmh3-btn + .mmh3-btn{margin-left:0;}
+.mmh3-prefwrap{position:relative;display:inline-block;}
+.mmh3-x.on{color:#dde2ea;}
+.mmh3-prefmenu{position:absolute;right:0;top:100%;margin-top:6px;z-index:20;
+  display:none;width:270px;background:#1e222a;border:1px solid #3a4252;
+  border-radius:9px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.55);}
+.mmh3-prefmenu.on{display:block;}
+.mmh3-prefitem{display:flex;gap:8px;align-items:flex-start;padding:6px;
+  border-radius:6px;cursor:pointer;}
+.mmh3-prefitem:hover{background:#242a34;}
+.mmh3-prefitem input{margin-top:2px;flex-shrink:0;}
+.mmh3-preflabel{display:block;font-size:12px;color:#d7dbe2;}
+.mmh3-prefhint{display:block;font-size:10px;color:#6b7484;line-height:1.35;
+  margin-top:2px;}
+.mmh3-btn.mmh3-danger{border-color:#5c3a3a;color:#e08585;}
+.mmh3-btn.mmh3-danger:hover{background:#3a2626;color:#f0a0a0;}
 /* Full-bleed: negative side margins cancel the form's padding, so the bar's
    background covers the gutters too. Text used to scroll visibly through
    them and through the strip above the bar. */
@@ -1227,8 +1297,9 @@ class Library {
         this.paint();
       } }, "\u270e");
 
-    this.overlay = el("div", { class: "mmh3-overlay mmh3-libover",
-      onmousedown: (e) => { if (e.target === this.overlay) this.close(); } },
+    // Same reasoning as the editor: a stray click shouldn't discard a
+    // half-filled save form. Use \u2715, Cancel or Escape.
+    this.overlay = el("div", { class: "mmh3-overlay mmh3-libover" },
       el("div", { class: "mmh3-libmodal" },
         el("div", { class: "mmh3-head" },
           el("div", { class: "mmh3-title" }, "Prompt library"),
@@ -1519,6 +1590,13 @@ class Editor {
   constructor(node) {
     this.node = node;
     this.state = loadState(node);
+    this.restored = false;
+    if (node._mmh3Draft) {
+      try {
+        this.state = JSON.parse(node._mmh3Draft);
+        this.restored = true;
+      } catch (e) { /* unreadable draft: fall back to the saved prompt */ }
+    }
     this.slots = getRefSlots(node);
     this.lastFocus = null;
     this.pins = [];
@@ -1527,10 +1605,19 @@ class Editor {
     this.libraryName = "";
     this.libraryCategory = "";
     this.clearPending = false;
+    this.closePending = false;
+    this.prefs = loadPrefs();
+    this.prefsOpen = false;
+    // What the node currently holds, to tell "edited" from "just looked".
+    this.openedWith = JSON.stringify(this.state);
     injectCSS();
     this.build();
     this.render();
     document.body.append(this.overlay);
+    if (this.restored) {
+      toast("Picked up your unsaved changes \u2014 the node still has its " +
+            "last saved prompt", 5000);
+    }
   }
 
   /* ---------- insertion ---------- */
@@ -1575,11 +1662,19 @@ class Editor {
       }, m.label)));
     this.modeSends = el("div", { class: "mmh3-modesends" });
 
-    const copyBtn = el("button", { class: "mmh3-btn", onclick: () => {
-      navigator.clipboard?.writeText(generate(this.state))
-        .then(() => toast("Prompt copied"));
+    const copyBtn = el("button", { class: "mmh3-btn", onclick: async () => {
+      // Always the live editor state — saving to the node is not a
+      // prerequisite for copying what you've written.
+      const text = generate(this.state);
+      const ok = await copyText(text);
+      // toast's second argument is a duration; >4000 also styles it as a
+      // warning, which is what a failure should look like.
+      if (ok) toast("Prompt copied");
+      else toast("Couldn't reach the clipboard \u2014 select the preview on " +
+                 "the right and copy manually", 6000);
     }}, "Copy prompt");
-    const cancelBtn = el("button", { class: "mmh3-btn", onclick: () => this.close() }, "Cancel");
+    const cancelBtn = el("button", { class: "mmh3-btn",
+      onclick: () => this.requestClose() }, "Cancel");
     const saveBtn = el("button", { class: "mmh3-btn primary", onclick: () => this.save() },
       "Save to node");
 
@@ -1590,7 +1685,13 @@ class Editor {
         "_blank") }, "\ud83d\udcd6 Guide");
 
     this.overlay = el("div", { class: "mmh3-overlay",
-      onmousedown: (e) => { if (e.target === this.overlay) this.close(); } },
+      onmousedown: (e) => {
+        if (e.target !== this.overlay) return;
+        if (this.prefsOpen) { this.togglePrefs(false); return; }
+        // Off by preference, this does nothing; on, it still goes through
+        // the unsaved-changes check rather than closing outright.
+        if (this.prefs.closeOnBackdrop) this.requestClose();
+      } },
       el("div", { class: "mmh3-modal" },
         el("div", { class: "mmh3-head" },
           el("div", { class: "mmh3-title" }, "Fantastic H3 Prompt Builder",
@@ -1604,7 +1705,9 @@ class Editor {
             onclick: () => { this.clearPending = !this.clearPending; this.render(); } },
             "Clear"),
           this.modeBar,
-          el("button", { class: "mmh3-x", onclick: () => this.close() }, "\u2715"),
+          this.prefsButton(),
+          el("button", { class: "mmh3-x",
+            onclick: () => this.requestClose() }, "\u2715"),
         ),
         this.modeSends,
         el("div", { class: "mmh3-body" },
@@ -1621,6 +1724,11 @@ class Editor {
     this.formEl.addEventListener("focusin", (e) => {
       if (e.target.matches("textarea, input[type=text]") &&
           !e.target.dataset.noinsert) this.lastFocus = e.target;
+    });
+    this.overlay.addEventListener("mousedown", (e) => {
+      if (this.prefsOpen && !e.target.closest(".mmh3-prefwrap")) {
+        this.togglePrefs(false);
+      }
     });
     this.formEl.addEventListener("input", () => {
       this.updatePreview();
@@ -1670,9 +1778,76 @@ class Editor {
         onclick: () => { this.clearPending = false; this.render(); } }, "Cancel"));
   }
 
+  /** True when the editor holds something the node hasn't been given. */
+  isDirty() {
+    try { return JSON.stringify(this.state) !== this.openedWith; }
+    catch (e) { return false; }
+  }
+
+  /** Close, but ask first if there's unsaved work. */
+  requestClose() {
+    if (!this.prefs.warnUnsaved || !this.isDirty()) { this.close(); return; }
+    this.closePending = true;
+    this.render();
+  }
+
+  prefsButton() {
+    const item = (key, label, hint) => {
+      const box = el("input", { type: "checkbox", checked: !!this.prefs[key],
+        onchange: (e) => {
+          this.prefs[key] = e.target.checked;
+          savePrefs(this.prefs);
+        } });
+      return el("label", { class: "mmh3-prefitem" }, box,
+        el("span", {}, el("span", { class: "mmh3-preflabel" }, label),
+          el("span", { class: "mmh3-prefhint" }, hint)));
+    };
+    const menu = el("div", { class: "mmh3-prefmenu" },
+      item("closeOnBackdrop", "Click outside to close",
+           "Off means only \u2715, Cancel and Escape close the window."),
+      item("warnUnsaved", "Warn about unsaved changes",
+           "Off means closing discards them without asking."));
+    this.prefsMenu = menu;
+    this.prefsCog = el("button", { class: "mmh3-x", title: "Editor settings",
+      onclick: (e) => { e.stopPropagation(); this.togglePrefs(); } }, "\u2699");
+    return el("span", { class: "mmh3-prefwrap" }, this.prefsCog, menu);
+  }
+
+  togglePrefs(force) {
+    this.prefsOpen = force === undefined ? !this.prefsOpen : force;
+    this.prefsMenu?.classList.toggle("on", this.prefsOpen);
+    this.prefsCog?.classList.toggle("on", this.prefsOpen);
+  }
+
+  closeStrip() {
+    return el("div", { class: "mmh3-clearbar" },
+      el("span", {}, "You have changes the node hasn't been given."),
+      el("span", { class: "mmh3-clearnote" },
+        "Discarding keeps the node's last saved prompt."),
+      el("button", { class: "mmh3-btn primary",
+        onclick: () => this.save() }, "Save to node"),
+      el("button", { class: "mmh3-btn mmh3-danger",
+        onclick: () => { this.state = JSON.parse(this.openedWith);
+          this.node._mmh3Draft = null; this.closePending = false;
+          this.close(); } }, "Discard"),
+      el("button", { class: "mmh3-btn",
+        onclick: () => { this.closePending = false; this.render(); } },
+        "Keep editing"));
+  }
+
   close() {
     this.closePeek();
     window.removeEventListener("keydown", this.escHandler);
+    // Park the work in progress on the node. It isn't saved to the widgets —
+    // the node keeps its current prompt until you press Save — but reopening
+    // the editor picks up exactly where you left off.
+    try {
+      const sw = this.node.widgets?.find((w) => w.name === "builder_state");
+      const draft = JSON.stringify(this.state);
+      this.node._mmh3Draft = draft === (sw?.value || "") ? null : draft;
+    } catch (e) {
+      this.node._mmh3Draft = null;
+    }
     this.overlay.remove();
   }
 
@@ -1681,6 +1856,9 @@ class Editor {
     const sw = this.node.widgets?.find((w) => w.name === "builder_state");
     if (pw) pw.value = generate(this.state);
     if (sw) sw.value = JSON.stringify(this.state);
+    this.node._mmh3Draft = null;
+    this.closePending = false;
+    this.openedWith = JSON.stringify(this.state);
     updateSummary(this.node);
     try {
       this.node.setDirtyCanvas?.(true, true);
@@ -2344,7 +2522,10 @@ class Editor {
     this.slots = getRefSlots(this.node);
     if (this.state.mode === "REF") this.renderRef();
     else this.renderBase();
-    if (this.clearPending) {
+    if (this.closePending) {
+      this.formEl.prepend(this.closeStrip());
+      this.formEl.scrollTop = 0;
+    } else if (this.clearPending) {
       this.formEl.prepend(this.clearStrip());
       this.formEl.scrollTop = 0;
     } else this.formEl.scrollTop = scroll;
