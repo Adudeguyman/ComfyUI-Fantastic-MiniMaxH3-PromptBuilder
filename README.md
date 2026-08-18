@@ -108,9 +108,12 @@ Highlights:
 - **Media presets** so you can reload a set of references in one click.
 - **Unload media** clears the node in one go (after a confirmation) without
   deleting the underlying files, so presets pointing at them still work.
-- **Node size presets** — a `size` button steps the whole node through L, XL
-  (+25%) and XXL (+40%) when you want more room for the media grid, and
-  **Open loader…** puts the same panel in a full-size window.
+- **Size control** — ⤢ Size sets the node's scale (100–300%) and its text size
+  (100–200%) independently, by slider or by typing the number. Changes apply when you press **Apply**, not while you drag, because
+  resizing the node would pull the slider out from under the pointer. Both are remembered for you
+  rather than for the workflow, so a node dropped into a new graph starts at
+  the size you actually work at. The prompt editor has the same two sliders in
+  its ⚙ menu, which is what you want on a 4K monitor.
 - **Detail control for reference video** — decode big clips at a smaller size
   so a long 4K reference doesn't eat gigabytes of RAM.
 
@@ -492,6 +495,14 @@ anyway, so the detail is discarded regardless. Capping a 4K reference at
 1280 px cuts its decoded tensor from about 100 MB to 11 MB. The reported size
 updates live, and it never upscales: a picture already under the cap is left
 alone.
+
+The cap only affects what's decoded — the file in ComfyUI's input folder stays
+full size, and every run pays to decode it. **⬇ Write copy** does the permanent
+version: it writes a resized copy (with the current crop, rotation and mirror
+baked in) into the input folder and points the reference at it, so the file, the
+decode and the tensor all shrink. Your original file is left exactly as it was;
+the copy is a new entry. A 4K PNG capped at 1280 px goes from about 25 MB to
+2.4 MB.
 
 One exception worth respecting: a picture used as `first_frame` or `last_frame`
 should stay **at least as large as your generation**, or the model will be

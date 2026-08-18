@@ -87,6 +87,28 @@ def _prompt_dir():
     return path
 
 
+def _pack_version():
+    """Version from pyproject.toml, so the UI can report the running build.
+
+    A bug report that says "1.5.4" is only useful if 1.5.4 means one thing;
+    reading it from the file the registry publishes keeps them in step.
+    """
+    try:
+        import tomllib
+    except Exception:                       # Python < 3.11
+        try:
+            import tomli as tomllib
+        except Exception:
+            return "unknown"
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "pyproject.toml")
+        with open(path, "rb") as fh:
+            return str(tomllib.load(fh)["project"]["version"])
+    except Exception:
+        return "unknown"
+
+
 def _phrase_file():
     """One JSON file holding every saved phrase.
 
@@ -291,6 +313,82 @@ if PromptServer is not None and web is not None:
             "duration": info.get("duration"), "has_audio": True,
         })
 
+    @routes.post("/minimax_h3/bake")
+    async def bake(request):
+        """Write a resized copy of a picture and hand back the new file.
+
+        Explicit only: nothing calls this on upload or on render. The source
+        file is left exactly as it was — the copy is a new entry in the input
+        folder, so the original stays usable elsewhere.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+
+        annotated = str(body.get("file") or "")
+        try:
+            cap = int(body.get("resize") or 0)
+        except (TypeError, ValueError):
+            cap = 0
+        if not annotated:
+            return web.json_response({"error": "no file given"}, status=400)
+        if cap <= 0:
+            return web.json_response(
+                {"error": "choose a size first \u2014 \u201cfull\u201d has "
+                          "nothing to write"}, status=400)
+
+        try:
+            from PIL import Image, ImageOps
+
+            path = media_io.resolve(annotated)
+            img = Image.open(path)
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            was = img.size
+            turn = int(body.get("rotate") or 0) % 360
+            if turn in (90, 180, 270):
+                img = img.rotate(-turn, expand=True)
+            if body.get("mirror"):
+                img = ImageOps.mirror(img)
+            crop = body.get("crop")
+            if isinstance(crop, dict):
+                W, H = img.size
+                x0 = max(0, min(W - 16, int(round(float(crop.get("x", 0)) * W))))
+                y0 = max(0, min(H - 16, int(round(float(crop.get("y", 0)) * H))))
+                x1 = min(W, max(x0 + 16,
+                         int(round((float(crop.get("x", 0)) + float(crop.get("w", 1))) * W))))
+                y1 = min(H, max(y0 + 16,
+                         int(round((float(crop.get("y", 0)) + float(crop.get("h", 1))) * H))))
+                if (x0, y0, x1, y1) != (0, 0, W, H):
+                    img = img.crop((x0, y0, x1, y1))
+            w, h = img.size
+            if max(w, h) > cap:
+                k = cap / float(max(w, h))
+                img = img.resize((max(16, int(round(w * k))),
+                                  max(16, int(round(h * k)))), Image.LANCZOS)
+        except Exception as exc:
+            return web.json_response({"error": f"couldn't read that picture: {exc}"},
+                                     status=400)
+
+        base = os.path.splitext(os.path.basename(annotated.split(" [")[0]))[0]
+        name = _unique(_target_dir(), _safe(f"{base}_{img.size[0]}x{img.size[1]}.png"))
+        out_path = os.path.join(_target_dir(), name)
+        try:
+            img.save(out_path, "PNG")
+        except Exception as exc:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+            return web.json_response({"error": f"couldn't write: {exc}"}, status=500)
+
+        out = f"{SUBFOLDER}/{name} [input]"
+        print(f"[MiniMaxH3] baked {was[0]}x{was[1]} -> {img.size[0]}x{img.size[1]} "
+              f"as {name}")
+        return web.json_response({
+            "file": out, "name": name,
+            "width": img.size[0], "height": img.size[1],
+            "was": [was[0], was[1]],
+        })
+
     def _output_root():
         if folder_paths is None:
             raise RuntimeError("folder_paths unavailable")
@@ -354,6 +452,7 @@ if PromptServer is not None and web is not None:
     async def capabilities(request):
         caps = media_io.backends()
         caps["video"] = media_io.can_decode_video()
+        caps["version"] = _pack_version()
         return web.json_response(caps)
 
     @routes.get("/minimax_h3/presets")

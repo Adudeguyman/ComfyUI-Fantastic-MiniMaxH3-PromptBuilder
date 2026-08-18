@@ -205,22 +205,50 @@ export const NODE_W = 660;
 
 // Node size presets. L is the natural size; the others scale both axes so
 // the media grid gets proportionally roomier rather than just wider.
-export const SIZE_PRESETS = [
-  ["L", 1.0], ["XL", 1.25], ["XXL", 1.4],
-];
+/* Node and text scale, 100%-300%. Stored per user rather than per workflow,
+   so a node dropped into a new graph starts at the size you actually work at.
+   The node's own size still serialises with the workflow — this is only the
+   starting point and what the slider shows. */
+const LOADER_PREF_KEY = "mmh3.loaderScale";
+export const SCALE_MIN = 1.0;
+export const SCALE_MAX = 3.0;          // node
+export const TEXT_SCALE_MAX = 2.0;     // type gets unwieldy past this
 
-/** Resize the node to a preset. Unlike applyCanvasSizing this sets an exact
- *  size, so stepping back down to L actually shrinks the node. */
+export function loadScalePrefs() {
+  const d = { node: 1.0, text: 1.0 };
+  try {
+    const v = JSON.parse(localStorage.getItem(LOADER_PREF_KEY) || "{}");
+    return {
+      node: clampScale(v.node ?? d.node),
+      text: clampScale(v.text ?? d.text, TEXT_SCALE_MAX),
+    };
+  } catch (e) {
+    return d;
+  }
+}
+
+export function saveScalePrefs(prefs) {
+  try { localStorage.setItem(LOADER_PREF_KEY, JSON.stringify(prefs)); }
+  catch (e) { /* private mode: this session still honours it */ }
+}
+
+export function clampScale(v, max = SCALE_MAX) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 1.0;
+  return Math.min(max, Math.max(SCALE_MIN, Math.round(n * 100) / 100));
+}
+
+/** Resize the node to a scale factor. Unlike applyCanvasSizing this sets an
+ *  exact size, so going back down actually shrinks the node. */
 export function applyNodeSize(node, factor) {
-  const w = Math.round(NODE_W * factor);
-  const h = Math.round(PANEL_H * factor);
+  const f = clampScale(factor);
+  const w = Math.round(NODE_W * f);
+  const h = Math.round(PANEL_H * f);
   try {
     const widget = node._mmlWidget;
     if (widget) {
       widget.computedHeight = h;
       widget.computeSize = () => [w, h];
-      // The DOM element carries the height on the classic canvas, where the
-      // node is drawn from the widget's box rather than from node.size.
       const elx = widget.element || widget.inputEl;
       if (elx && elx.style) {
         elx.style.height = `${h}px`;
@@ -230,12 +258,8 @@ export function applyNodeSize(node, factor) {
     if (node._mmlPanel?.root?.style) {
       node._mmlPanel.root.style.height = `${h}px`;
     }
-
-    // Height still has to clear the built-in widgets above the panel.
     const min = node.computeSize?.();
     const target = [w, Math.max(min?.[1] || 0, h)];
-    // setSize is the supported route and fires the renderer's own hooks;
-    // assigning node.size alone only moves on Nodes 2.0.
     if (typeof node.setSize === "function") node.setSize(target);
     else { node.size[0] = target[0]; node.size[1] = target[1]; }
     node.onResize?.(node.size);
@@ -246,18 +270,20 @@ export function applyNodeSize(node, factor) {
   }
 }
 
-/** Which preset the node is currently closest to. */
-export function currentPreset(node) {
-  const ratio = (node?.size?.[0] || NODE_W) / NODE_W;
-  let best = SIZE_PRESETS[0];
-  for (const p of SIZE_PRESETS) {
-    if (Math.abs(p[1] - ratio) < Math.abs(best[1] - ratio)) best = p;
-  }
-  return best[0];
+/** Text size only — a multiplier on every font-size, not a zoom.
+ *
+ *  zoom scaled the layout too, so slots grew and fewer fitted; what people
+ *  want here is bigger type in the same boxes. Set on the document so the
+ *  trim editor and other overlays (which live on <body>) inherit it. */
+export function applyTextScale(panel, factor) {
+  const f = clampScale(factor, TEXT_SCALE_MAX);
+  try {
+    document.documentElement.style.setProperty("--mml-fs", String(f));
+  } catch (e) { /* nothing to do */ }
 }
 
 const CSS = `
-.mml-panel{font-family:system-ui,sans-serif;color:#d7dbe2;font-size:12px;
+.mml-panel{font-family:system-ui,sans-serif;color:#d7dbe2;font-size:calc(12px * var(--mml-fs, 1));
   background:#191c22;border:1px solid #2a2f3a;border-radius:8px;padding:8px;
   display:flex;flex-direction:column;gap:6px;box-sizing:border-box;
   width:100%;height:476px;min-height:476px;overflow:hidden;}
@@ -270,40 +296,65 @@ const CSS = `
   border:1px solid #303642;border-radius:10px;display:flex;flex-direction:column;
   overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.55);}
 .mml-modalhead{display:flex;align-items:center;gap:10px;padding:9px 13px;
-  background:#1e222a;border-bottom:1px solid #2a2f3a;font-size:13px;
+  background:#1e222a;border-bottom:1px solid #2a2f3a;font-size:calc(13px * var(--mml-fs, 1));
   font-weight:500;color:#d7dbe2;font-family:system-ui,sans-serif;}
 .mml-modalhead button{margin-left:auto;background:none;border:0;color:#8a93a3;
-  font-size:17px;cursor:pointer;}
+  font-size:calc(17px * var(--mml-fs, 1));cursor:pointer;}
 .mml-modalhead button:hover{color:#fff;}
 .mml-modalbody{flex:1;min-height:0;padding:8px;overflow:auto;}
 .mml-panel.drop{border-color:#6f86b8;background:#1d2330;}
-.mml-top{display:flex;align-items:center;gap:8px;flex:0 0 auto;}
+.mml-top{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0;}
+.mml-top .mml-btn,.mml-top .mml-count{flex:0 0 auto;white-space:nowrap;}
 .mml-btn{background:#2b3140;border:1px solid #3a4252;color:#d7dbe2;border-radius:6px;
-  padding:4px 10px;font-size:11px;cursor:pointer;}
+  padding:4px 10px;font-size:calc(11px * var(--mml-fs, 1));cursor:pointer;}
 .mml-btn:hover{background:#333b4d;}
-.mml-presetrow{flex:0 0 auto;display:flex;align-items:center;gap:5px;}
-.mml-presetlbl{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+.mml-presetrow{flex:0 0 auto;display:flex;align-items:center;gap:5px;
+  min-width:0;flex-wrap:nowrap;}
+.mml-presetrow .mml-btn{flex:0 0 auto;white-space:nowrap;}
+.mml-presetlbl{flex:0 0 auto;white-space:nowrap;
+  font-size:calc(10px * var(--mml-fs, 1));text-transform:uppercase;letter-spacing:.07em;
   color:#6b7484;}
-.mml-preset{flex:1;min-width:0;background:#12151b;color:#c9cfda;
-  border:1px solid #2e3440;border-radius:6px;padding:3px 6px;font-size:11px;
+.mml-preset{flex:1 1 0;min-width:0;max-width:100%;background:#12151b;color:#c9cfda;
+  border:1px solid #2e3440;border-radius:6px;padding:3px 6px;font-size:calc(11px * var(--mml-fs, 1));
   font-family:system-ui,sans-serif;}
 .mml-preset:focus{outline:none;border-color:#4a5568;}
-.mml-btn.mml-sm{padding:3px 9px;font-size:10px;}
+.mml-btn.mml-sm{padding:3px 9px;font-size:calc(10px * var(--mml-fs, 1));}
 .mml-btn.mml-danger{border-color:#7a3a3a;color:#f0a0a0;}
 .mml-btn.mml-danger:hover{background:#3a2020;}
 .mml-presetname{flex:1;min-width:0;background:#12151b;color:#dde2ea;
-  border:1px solid #4a5568;border-radius:6px;padding:3px 7px;font-size:11px;
+  border:1px solid #4a5568;border-radius:6px;padding:3px 7px;font-size:calc(11px * var(--mml-fs, 1));
   font-family:system-ui,sans-serif;}
 .mml-presetname:focus{outline:none;border-color:#6f86b8;}
-.mml-presetwarn{flex:1;min-width:0;font-size:10px;color:#e0a94c;overflow:hidden;
+.mml-presetwarn{flex:1;min-width:0;font-size:calc(10px * var(--mml-fs, 1));color:#e0a94c;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
 .mml-topspace{flex:1;}
-.mml-count{font-size:10px;color:#8a93a3;font-family:ui-monospace,monospace;}
+.mml-scalewrap{position:relative;display:inline-block;}
+/* The size popover must never scale with the text setting: at 200% its own
+   controls would be unreadable and unclickable, leaving no way back. */
+.mml-scalemenu{--mml-fs:1;position:absolute;right:0;top:100%;margin-top:6px;
+  z-index:30;display:none;width:268px;background:#1e222a;border:1px solid #3a4252;
+  border-radius:9px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.55);}
+.mml-scalemenu.on{display:block;}
+.mml-scalerow{display:flex;align-items:center;gap:8px;padding:5px 4px;}
+.mml-scalelabel{font-size:calc(10px * var(--mml-fs, 1));color:#8a93a3;
+  width:62px;flex:0 0 auto;white-space:nowrap;}
+.mml-scalerange{flex:1;min-width:0;}
+.mml-scaleval{font-size:calc(10px * var(--mml-fs, 1));color:#d7dbe2;
+  font-family:ui-monospace,monospace;width:58px;text-align:right;flex:0 0 auto;
+  background:#12151b;border:1px solid #2e3440;border-radius:5px;padding:2px 4px;}
+.mml-scaleval:focus{outline:none;border-color:#4a5568;}
+.mml-scalepct{font-size:calc(10px * var(--mml-fs, 1));color:#6b7484;
+  flex:0 0 auto;margin-left:-2px;}
+.mml-scalefoot{display:flex;align-items:center;gap:6px;
+  border-top:1px solid #2a2f3a;margin-top:6px;padding-top:7px;
+  font-size:calc(9px * var(--mml-fs, 1));color:#6b7484;}
+.mml-scalefoot span{flex:1;min-width:0;line-height:1.25;}
+.mml-count{font-size:calc(10px * var(--mml-fs, 1));color:#8a93a3;font-family:ui-monospace,monospace;}
 .mml-count.over{color:#f07070;}
-.mml-msg{flex:0 0 auto;font-size:10px;min-height:12px;color:#e0a94c;overflow:hidden;
+.mml-msg{flex:0 0 auto;font-size:calc(10px * var(--mml-fs, 1));min-height:12px;color:#e0a94c;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
 .mml-msg.err{color:#f07070;}
-.mml-sec{flex:0 0 auto;display:flex;align-items:center;font-size:10px;
+.mml-sec{flex:0 0 auto;display:flex;align-items:center;font-size:calc(10px * var(--mml-fs, 1));
   text-transform:uppercase;letter-spacing:.07em;color:#6b7484;}
 .mml-sec span{margin-left:auto;text-transform:none;letter-spacing:0;color:#5c6472;
   font-family:ui-monospace,monospace;}
@@ -311,15 +362,20 @@ const CSS = `
 .mml-pics{flex:1;min-height:0;display:grid;
   grid-template-columns:repeat(3,minmax(0,1fr));
   grid-template-rows:repeat(3,minmax(0,1fr));gap:5px;}
-.mml-vids{flex:0 0 auto;display:grid;grid-template-rows:repeat(3,46px);gap:5px;
+/* flex-grow in the old fixed heights' ratio (46:38) so these sections take
+   their share of a taller node instead of the pictures grid eating all of it.
+   min-height keeps them at their original size at 100%. */
+.mml-vids{flex:46 1 auto;min-height:148px;display:grid;
+  grid-template-rows:repeat(3,1fr);gap:5px;
   grid-template-columns:minmax(0,1fr);}
 .mml-spacer{flex:1;min-height:0;}
-.mml-auds{flex:0 0 auto;display:grid;grid-template-rows:repeat(3,38px);gap:5px;
+.mml-auds{flex:38 1 auto;min-height:124px;display:grid;
+  grid-template-rows:repeat(3,1fr);gap:5px;
   grid-template-columns:minmax(0,1fr);}
 
 .mml-slot{border:1px dashed #2b313d;border-radius:6px;background:#141820;
   display:flex;align-items:center;justify-content:center;gap:5px;color:#4d5563;
-  font-size:10px;cursor:pointer;overflow:hidden;min-width:0;min-height:0;}
+  font-size:calc(10px * var(--mml-fs, 1));cursor:pointer;overflow:hidden;min-width:0;min-height:0;}
 .mml-slot:hover{border-color:#59637a;color:#8a93a3;}
 .mml-slot.hot{border-color:#6f86b8;background:#1b2230;color:#9db4dc;}
 .mml-slot.filled{border-style:solid;border-color:#2e3440;background:#12151b;cursor:default;
@@ -346,11 +402,11 @@ const CSS = `
   box-shadow:0 0 0 2000px rgba(6,8,12,.55);pointer-events:none;z-index:1;}
 .mml-dims.cut{color:#9fe3f5;}
 .mml-dims{position:absolute;right:3px;top:3px;padding:1px 4px;border-radius:4px;
-  background:rgba(8,10,14,.85);color:#dfe4ec;font-size:8px;line-height:1.2;
+  background:rgba(8,10,14,.85);color:#dfe4ec;font-size:calc(8px * var(--mml-fs, 1));line-height:1.2;
   font-family:ui-monospace,monospace;pointer-events:none;letter-spacing:0;
   text-shadow:0 1px 2px rgba(0,0,0,.9);z-index:2;}
 .mml-dims:empty{display:none;}
-.mml-lightdims{font-size:10px;color:#8a93a3;font-family:ui-monospace,monospace;}
+.mml-lightdims{font-size:calc(10px * var(--mml-fs, 1));color:#8a93a3;font-family:ui-monospace,monospace;}
 .mml-pic{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   display:block;cursor:zoom-in;background:#0d1015;}
 .mml-picbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;
@@ -362,10 +418,10 @@ const CSS = `
 .mml-picbar .mml-trimbtn,
 .mml-picbar .mml-drag,
 .mml-picbar .mml-x{flex:0 0 auto;}
-.mml-picbar .mml-trimbtn{font-size:12px;}
-.mml-tag{font-family:ui-monospace,monospace;font-size:9px;white-space:nowrap;}
+.mml-picbar .mml-trimbtn{font-size:calc(12px * var(--mml-fs, 1));}
+.mml-tag{font-family:ui-monospace,monospace;font-size:calc(9px * var(--mml-fs, 1));white-space:nowrap;}
 .mml-tag.pic{color:#e0a94c;} .mml-tag.vid{color:#4cc3e0;} .mml-tag.aud{color:#b48ce8;}
-.mml-x{cursor:pointer;color:#7a8393;font-size:11px;line-height:1;}
+.mml-x{cursor:pointer;color:#7a8393;font-size:calc(11px * var(--mml-fs, 1));line-height:1;}
 .mml-x:hover{color:#e05a5a;}
 
 .mml-row{display:flex;align-items:center;gap:6px;padding:0 6px;height:100%;
@@ -373,23 +429,23 @@ const CSS = `
 .mml-vthumb{width:60px;height:34px;min-width:60px;max-width:60px;border-radius:4px;
   object-fit:contain;background:#0d1015;flex-shrink:0;cursor:zoom-in;}
 .mml-meta{min-width:0;flex:1;}
-.mml-name{font-size:9px;color:#6b7484;overflow:hidden;text-overflow:ellipsis;
+.mml-name{font-size:calc(9px * var(--mml-fs, 1));color:#6b7484;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;}
 .mml-play{width:20px;height:20px;border-radius:50%;border:1px solid #3a4252;background:#20242d;
-  color:#c9cfda;font-size:9px;line-height:1;cursor:pointer;flex-shrink:0;
+  color:#c9cfda;font-size:calc(9px * var(--mml-fs, 1));line-height:1;cursor:pointer;flex-shrink:0;
   display:flex;align-items:center;justify-content:center;padding:0;}
 .mml-play:hover{border-color:#59637a;}
 .mml-bar{flex:1;height:3px;background:#2a2f3a;border-radius:2px;min-width:16px;
   cursor:pointer;position:relative;}
 .mml-bar i{position:absolute;left:0;top:0;bottom:0;background:#7d63b8;border-radius:2px;
   display:block;width:0;}
-.mml-time{font-size:9px;color:#6b7484;font-family:ui-monospace,monospace;flex-shrink:0;}
+.mml-time{font-size:calc(9px * var(--mml-fs, 1));color:#6b7484;font-family:ui-monospace,monospace;flex-shrink:0;}
 .mml-seg{display:inline-flex;border:1px solid #2e3440;border-radius:4px;overflow:hidden;
   flex-shrink:0;}
-.mml-seg button{background:none;border:0;color:#6b7484;font-size:9px;padding:1px 5px;
+.mml-seg button{background:none;border:0;color:#6b7484;font-size:calc(9px * var(--mml-fs, 1));padding:1px 5px;
   cursor:pointer;}
 .mml-seg button.on{background:#3a2f56;color:#e2d6f8;}
-.mml-power{cursor:pointer;color:#4d5563;font-size:11px;line-height:1;flex-shrink:0;
+.mml-power{cursor:pointer;color:#4d5563;font-size:calc(11px * var(--mml-fs, 1));line-height:1;flex-shrink:0;
   user-select:none;}
 .mml-power.on{color:#7ec87e;}
 .mml-power:hover{color:#a8e6a8;}
@@ -398,9 +454,9 @@ const CSS = `
 .mml-slot.filled.off:hover{opacity:.7;}
 .mml-segstack{display:flex;flex-direction:column;align-items:center;gap:2px;
   flex-shrink:0;}
-.mml-segtag{font-size:9px;}
+.mml-segtag{font-size:calc(9px * var(--mml-fs, 1));}
 .mml-trimok{border-color:#3e5240;color:#7ec87e;}
-.mml-trimbtn{cursor:pointer;color:#e0a94c;opacity:.65;font-size:15px;line-height:1;
+.mml-trimbtn{cursor:pointer;color:#e0a94c;opacity:.65;font-size:calc(15px * var(--mml-fs, 1));line-height:1;
   flex-shrink:0;user-select:none;}
 .mml-trimbtn:hover{opacity:1;}
 .mml-trimbtn.on{opacity:1;text-shadow:0 0 6px rgba(224,169,76,.55);}
@@ -411,7 +467,7 @@ const CSS = `
   flex-direction:column;overflow:hidden;font-family:system-ui,sans-serif;}
 .mml-tmhead{display:flex;align-items:center;gap:8px;padding:8px 12px;
   border-bottom:1px solid #2a2f3a;background:#1b1f27;}
-.mml-tmtitle{flex:1;min-width:0;font-size:12px;color:#dde2ea;overflow:hidden;
+.mml-tmtitle{flex:1;min-width:0;font-size:calc(12px * var(--mml-fs, 1));color:#dde2ea;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
 .mml-tmstage{position:relative;background:#000;line-height:0;}
 .mml-tmvideo{width:100%;max-height:340px;object-fit:contain;display:block;}
@@ -434,16 +490,16 @@ const CSS = `
 .mml-tmcorner.sw{left:-6px;bottom:-6px;cursor:nesw-resize;}
 .mml-tmcorner.se{right:-6px;bottom:-6px;cursor:nwse-resize;}
 .mml-tmcropbar{display:flex;align-items:center;gap:6px;}
-.mml-tmcropinfo{font-size:10px;color:#8a93a3;font-family:ui-monospace,monospace;
+.mml-tmcropinfo{font-size:calc(10px * var(--mml-fs, 1));color:#8a93a3;font-family:ui-monospace,monospace;
   white-space:nowrap;}
 .mml-tmcropinfo.changed{color:#4cc3e0;}
 .mml-tmaspect{background:#12151b;color:#c9cfda;border:1px solid #2e3440;
-  border-radius:6px;padding:2px 5px;font-size:11px;}
+  border-radius:6px;padding:2px 5px;font-size:calc(11px * var(--mml-fs, 1));}
 .mml-btn.on{background:#173642;border-color:#4cc3e0;color:#9fe3f5;}
 .mml-tmtimeline{position:relative;padding:8px 14px 4px;}
 .mml-tmwave{display:block;width:100%;height:46px;margin-bottom:2px;}
 .mml-tmruler{position:relative;height:16px;}
-.mml-tmtick{position:absolute;transform:translateX(-50%);font-size:9px;
+.mml-tmtick{position:absolute;transform:translateX(-50%);font-size:calc(9px * var(--mml-fs, 1));
   color:#6b7484;}
 .mml-tmtick::before{content:"";position:absolute;left:50%;top:-3px;width:1px;
   height:3px;background:#3a4252;}
@@ -461,49 +517,49 @@ const CSS = `
   border-left:4px solid transparent;border-right:4px solid transparent;
   border-top:5px solid #ffb84d;}
 .mml-tmnow{display:flex;gap:5px;align-items:center;height:14px;
-  font-size:9px;color:#8a6a33;text-transform:uppercase;letter-spacing:.06em;}
+  font-size:calc(9px * var(--mml-fs, 1));color:#8a6a33;text-transform:uppercase;letter-spacing:.06em;}
 .mml-tmplaytime{color:#ffb84d;font-family:ui-monospace,monospace;
-  text-transform:none;letter-spacing:0;font-size:10px;}
+  text-transform:none;letter-spacing:0;font-size:calc(10px * var(--mml-fs, 1));}
 .mml-tmfoot{display:flex;align-items:center;gap:5px;padding:8px 12px 0;
   flex-wrap:wrap;}
 .mml-tmfoot.act{padding:8px 12px 4px;border-top:1px solid #23272f;margin-top:8px;}
 .mml-tmgap{width:8px;}
 .mml-tmspace{flex:1;}
 .mml-tmnum{width:52px;background:#12151b;color:#dde2ea;border:1px solid #2e3440;
-  border-radius:6px;padding:3px 6px;font-size:11px;text-align:right;
+  border-radius:6px;padding:3px 6px;font-size:calc(11px * var(--mml-fs, 1));text-align:right;
   font-family:ui-monospace,monospace;}
 .mml-tmnum:focus{outline:none;border-color:#4cc3e0;}
-.mml-tmdash{color:#5c6472;font-size:11px;}
-.mml-tmoutside{font-size:10px;color:#f07070;white-space:nowrap;overflow:hidden;
+.mml-tmdash{color:#5c6472;font-size:calc(11px * var(--mml-fs, 1));}
+.mml-tmoutside{font-size:calc(10px * var(--mml-fs, 1));color:#f07070;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;text-transform:none;letter-spacing:0;}
 .mml-tmplayhead.out{background:#f07070;
   box-shadow:0 0 0 1px rgba(0,0,0,.65), 0 0 7px rgba(240,112,112,.85);}
 .mml-tmplayhead.out::before{border-top-color:#f07070;}
-.mml-tmnote{padding:2px 12px 6px;font-size:10px;color:#8a93a3;line-height:1.4;}
+.mml-tmnote{padding:2px 12px 6px;font-size:calc(10px * var(--mml-fs, 1));color:#8a93a3;line-height:1.4;}
 .mml-tmnote.bad{color:#f07070;}
 .mml-tmnote:empty{display:none;}
-.mml-tmkeys{padding:0 12px 10px;font-size:10px;color:#5c6472;}
-.mml-tmreadout{font-size:11px;color:#8a93a3;font-family:ui-monospace,monospace;}
+.mml-tmkeys{padding:0 12px 10px;font-size:calc(10px * var(--mml-fs, 1));color:#5c6472;}
+.mml-tmreadout{font-size:calc(11px * var(--mml-fs, 1));color:#8a93a3;font-family:ui-monospace,monospace;}
 .mml-tmreadout.bad{color:#f07070;}
 .mml-btn.primary{background:#1f4f7d;border-color:#3d7fbf;color:#dbeafe;}
 .mml-trimrow{display:flex;align-items:center;flex-wrap:nowrap;gap:3px;
   padding:0 5px;height:100%;overflow:hidden;}
-.mml-trimlbl{font-size:9px;text-transform:uppercase;letter-spacing:.07em;
+.mml-trimlbl{font-size:calc(9px * var(--mml-fs, 1));text-transform:uppercase;letter-spacing:.07em;
   color:#6b7484;}
 .mml-triminput{width:38px;background:#12151b;color:#dde2ea;
-  border:1px solid #2e3440;border-radius:5px;padding:2px 6px;font-size:11px;}
+  border:1px solid #2e3440;border-radius:5px;padding:2px 6px;font-size:calc(11px * var(--mml-fs, 1));}
 .mml-triminput:focus{outline:none;border-color:#4a5568;}
 .mml-trimdash{color:#6b7484;}
-.mml-trimof{font-size:10px;color:#6b7484;}
-.mml-trimerr{flex-basis:100%;font-size:10px;color:#f07070;}
+.mml-trimof{font-size:calc(10px * var(--mml-fs, 1));color:#6b7484;}
+.mml-trimerr{flex-basis:100%;font-size:calc(10px * var(--mml-fs, 1));color:#f07070;}
 .mml-trimerr:empty{display:none;}
-.mml-drag{cursor:grab;color:#4d5563;font-size:10px;user-select:none;flex-shrink:0;}
+.mml-drag{cursor:grab;color:#4d5563;font-size:calc(10px * var(--mml-fs, 1));user-select:none;flex-shrink:0;}
 
 .mml-order{flex:0 0 auto;background:#1a2230;border:1px solid #2b3a52;border-radius:6px;
   padding:4px 7px;height:42px;box-sizing:border-box;overflow:hidden;}
-.mml-order b{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.07em;
+.mml-order b{display:block;font-size:calc(9px * var(--mml-fs, 1));text-transform:uppercase;letter-spacing:.07em;
   color:#6f86b8;font-weight:500;margin-bottom:1px;}
-.mml-order div{font-family:ui-monospace,monospace;font-size:9px;color:#9db4dc;
+.mml-order div{font-family:ui-monospace,monospace;font-size:calc(9px * var(--mml-fs, 1));color:#9db4dc;
   line-height:1.35;overflow:hidden;}
 
 .mml-light{position:fixed;inset:0;z-index:10050;background:rgba(8,10,14,.75);
@@ -511,43 +567,43 @@ const CSS = `
 .mml-lightbox{max-width:80vw;max-height:80vh;background:#1e222a;border:1px solid #3a4252;
   border-radius:10px;overflow:hidden;padding:8px;}
 .mml-lightbox img,.mml-lightbox video{max-width:76vw;max-height:68vh;display:block;}
-.mml-lightcap{display:flex;align-items:center;gap:8px;padding-top:6px;font-size:11px;
+.mml-lightcap{display:flex;align-items:center;gap:8px;padding-top:6px;font-size:calc(11px * var(--mml-fs, 1));
   color:#8a93a3;}
 .mml-helpbtn{margin-left:5px;width:13px;height:13px;line-height:1;padding:0;
   border-radius:50%;border:1px solid #3a4252;background:#20242d;color:#8a93a3;
-  font-size:9px;cursor:pointer;font-family:system-ui,sans-serif;}
+  font-size:calc(9px * var(--mml-fs, 1));cursor:pointer;font-family:system-ui,sans-serif;}
 .mml-helpbtn:hover{border-color:#6f86b8;color:#c9cfda;}
 .mml-help{position:fixed;z-index:10055;width:370px;max-height:min(560px,88vh);
   background:#1e222a;border:1px solid #3a4252;border-radius:9px;overflow:hidden;
   display:flex;flex-direction:column;box-shadow:0 14px 36px rgba(0,0,0,.55);
   font-family:system-ui,sans-serif;}
 .mml-helphead{display:flex;align-items:center;padding:7px 10px;background:#232833;
-  border-bottom:1px solid #2a2f3a;font-size:11px;text-transform:uppercase;
+  border-bottom:1px solid #2a2f3a;font-size:calc(11px * var(--mml-fs, 1));text-transform:uppercase;
   letter-spacing:.07em;color:#8a93a3;}
 .mml-helphead button{margin-left:auto;background:none;border:0;color:#6b7484;
-  font-size:13px;cursor:pointer;line-height:1;}
+  font-size:calc(13px * var(--mml-fs, 1));cursor:pointer;line-height:1;}
 .mml-helphead button:hover{color:#fff;}
 .mml-helpbody{overflow:auto;padding:9px 10px;}
-.mml-helpbody p{margin:0;font-size:11px;line-height:1.55;color:#aab2c0;}
+.mml-helpbody p{margin:0;font-size:calc(11px * var(--mml-fs, 1));line-height:1.55;color:#aab2c0;}
 .mml-helprow{display:flex;gap:8px;margin-bottom:9px;}
-.mml-helpmode{flex:0 0 auto;font-family:ui-monospace,monospace;font-size:10px;
+.mml-helpmode{flex:0 0 auto;font-family:ui-monospace,monospace;font-size:calc(10px * var(--mml-fs, 1));
   border-radius:9px;padding:1px 7px;height:16px;line-height:14px;
   border:1px solid #363d4a;background:#20242d;color:#8a93a3;}
 .mml-helpmode.paired{border-color:#7d63b8;background:#3a2f56;color:#e2d6f8;}
 .mml-helpmode.alone{border-color:#2c6f81;background:#1d3a44;color:#a5e2f0;}
-.mml-helpsub{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+.mml-helpsub{font-size:calc(10px * var(--mml-fs, 1));text-transform:uppercase;letter-spacing:.07em;
   color:#6b7484;margin:12px 0 6px;padding-top:8px;border-top:1px solid #2a2f3a;}
 .mml-wirerow{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-bottom:6px;}
-.mml-wirerow code{font-family:ui-monospace,monospace;font-size:10px;color:#9db4dc;
+.mml-wirerow code{font-family:ui-monospace,monospace;font-size:calc(10px * var(--mml-fs, 1));color:#9db4dc;
   background:#181c24;border-radius:4px;padding:1px 5px;}
-.mml-arrow{color:#5c6472;font-size:10px;}
-.mml-tags{font-family:ui-monospace,monospace;font-size:9px;color:#6b7484;
+.mml-arrow{color:#5c6472;font-size:calc(10px * var(--mml-fs, 1));}
+.mml-tags{font-family:ui-monospace,monospace;font-size:calc(9px * var(--mml-fs, 1));color:#6b7484;
   flex-basis:100%;padding-left:2px;}
 .mml-helpnote{margin-top:10px !important;padding-top:9px;
   border-top:1px solid #2a2f3a;color:#8a93a3 !important;}
 .mml-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:10060;
   background:#2b3140;color:#fff;border:1px solid #4a5568;border-radius:8px;
-  padding:8px 16px;font-size:13px;font-family:system-ui,sans-serif;}
+  padding:8px 16px;font-size:calc(13px * var(--mml-fs, 1));font-family:system-ui,sans-serif;}
 `;
 
 let cssDone = false;
@@ -644,7 +700,11 @@ class TrimModal {
   }
 
   apply() {
-    const it = this.item;
+    // Resolve to whichever object the panel currently holds: a sync can have
+    // replaced it since the modal opened, and writing to the old one would
+    // drop the edit on the floor without any error.
+    const it = this.panel.live?.(this.item) || this.item;
+    this.item = it;
     const eps = 0.05;
     if (this.isStill) {
       delete it.trim;
@@ -1001,13 +1061,60 @@ class TrimModal {
             .map(([v, label]) => el("option",
               { value: String(v), selected: this.resize === v }, label)))
       : null;
+    // Only for stills: writing a resized copy of a video would mean
+    // re-encoding it, which is a different job entirely.
+    this.bakeBtn = this.isStill
+      ? el("button", { class: "mml-btn mml-sm",
+          title: "Write a resized copy into ComfyUI's input folder and use " +
+                 "that instead. Your original file is left alone.",
+          onclick: () => this.bake() }, "\u2b07 Write copy")
+      : null;
     return el("span", { class: "mml-tmcropbar" },
       this.rotBtn, this.mirrorBtn, this.cropBtn, this.aspectEl,
-      this.sizeEl, this.cropInfo);
+      this.sizeEl, this.bakeBtn, this.cropInfo);
   }
 
   /** Mirror only the picture: the crop overlay stays in screen space, so a
    *  rect drawn here means the same region the backend will cut. */
+  /** Write the current size/crop/rotation out as a new file and point the
+   *  item at it. The edits then live in the pixels, so they're cleared. */
+  async bake() {
+    if (!this.resize) {
+      this.modalSay("Choose a size first \u2014 \u201cfull\u201d has nothing " +
+        "to write.", true);
+      return;
+    }
+    this.modalSay("Writing a resized copy\u2026");
+    try {
+      const resp = await api.fetchApi("/minimax_h3/bake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          file: this.item.file, resize: this.resize, crop: this.crop,
+          rotate: this.rotate, mirror: this.mirror,
+        }),
+      });
+      const info = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(info.error || `failed (${resp.status})`);
+
+      const it = this.item;
+      it.file = info.file;
+      it.name = info.name;
+      it.width = info.width;
+      it.height = info.height;
+      delete it.crop; delete it.mirror; delete it.rotate; delete it.resize;
+      this.crop = null; this.mirror = false; this.rotate = 0; this.resize = 0;
+
+      this.panel.say(`Wrote ${info.width}\u00d7${info.height} copy of ` +
+        `${info.was?.[0]}\u00d7${info.was?.[1]} \u2014 this reference now uses ` +
+        "the smaller file. The original is untouched.");
+      this.close();
+      this.panel.commit();
+    } catch (e) {
+      this.modalSay(`Couldn't write the copy: ${e.message}`, true);
+    }
+  }
+
   /** Source size, and what will actually be sent when they differ. */
   showSize() {
     if (!this.cropInfo) return;
@@ -1594,6 +1701,18 @@ async function uploadFile(file) {
   return data;
 }
 
+/** Give an item a stable id.
+ *
+ *  Items are re-parsed from JSON whenever a panel syncs, which creates fresh
+ *  objects. Anything that identified an item by object identity — a tile's
+ *  click handler, say — then silently stopped matching, so Remove appeared to
+ *  do nothing or hit the wrong tile. An id survives the round trip. */
+let uidSeq = 0;
+function withUid(item) {
+  if (item && !item.uid) item.uid = `m${Date.now().toString(36)}${uidSeq++}`;
+  return item;
+}
+
 /* --------------------------------------------------------------- panel */
 
 class LoaderPanel {
@@ -1613,6 +1732,13 @@ class LoaderPanel {
     injectCSS();
 
     this.root = el("div", { class: "mml-panel" });
+    this.root.addEventListener("mousedown", (e) => {
+      if (!e.target.closest(".mml-scalewrap")) this.closeScaleMenu();
+    });
+    // Dragging a slider must not be treated as a click elsewhere.
+    this.root.addEventListener("click", (e) => {
+      if (e.target.closest(".mml-scalemenu")) e.stopPropagation();
+    });
     this.picker = el("input", {
       type: "file", multiple: true, style: { display: "none" },
       accept: "image/*,video/*,audio/*",
@@ -1701,30 +1827,115 @@ class LoaderPanel {
   read() {
     try {
       const v = JSON.parse(this.widget()?.value || "[]");
-      return Array.isArray(v) ? v : [];
+      return Array.isArray(v) ? v.map(withUid) : [];
     } catch (e) { return []; }
   }
 
   commit() {
+    this.items.forEach(withUid);
     const w = this.widget();
     if (w) w.value = JSON.stringify(this.items);
     try { this.node.setDirtyCanvas?.(true, true); } catch (e) { /* Vue redraws itself */ }
-    this.render();
-    // A modal and the on-node panel can be open at once; keep both current.
-    (this.node._mmlPanels || []).forEach((p) => {
-      if (p !== this) { p.items = p.read(); p.render(); }
+    // Re-read into EVERY panel, this one included, so they all hold objects
+    // parsed from the same JSON. Previously only the other panels re-read,
+    // which left each panel's tiles closing over a different generation of
+    // objects — the cause of Remove hitting the wrong tile after an edit.
+    const panels = this.node._mmlPanels || [this];
+    panels.forEach((p) => {
+      p.items = p.read();
+      p.render();
     });
+    if (!panels.includes(this)) { this.items = this.read(); this.render(); }
   }
 
   count(kind) { return this.items.filter((i) => i.kind === kind).length; }
 
-  /** Step to the next node size preset. */
-  cycleSize() {
-    const now = currentPreset(this.node);
-    const i = SIZE_PRESETS.findIndex(([name]) => name === now);
-    const [, factor] = SIZE_PRESETS[(i + 1) % SIZE_PRESETS.length];
-    applyNodeSize(this.node, factor);
-    this.render();
+  /** Node and text scale. Dragging does NOT apply: resizing the node moves
+   *  this popover with it, which pulls the slider out from under the cursor.
+   *  Set both, then Apply. */
+  scaleControl() {
+    const prefs = this.scalePrefs || (this.scalePrefs = loadScalePrefs());
+    const pending = { node: prefs.node, text: prefs.text };
+    const pct = (v) => `${Math.round(v * 100)}%`;
+    const inputs = {};
+    const outs = {};
+
+    const dirty = () => applyBtn.classList.toggle("primary",
+      pending.node !== prefs.node || pending.text !== prefs.text);
+
+    const maxFor = (key) => key === "text" ? TEXT_SCALE_MAX : SCALE_MAX;
+
+    const slider = (key, label) => {
+      // The number is typeable: a slider alone can't hit an exact value.
+      const out = el("input", { type: "number", class: "mml-scaleval",
+        min: String(Math.round(SCALE_MIN * 100)),
+        max: String(Math.round(maxFor(key) * 100)), step: "5",
+        value: String(Math.round(pending[key] * 100)),
+        onchange: (e) => {
+          pending[key] = clampScale(Number(e.target.value) / 100, maxFor(key));
+          const shown = Math.round(pending[key] * 100);
+          e.target.value = String(shown);      // snap back if out of range
+          input.value = String(shown);
+          dirty();
+        },
+        onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } });
+      const input = el("input", { type: "range", class: "mml-scalerange",
+        min: String(Math.round(SCALE_MIN * 100)),
+        max: String(Math.round(maxFor(key) * 100)), step: "5",
+        value: String(Math.round(pending[key] * 100)),
+        oninput: (e) => {
+          pending[key] = clampScale(Number(e.target.value) / 100, maxFor(key));
+          out.value = String(Math.round(pending[key] * 100));
+          dirty();
+        } });
+      inputs[key] = input;
+      outs[key] = out;
+      return el("label", { class: "mml-scalerow" },
+        el("span", { class: "mml-scalelabel" }, label), input, out,
+        el("span", { class: "mml-scalepct" }, "%"));
+    };
+
+    const commit = (n, t) => {
+      prefs.node = n; prefs.text = t;
+      pending.node = n; pending.text = t;
+      inputs.node.value = String(Math.round(n * 100));
+      inputs.text.value = String(Math.round(t * 100));
+      outs.node.value = String(Math.round(n * 100));
+      outs.text.value = String(Math.round(t * 100));
+      saveScalePrefs(prefs);
+      applyTextScale(this, t);
+      applyNodeSize(this.node, n);       // last: this moves the popover
+      applyBtn.classList.remove("primary");
+    };
+
+    const applyBtn = el("button", { class: "mml-btn mml-sm",
+      onclick: (e) => { e.stopPropagation(); commit(pending.node, pending.text); } },
+      "Apply");
+
+    const menu = el("div", { class: "mml-scalemenu" },
+      slider("node", "Node size"),
+      slider("text", "Text size"),
+      el("div", { class: "mml-scalefoot" },
+        el("span", {}, "Remembered for new nodes"),
+        el("button", { class: "mml-btn mml-sm",
+          onclick: (e) => { e.stopPropagation(); commit(1, 1); } }, "Reset"),
+        applyBtn));
+
+    const btn = el("button", { class: "mml-btn mml-sm",
+      title: "Node and text size",
+      onclick: (e) => {
+        e.stopPropagation();
+        const open = menu.classList.toggle("on");
+        btn.classList.toggle("on", open);
+      } }, "\u2921 Size");
+    this._scaleMenu = menu;
+    this._scaleBtn = btn;
+    return el("span", { class: "mml-scalewrap" }, btn, menu);
+  }
+
+  closeScaleMenu() {
+    this._scaleMenu?.classList.remove("on");
+    this._scaleBtn?.classList.remove("on");
   }
 
 
@@ -1819,7 +2030,8 @@ class LoaderPanel {
   }
 
   toggle(item) {
-    item.enabled = item.enabled === false;
+    const it = this.live(item);
+    it.enabled = it.enabled === false;
     this.commit();
   }
 
@@ -1834,8 +2046,17 @@ class LoaderPanel {
   }
 
   remove(item) {
-    this.items = this.items.filter((i) => i !== item);
+    const uid = item?.uid;
+    this.items = uid
+      ? this.items.filter((i) => i.uid !== uid)
+      : this.items.filter((i) => i !== item);
     this.commit();
+  }
+
+  /** Current object for an item, whichever generation the caller holds. */
+  live(item) {
+    if (!item) return null;
+    return (item.uid && this.items.find((i) => i.uid === item.uid)) || item;
   }
 
   move(from, to) {
@@ -1893,6 +2114,17 @@ class LoaderPanel {
   }
 
   render() {
+    try {
+      this.drawPanel();
+    } catch (err) {
+      // A partial redraw looks like "the buttons stopped working", because
+      // the old tiles stay on screen holding stale handlers.
+      console.error("[Fantastic H3 Media Loader] render failed:", err);
+    }
+  }
+
+  drawPanel() {
+    this.closeScaleMenu?.();
     this.players.forEach((p) => p.stop());
     this.players = [];
 
@@ -1909,10 +2141,7 @@ class LoaderPanel {
       el("span", { style: { fontSize: "10px", color: "#6b7484" } },
         this.busy ? `uploading ${this.busy}\u2026` : "or drop files on any slot"),
       el("span", { class: "mml-topspace" }),
-      el("button", { class: "mml-btn mml-sm",
-        title: "Node size \u2014 click to step through L, XL and XXL",
-        onclick: () => this.cycleSize() },
-        `size ${currentPreset(this.node)}`),
+      this.scaleControl(),
 
       this.items.length
         ? el("button", { class: "mml-btn mml-sm",
@@ -2026,40 +2255,25 @@ class LoaderPanel {
         (() => {
           // Badge and img are SIBLINGS in the slot: .mml-pic is absolutely
           // positioned against the slot, so wrapping it breaks its sizing.
+          //
+          // Declaration order matters here: everything the crop overlay needs
+          // (turn, quarter, img) must exist BEFORE the overlay is built. They
+          // used to be declared after it, which threw a temporal-dead-zone
+          // ReferenceError for any cropped picture and aborted the whole
+          // render — leaving stale tiles whose buttons no longer worked.
           const [ow, oh] = outSize(it);
-          const badge = el("span", { class: "mml-dims" + (it.crop ? " cut" : "") },
-            dimsLabel(ow, oh));
-          // The file is untouched, so the thumbnail shows the whole picture
-          // with everything outside the crop dimmed — you can see what was
-          // dropped, not just what's left.
-          let marquee = null;
-          if (it.crop) {
-            const box = el("div", { class: "mml-cropbox" },
-              el("div", { class: "mml-cropmark", style: {
-                left: `${(it.crop.x ?? 0) * 100}%`,
-                top: `${(it.crop.y ?? 0) * 100}%`,
-                width: `${(it.crop.w ?? 1) * 100}%`,
-                height: `${(it.crop.h ?? 1) * 100}%`,
-              } }));
-            marquee = el("div", { class: "mml-cropfit",
-              style: (it.mirror || turn)
-                ? { transform: `${it.mirror ? "scaleX(-1) " : ""}rotate(${turn}deg)` }
-                : {} }, box);
-            // Fit against the post-rotation shape: a quarter turn swaps the
-            // sides the drawn image occupies.
-            requestAnimationFrame(() => fitToMedia(
-              img, box,
-              quarter ? it.height : it.width,
-              quarter ? it.width : it.height));
-            if (quarter) requestAnimationFrame(() => fitTurned(img));
-          }
           const turn = ((parseInt(it.rotate, 10) || 0) % 360 + 360) % 360;
           const quarter = turn === 90 || turn === 270;
+          const flip = (it.mirror || turn)
+            ? { transform: `${it.mirror ? "scaleX(-1) " : ""}rotate(${turn}deg)` }
+            : {};
+
+          const badge = el("span", { class: "mml-dims" + (it.crop ? " cut" : "") },
+            dimsLabel(ow, oh));
+
           const img = el("img", { class: "mml-pic" + (quarter ? " turned" : ""),
             src: viewURL(it.file),
-            style: (it.mirror || turn)
-              ? { transform: `${it.mirror ? "scaleX(-1) " : ""}rotate(${turn}deg)` }
-              : {},
+            style: flip,
             title: dimsTitle(it.name, it.width, it.height)
               + (turn ? `\nrotated ${turn}\u00b0` : "")
               + (it.crop ? `\ncropped to ${ow}\u00d7${oh}` : "")
@@ -2076,6 +2290,29 @@ class LoaderPanel {
               }
             },
             onclick: () => lightbox(it, tags.get(it) || "") });
+
+          // The file is untouched, so the thumbnail shows the whole picture
+          // with everything outside the crop dimmed — you can see what was
+          // dropped, not just what's left.
+          let marquee = null;
+          if (it.crop) {
+            const box = el("div", { class: "mml-cropbox" },
+              el("div", { class: "mml-cropmark", style: {
+                left: `${(it.crop.x ?? 0) * 100}%`,
+                top: `${(it.crop.y ?? 0) * 100}%`,
+                width: `${(it.crop.w ?? 1) * 100}%`,
+                height: `${(it.crop.h ?? 1) * 100}%`,
+              } }));
+            marquee = el("div", { class: "mml-cropfit", style: flip }, box);
+            // Fit against the post-rotation shape: a quarter turn swaps the
+            // sides the drawn image occupies.
+            requestAnimationFrame(() => fitToMedia(
+              img, box,
+              quarter ? it.height : it.width,
+              quarter ? it.width : it.height));
+          }
+          if (quarter) requestAnimationFrame(() => fitTurned(img));
+
           return [img, marquee, badge];
         })(),
         el("div", { class: "mml-picbar" },
