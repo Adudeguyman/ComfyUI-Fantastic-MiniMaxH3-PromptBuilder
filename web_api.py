@@ -333,10 +333,12 @@ if PromptServer is not None and web is not None:
             cap = 0
         if not annotated:
             return web.json_response({"error": "no file given"}, status=400)
-        if cap <= 0:
+        has_edit = bool(body.get("crop") or body.get("mirror")
+                        or int(body.get("rotate") or 0) % 360)
+        if cap <= 0 and not has_edit:
             return web.json_response(
-                {"error": "choose a size first \u2014 \u201cfull\u201d has "
-                          "nothing to write"}, status=400)
+                {"error": "nothing to write: set a size, crop, rotation or "
+                          "mirror first"}, status=400)
 
         try:
             from PIL import Image, ImageOps
@@ -362,7 +364,10 @@ if PromptServer is not None and web is not None:
                 if (x0, y0, x1, y1) != (0, 0, W, H):
                     img = img.crop((x0, y0, x1, y1))
             w, h = img.size
-            if max(w, h) > cap:
+            # cap == 0 means "no size cap" — a crop-only copy. Without the
+            # cap > 0 test the scale factor became 0 and every copy came out
+            # as the 16px floor.
+            if cap > 0 and max(w, h) > cap:
                 k = cap / float(max(w, h))
                 img = img.resize((max(16, int(round(w * k))),
                                   max(16, int(round(h * k)))), Image.LANCZOS)

@@ -275,6 +275,17 @@ export function applyNodeSize(node, factor) {
  *  zoom scaled the layout too, so slots grew and fewer fitted; what people
  *  want here is bigger type in the same boxes. Set on the document so the
  *  trim editor and other overlays (which live on <body>) inherit it. */
+/** Size an overlay in step with the node scale, so the editors grow too. */
+export function scaleOverlay(node, boxes) {
+  let f = 1;
+  try { f = clampScale(loadScalePrefs().node); } catch (e) { f = 1; }
+  for (const [el2, w, h] of boxes) {
+    if (!el2?.style) continue;
+    el2.style.width = `min(${Math.round(w * f)}px, 96vw)`;
+    if (h) el2.style.height = `min(${Math.round(h * f)}px, 92vh)`;
+  }
+}
+
 export function applyTextScale(panel, factor) {
   const f = clampScale(factor, TEXT_SCALE_MAX);
   try {
@@ -638,6 +649,11 @@ class TrimModal {
     injectCSS();
     this.build();
     document.body.append(this.overlay);
+    // Overlays live on <body>, so they don't inherit the node's size; scale
+    // them to match, or a 200% node still opens a 640px editor.
+    scaleOverlay(this.panel?.node, [
+      [this.overlay.querySelector(".mml-tmmodal"), 640, 0],
+    ]);
     window.addEventListener("keydown", this.onKey = (e) => this.key(e));
   }
 
@@ -1079,9 +1095,12 @@ class TrimModal {
   /** Write the current size/crop/rotation out as a new file and point the
    *  item at it. The edits then live in the pixels, so they're cleared. */
   async bake() {
-    if (!this.resize) {
-      this.modalSay("Choose a size first \u2014 \u201cfull\u201d has nothing " +
-        "to write.", true);
+    // A copy is worth writing whenever it would differ from the source —
+    // a crop, rotation or mirror counts, not just a size cap.
+    const changes = !!(this.resize || this.crop || this.mirror || this.rotate);
+    if (!changes) {
+      this.modalSay("Nothing to write yet \u2014 set a size, crop, rotation " +
+        "or mirror first, then this saves a copy with those baked in.", true);
       return;
     }
     this.modalSay("Writing a resized copy\u2026");
@@ -2559,6 +2578,7 @@ export function openLoaderModal(node) {
       el("div", { class: "mml-modalbody" }, panel.root)));
   window.addEventListener("keydown", esc);
   document.body.append(overlay);
+  scaleOverlay(node, [[overlay.querySelector(".mml-modal"), 1140, 780]]);
   return panel;
 }
 
