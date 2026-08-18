@@ -147,6 +147,16 @@ def _prompt_path(entry_id):
     return slug, os.path.join(_prompt_dir(), slug + ".json")
 
 
+def _write_json(path, record):
+    """Write via a sibling tmp file: a crash mid-write must not corrupt the
+    file, because the readers treat corrupt JSON as "no entry" and the prompt
+    or preset silently vanishes from its list."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(record, fh, indent=1)
+    os.replace(tmp, path)
+
+
 def _read_prompt(path):
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -484,8 +494,7 @@ if PromptServer is not None and web is not None:
         if not isinstance(items, list):
             return web.json_response({"error": "items must be a list"}, status=400)
         try:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump({"version": 1, "items": items}, fh, indent=1)
+            _write_json(path, {"version": 1, "items": items})
         except Exception as exc:
             return web.json_response({"error": f"save failed: {exc}"}, status=500)
         return web.json_response({"name": name, "count": len(items)})
@@ -517,6 +526,31 @@ if PromptServer is not None and web is not None:
                 kept.append(item)
             elif target:
                 missing.append(item.get("name") or target)
+        # Presets saved before dimensions/duration were stored carry items
+        # with no width/height — the panel then shows thumbnails with no
+        # aspect data and leans on per-image learners to fill the gaps.
+        # Heal the data here instead: probe never raises, and items that
+        # already carry their metadata cost nothing.
+        for item in kept:
+            kind = item.get("kind")
+            needs = (not item.get("width") or not item.get("height")
+                     or (kind in ("video", "audio") and not item.get("duration"))
+                     or (kind == "video" and "has_audio" not in item))
+            if needs:
+                info = media_io.probe(item["file"])
+                if not item.get("width") and info.get("width"):
+                    item["width"] = info["width"]
+                if not item.get("height") and info.get("height"):
+                    item["height"] = info["height"]
+                if not item.get("duration") and info.get("duration"):
+                    item["duration"] = info["duration"]
+                if kind == "video" and "has_audio" not in item:
+                    item["has_audio"] = bool(info.get("has_audio"))
+            # nodes.py treats a missing audio_mode as "paired"; make that
+            # explicit so every client-side count agrees with what is sent.
+            if kind == "video" and item.get("has_audio") \
+                    and not item.get("audio_mode"):
+                item["audio_mode"] = "paired"
         return web.json_response({"name": name, "items": kept, "missing": missing})
 
     @routes.post("/minimax_h3/presets/delete")
@@ -638,6 +672,14 @@ if PromptServer is not None and web is not None:
                                      status=400)
         if not isinstance(body.get("state"), dict):
             return web.json_response({"error": "missing editor state"}, status=400)
+        # A save that believes it is creating a prompt must not quietly land
+        # on an existing file: two names can slug to the same id, and a
+        # colliding save used to overwrite the older prompt without a word.
+        # The client resends without the flag once the user confirms.
+        if body.get("expect_new") and os.path.exists(path):
+            return web.json_response(
+                {"error": f'a prompt named "{name or entry_id}" already exists',
+                 "exists": True}, status=409)
         previous = _read_prompt(path) or {}
         record = {
             "version": 1,
@@ -652,13 +694,15 @@ if PromptServer is not None and web is not None:
             "updated": time.time(),
         }
         try:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(record, fh, indent=1)
+            _write_json(path, record)
         except Exception as exc:
             return web.json_response({"error": f"save failed: {exc}"}, status=500)
-        # Renaming writes a new file; drop the old one.
+        # Renaming writes a new file; drop the old one — but ONLY when the
+        # client says this save IS a rename. Deleting on every name change
+        # ate the loaded prompt whenever someone saved a variant under a new
+        # name, which read as "the library is losing prompts".
         old = _slug(body.get("rename_from"))
-        if old and old != entry_id:
+        if body.get("rename") and old and old != entry_id:
             try:
                 os.remove(os.path.join(_prompt_dir(), old + ".json"))
             except Exception:
@@ -694,8 +738,7 @@ if PromptServer is not None and web is not None:
             data["category"] = (body.get("category") or "").strip()
         data["updated"] = time.time()
         try:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=1)
+            _write_json(path, data)
         except Exception as exc:
             return web.json_response({"error": f"update failed: {exc}"}, status=500)
         return web.json_response({"id": entry_id, "favorite": data["favorite"],
@@ -726,8 +769,7 @@ if PromptServer is not None and web is not None:
             data["category"] = target
             data["updated"] = time.time()
             try:
-                with open(path, "w", encoding="utf-8") as fh:
-                    json.dump(data, fh, indent=1)
+                _write_json(path, data)
                 changed += 1
             except Exception:
                 pass

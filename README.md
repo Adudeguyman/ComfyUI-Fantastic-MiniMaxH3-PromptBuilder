@@ -84,7 +84,8 @@ Highlights:
   node* changes what the node sends; ✕, Cancel and Escape discard. The ⚙ menu
   turns off click-outside-to-close, or the warning itself, if you'd rather work
   another way.
-- **Reference tags read as chips** in the text, colour-coded by kind, with the
+- **Reference tags read as chips** in the text, colour-coded by kind (⚙ has a
+  toggle for plain text fields, which keeps the hover previews), with the
   thumbnail on hover — no side panel opening and shifting the layout. Hovering
   a `<Subject N>` shows the first picture its definition cites, the media it
   references, its speaker ID, and any `<Audio N>` attached to it — including
@@ -271,11 +272,20 @@ In the library you can:
 - **Delete** entries you don't need.
 
 Each row shows the mode it was written for, its category, how long ago it was
-saved, and the opening of the prompt. Saving again under the same name updates
-the entry; saving under a new name after loading one renames it.
+saved, and the opening of the prompt.
+
+Saving again under the same name updates the entry in place. Saving under a
+**different** name after loading one is your call, made explicitly: **Save as
+new** (the default, also what Enter does) keeps the original and adds a second
+prompt, while **Rename "…"** carries the loaded prompt over to the new name and
+keeps no second copy. Earlier versions treated every changed name as a rename,
+which silently deleted the prompt you'd loaded — that is what made saved
+prompts go missing. If a new save collides with a name that already exists,
+nothing is overwritten until you confirm it inline.
 
 Prompts live as individual JSON files in your ComfyUI user directory, so they
-survive updates and are easy to back up or share.
+survive updates and are easy to back up or share. Writes go through a temporary
+file, so a crash mid-save can't corrupt an entry.
 
 ---
 
@@ -565,7 +575,13 @@ cite.*
 
 The Media Loader can save your current set of references — which files, their
 order, and each video's audio setting — under a name, and reload it later from
-the dropdown.
+the preset picker.
+
+The picker is the pack's own dropdown rather than a native `<select>`: the
+native one sat inside the node's widget area, which the ComfyUI frontend
+repositions on every canvas redraw, and any touch collapses an open native
+picker — the "dropdown flashes and closes" bug. The pack's popover can only be
+closed by you: pick an entry, click elsewhere, or press Escape.
 
 Presets point at files you already uploaded rather than copying them, so saving
 and loading is instant. If you later delete one of those files, loading the
@@ -815,6 +831,16 @@ whatever it was when the workflow was loaded.
 ---
 
 ## Troubleshooting
+
+### The media loader looks empty after opening a workflow
+
+Fixed in 1.5.7. Earlier versions could overwrite the loaded media when the
+node's hidden state widget wasn't readable yet — which happens while a
+workflow is still loading, or when a node is detached as you switch tabs. The
+panel treats an unreadable widget as "not ready" now and keeps what it has,
+rather than reading it as "no media".
+
+Your files are never touched by this; only the node's list of them was.
 
 ### The node appears but has no panel or buttons
 

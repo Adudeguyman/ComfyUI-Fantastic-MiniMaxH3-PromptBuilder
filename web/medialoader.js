@@ -21,8 +21,9 @@ export const CLIP = { min: 2, max: 15, totalPerType: 15 };
 export function audioCount(all) {
   return (all || []).filter(isOn).reduce((n, it) => {
     if (it.kind === "audio") return n + 1;
+    // nodes.py defaults a missing audio_mode to "paired" — count the same
     if (it.kind === "video" && it.has_audio &&
-        (it.audio_mode || "off") !== "off") return n + 1;
+        (it.audio_mode || "paired") !== "off") return n + 1;
     return n;
   }, 0);
 }
@@ -44,7 +45,7 @@ export function durations(all) {
   return {
     video: sum(on.filter((i) => i.kind === "video")),
     audio: sum(on.filter((i) => i.kind === "audio" ||
-      (i.kind === "video" && i.has_audio && (i.audio_mode || "off") !== "off"))),
+      (i.kind === "video" && i.has_audio && (i.audio_mode || "paired") !== "off"))),
   };
 }
 
@@ -325,10 +326,6 @@ const CSS = `
 .mml-presetlbl{flex:0 0 auto;white-space:nowrap;
   font-size:calc(10px * var(--mml-fs, 1));text-transform:uppercase;letter-spacing:.07em;
   color:#6b7484;}
-.mml-preset{flex:1 1 0;min-width:0;max-width:100%;background:#12151b;color:#c9cfda;
-  border:1px solid #2e3440;border-radius:6px;padding:3px 6px;font-size:calc(11px * var(--mml-fs, 1));
-  font-family:system-ui,sans-serif;}
-.mml-preset:focus{outline:none;border-color:#4a5568;}
 .mml-btn.mml-sm{padding:3px 9px;font-size:calc(10px * var(--mml-fs, 1));}
 .mml-btn.mml-danger{border-color:#7a3a3a;color:#f0a0a0;}
 .mml-btn.mml-danger:hover{background:#3a2020;}
@@ -615,6 +612,29 @@ const CSS = `
 .mml-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:10060;
   background:#2b3140;color:#fff;border:1px solid #4a5568;border-radius:8px;
   padding:8px 16px;font-size:calc(13px * var(--mml-fs, 1));font-family:system-ui,sans-serif;}
+/* Owned preset popover — replaces the native <select>, which the frontend's
+   per-draw widget management kept collapsing. Last in the sheet on purpose:
+   later rules of equal specificity win (see the chip-CSS incident). */
+.mml-presetwrap{position:relative;flex:1 1 0;min-width:0;display:flex;}
+.mml-presetbtn{flex:1 1 0;min-width:0;text-align:left;background:#12151b;color:#c9cfda;
+  border:1px solid #2e3440;border-radius:6px;padding:3px 22px 3px 7px;
+  font-size:calc(11px * var(--mml-fs, 1));font-family:system-ui,sans-serif;cursor:pointer;
+  position:relative;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mml-presetbtn:after{content:"\\25be";position:absolute;right:7px;top:50%;
+  transform:translateY(-50%);color:#6b7484;}
+.mml-presetbtn:hover,.mml-presetbtn.on{border-color:#4a5568;}
+.mml-presetbtn:focus{outline:none;border-color:#4a5568;}
+.mml-presetmenu{display:none;position:absolute;left:0;right:0;top:100%;margin-top:4px;
+  background:#161a21;border:1px solid #2e3440;border-radius:6px;z-index:40;
+  max-height:220px;overflow:auto;box-shadow:0 12px 32px rgba(0,0,0,.5);}
+.mml-presetmenu.on{display:block;}
+.mml-presetitem{padding:4px 8px;font-size:calc(11px * var(--mml-fs, 1));color:#c9cfda;
+  font-family:system-ui,sans-serif;cursor:pointer;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;}
+.mml-presetitem:hover{background:#232a35;}
+.mml-presetitem.on{color:#dde2ea;background:#1d2430;}
+.mml-presetempty{padding:4px 8px;font-size:calc(10px * var(--mml-fs, 1));color:#6b7484;
+  font-family:system-ui,sans-serif;}
 `;
 
 let cssDone = false;
@@ -1570,7 +1590,9 @@ function fitTurned(img) {
   place();
   img.addEventListener("load", place);
   if (typeof ResizeObserver === "function") {
+    if (img._mmlTurnRO) img._mmlTurnRO.disconnect();
     const ro = new ResizeObserver(place);
+    img._mmlTurnRO = ro;
     ro.observe(img.parentElement || img);
   }
 }
@@ -1589,9 +1611,13 @@ function fitToMedia(mediaEl, boxEl, natW, natH) {
   mediaEl.addEventListener("load", place);
   mediaEl.addEventListener("loadedmetadata", place);
   if (typeof ResizeObserver === "function") {
+    // One observer per element, ever: render() runs often and an observer
+    // left behind on each pass piles up until the browser stalls.
+    if (mediaEl._mmlFitRO) mediaEl._mmlFitRO.disconnect();
     const ro = new ResizeObserver(place);
+    mediaEl._mmlFitRO = ro;
     ro.observe(mediaEl);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); if (mediaEl._mmlFitRO === ro) mediaEl._mmlFitRO = null; };
   }
   return () => {};
 }
@@ -1753,6 +1779,7 @@ class LoaderPanel {
     this.root = el("div", { class: "mml-panel" });
     this.root.addEventListener("mousedown", (e) => {
       if (!e.target.closest(".mml-scalewrap")) this.closeScaleMenu();
+      if (!e.target.closest(".mml-presetwrap")) this.closePresetMenu();
     });
     // Dragging a slider must not be treated as a click elsewhere.
     this.root.addEventListener("click", (e) => {
@@ -1844,27 +1871,70 @@ class LoaderPanel {
   widget() { return this.node.widgets?.find((w) => w.name === "media_state"); }
 
   read() {
+    return this.readOrNull() || [];
+  }
+
+  /** Parse the widget, or null when it can't be trusted.
+   *
+   *  The difference matters: an absent widget (workflow still loading, node
+   *  detached while switching tabs) is NOT an empty library. Treating it as
+   *  one wiped whatever was loaded and left the panel dead until the node was
+   *  recreated. */
+  readOrNull() {
+    const w = this.widget();
+    if (!w || typeof w.value !== "string") return null;
+    // An empty value is "not deserialised yet", not "no media": the widget
+    // exists before the workflow's saved value lands on it.
+    const raw = w.value.trim();
+    if (!raw) return null;
     try {
-      const v = JSON.parse(this.widget()?.value || "[]");
-      return Array.isArray(v) ? v.map(withUid) : [];
-    } catch (e) { return []; }
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v.map(withUid) : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   commit() {
-    this.items.forEach(withUid);
-    const w = this.widget();
-    if (w) w.value = JSON.stringify(this.items);
-    try { this.node.setDirtyCanvas?.(true, true); } catch (e) { /* Vue redraws itself */ }
-    // Re-read into EVERY panel, this one included, so they all hold objects
-    // parsed from the same JSON. Previously only the other panels re-read,
-    // which left each panel's tiles closing over a different generation of
-    // objects — the cause of Remove hitting the wrong tile after an edit.
-    const panels = this.node._mmlPanels || [this];
-    panels.forEach((p) => {
-      p.items = p.read();
-      p.render();
-    });
-    if (!panels.includes(this)) { this.items = this.read(); this.render(); }
+    // Re-entrancy guard: render() builds tiles whose handlers can call back
+    // into commit() (an <img> learning its size, say). Without this the pair
+    // can bounce indefinitely and lock the browser up.
+    if (this._committing) { this._commitAgain = true; return; }
+    this._committing = true;
+    try {
+      this.items.forEach(withUid);
+      const w = this.widget();
+      if (!w) {
+        // Nothing to write through yet. Keep what's in memory and just draw.
+        this.render();
+        return;
+      }
+      w.value = JSON.stringify(this.items);
+      try { this.node.setDirtyCanvas?.(true, true); }
+      catch (e) { /* Vue redraws itself */ }
+
+      // Re-read into every panel so they all hold the same generation of
+      // objects — but only when the read actually succeeded.
+      const panels = (this.node._mmlPanels || []).includes(this)
+        ? this.node._mmlPanels
+        : [...(this.node._mmlPanels || []), this];
+      panels.forEach((p) => {
+        const fresh = p.readOrNull();
+        if (fresh) p.items = fresh;
+        p.render();
+      });
+    } finally {
+      this._committing = false;
+    }
+    // One deferred pass only. If a handler keeps asking, stop rather than
+    // trading commits with it forever.
+    if (this._commitAgain) {
+      this._commitAgain = false;
+      if (!this._commitDeferred) {
+        this._commitDeferred = true;
+        try { this.commit(); } finally { this._commitDeferred = false; }
+      }
+    }
   }
 
   count(kind) { return this.items.filter((i) => i.kind === kind).length; }
@@ -1955,6 +2025,46 @@ class LoaderPanel {
   closeScaleMenu() {
     this._scaleMenu?.classList.remove("on");
     this._scaleBtn?.classList.remove("on");
+  }
+
+  /** Preset picker the pack owns. This was a native <select>, and it was the
+   *  only one in the pack living inside the canvas DOM widget — the frontend
+   *  repositions that element on every canvas draw, and any touch collapses
+   *  an open native picker, which read as "the dropdown flashes and closes".
+   *  A popover we own can only be closed by us. */
+  presetPicker() {
+    const menu = el("div", { class: "mml-presetmenu" },
+      this.presets.length
+        ? this.presets.map((n) => el("div", {
+            class: "mml-presetitem" + (n === this.presetName ? " on" : ""),
+            title: `Load "${n}"`,
+            onmousedown: (e) => e.stopPropagation(),
+            onclick: (e) => { e.stopPropagation(); this.loadPreset(n); } }, n))
+        : el("div", { class: "mml-presetempty" },
+            "No presets saved \u2014 use Save."));
+    const btn = el("button", { class: "mml-presetbtn",
+      title: "Load a saved reference set",
+      onkeydown: (e) => {
+        if (e.key === "Escape" && menu.classList.contains("on")) {
+          this.closePresetMenu();
+          e.stopPropagation();     // closing the menu must not close the modal
+        }
+      },
+      onclick: (e) => {
+        e.stopPropagation();
+        const open = menu.classList.toggle("on");
+        btn.classList.toggle("on", open);
+      } },
+      this.presetName
+        || (this.presets.length ? "load preset\u2026" : "no presets saved"));
+    this._presetMenu = menu;
+    this._presetBtn = btn;
+    return el("div", { class: "mml-presetwrap" }, btn, menu);
+  }
+
+  closePresetMenu() {
+    this._presetMenu?.classList.remove("on");
+    this._presetBtn?.classList.remove("on");
   }
 
 
@@ -2144,6 +2254,7 @@ class LoaderPanel {
 
   drawPanel() {
     this.closeScaleMenu?.();
+    this.closePresetMenu?.();
     this.players.forEach((p) => p.stop());
     this.players = [];
 
@@ -2175,13 +2286,7 @@ class LoaderPanel {
         title: "Audio clips in play, including split video soundtracks" },
         `\u266a ${audioCount(this.items)}/${MAX.audio}`)));
 
-    const select = el("select", { class: "mml-preset",
-      title: "Load a saved reference set",
-      onchange: (e) => { const v = e.target.value; if (v) this.loadPreset(v); } },
-      el("option", { value: "" }, this.presets.length
-        ? "load preset\u2026" : "no presets saved"),
-      this.presets.map((n) =>
-        el("option", { value: n, selected: n === this.presetName }, n)));
+    const select = this.presetPicker();
     if (this.unloadPrompt) {
       kids.push(el("div", { class: "mml-presetrow" },
         el("span", { class: "mml-presetwarn" },
@@ -2300,12 +2405,24 @@ class LoaderPanel {
             onload: () => {
               // Items from before dimensions were stored learn them here.
               if (!it.width && img.naturalWidth) {
-                it.width = img.naturalWidth;
-                it.height = img.naturalHeight;
-                const [nw, nh] = outSize(it);
+                // Write to the item's LIVE incarnation: commits re-parse the
+                // state, so `it` may be a dead object from a replaced render.
+                const target = this.live(it);
+                if (!target.width) {
+                  target.width = img.naturalWidth;
+                  target.height = img.naturalHeight;
+                }
+                const [nw, nh] = outSize(target);
                 badge.textContent = dimsLabel(nw, nh);
-                img.title = dimsTitle(it.name, it.width, it.height);
-                this.commit();
+                img.title = dimsTitle(target.name, target.width, target.height);
+                // One commit per batch of loads, not one per image: a preset
+                // full of dimension-less pictures used to fire a commit →
+                // re-render → fresh onloads → commit… burst that collapsed
+                // any open popover and churned the panel.
+                if (this.items.includes(target)) {
+                  clearTimeout(this._dimsCommit);
+                  this._dimsCommit = setTimeout(() => this.commit(), 120);
+                }
               }
             },
             onclick: () => lightbox(it, tags.get(it) || "") });
@@ -2362,6 +2479,24 @@ class LoaderPanel {
           onloadedmetadata: (e) => {
             const t = it.trim;
             if (t && t.start) try { e.target.currentTime = t.start; } catch (_) {}
+            // Same healing as pictures: old presets stored videos without
+            // dimensions or duration. Learn them from the element, once,
+            // against the live item, with one debounced commit per batch.
+            const v = e.target;
+            const target = this.live(it);
+            if ((!target.width && v.videoWidth) ||
+                (!target.duration && v.duration)) {
+              if (!target.width && v.videoWidth) {
+                target.width = v.videoWidth;
+                target.height = v.videoHeight;
+              }
+              if (!target.duration && Number.isFinite(v.duration))
+                target.duration = Math.round(v.duration * 100) / 100;
+              if (this.items.includes(target)) {
+                clearTimeout(this._dimsCommit);
+                this._dimsCommit = setTimeout(() => this.commit(), 120);
+              }
+            }
           }, src: viewURL(it.file), muted: true,
           preload: "metadata",
           onmouseenter: (e) => e.target.play().catch(() => {}),
