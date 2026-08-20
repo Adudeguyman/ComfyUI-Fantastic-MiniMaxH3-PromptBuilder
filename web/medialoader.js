@@ -294,6 +294,50 @@ export function applyTextScale(panel, factor) {
   } catch (e) { /* nothing to do */ }
 }
 
+/** Re-apply the stored node and text scale to this node's panel.
+ *
+ *  Must run at node creation AND on workflow load. Without the second call
+ *  the node returned at its serialised size while the panel inside it was
+ *  rebuilt from the base dimensions with --mml-fs unset — a correct-sized
+ *  node containing a 100% workspace. The prefs were saving fine; nothing
+ *  was reading them back at startup.
+ *
+ *  `force` sets an exact node size, which is right for a fresh node. On
+ *  load we only ever grow, so a node the user dragged larger keeps its
+ *  size — the workflow's geometry wins over the starting-point pref. */
+export function applyStoredScale(node, { force = false } = {}) {
+  let sp;
+  try { sp = loadScalePrefs(); } catch (e) { sp = { node: 1, text: 1 }; }
+  applyTextScale(node._mmlPanel, sp.text);
+  if (force) { applyNodeSize(node, sp.node); return; }
+
+  const f = clampScale(sp.node);
+  const w = Math.round(NODE_W * f);
+  const h = Math.round(PANEL_H * f);
+  try {
+    const widget = node._mmlWidget
+      || node.widgets?.find((x) => x.name === "mml_panel");
+    if (widget) {
+      widget.computedHeight = h;
+      widget.computeSize = () => [w, h];
+      const elx = widget.element || widget.inputEl;
+      if (elx?.style) {
+        elx.style.height = `${h}px`;
+        elx.style.minHeight = `${h}px`;
+      }
+    }
+    // The panel's CSS pins height to the base 476px, so the inline style is
+    // what actually makes the workspace grow.
+    if (node._mmlPanel?.root?.style) node._mmlPanel.root.style.height = `${h}px`;
+    const min = node.computeSize?.();
+    node.size[0] = Math.max(w, node.size[0] || 0);
+    node.size[1] = Math.max(min?.[1] || 0, h, node.size[1] || 0);
+    node.setDirtyCanvas?.(true, true);
+  } catch (e) {
+    /* Vue owns layout in Nodes 2.0; the panel's own CSS keeps it usable. */
+  }
+}
+
 const CSS = `
 .mml-panel{font-family:system-ui,sans-serif;color:#d7dbe2;font-size:calc(12px * var(--mml-fs, 1));
   background:#191c22;border:1px solid #2a2f3a;border-radius:8px;padding:8px;
@@ -313,6 +357,17 @@ const CSS = `
 .mml-modalhead button{margin-left:auto;background:none;border:0;color:#8a93a3;
   font-size:calc(17px * var(--mml-fs, 1));cursor:pointer;}
 .mml-modalhead button:hover{color:#fff;}
+/* Draft-bound media modal: same panel, different target, so it has to look
+   different. Teal matches the editor's draft chrome. */
+.mml-modal.draft{border-color:#3fb2a8;box-shadow:0 24px 64px rgba(0,0,0,.55),
+  0 0 0 1px #3fb2a8;}
+.mml-modal.draft .mml-modalhead{background:#15242a;border-bottom-color:#3fb2a8;}
+.mml-draftbadge{background:#3fb2a8;color:#06211f;font-weight:700;
+  border-radius:5px;padding:1px 7px;letter-spacing:.06em;margin-right:2px;
+  font-size:calc(10px * var(--mml-fs, 1));font-family:system-ui,sans-serif;}
+.mml-draftnote{background:#15242a;border-bottom:1px solid #24343a;
+  color:#bfe0dc;padding:6px 13px;line-height:1.45;
+  font-size:calc(11px * var(--mml-fs, 1));font-family:system-ui,sans-serif;}
 .mml-modalbody{flex:1;min-height:0;padding:8px;overflow:auto;}
 .mml-panel.drop{border-color:#6f86b8;background:#1d2330;}
 .mml-top{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0;}
@@ -1761,9 +1816,16 @@ function withUid(item) {
 /* --------------------------------------------------------------- panel */
 
 class LoaderPanel {
-  constructor(node) {
+  /** @param opts.store - { read(), write(items) }. Given one, the panel
+   *  reads and writes THAT instead of the node's media_state widget, and
+   *  stays out of the node's panel registry so Live commits never reach it
+   *  and its own commits never reach Live. The panel itself stays
+   *  single-buffered — only its target moves. */
+  constructor(node, opts = {}) {
     this.node = node;
-    (node._mmlPanels = node._mmlPanels || []).push(this);
+    this.store = opts.store || null;
+    this.storeLabel = opts.storeLabel || "";
+    if (!this.store) (node._mmlPanels = node._mmlPanels || []).push(this);
     this.items = this.read();
     this.busy = 0;
     this.presets = [];
@@ -1881,6 +1943,10 @@ class LoaderPanel {
    *  one wiped whatever was loaded and left the panel dead until the node was
    *  recreated. */
   readOrNull() {
+    if (this.store) {
+      const v = this.store.read();
+      return Array.isArray(v) ? v.map(withUid) : null;
+    }
     const w = this.widget();
     if (!w || typeof w.value !== "string") return null;
     // An empty value is "not deserialised yet", not "no media": the widget
@@ -1903,6 +1969,13 @@ class LoaderPanel {
     this._committing = true;
     try {
       this.items.forEach(withUid);
+      if (this.store) {
+        // No fanout: this panel isn't in the node's registry, and the node's
+        // own media must not move because a draft was edited.
+        this.store.write(this.items);
+        this.render();
+        return;
+      }
       const w = this.widget();
       if (!w) {
         // Nothing to write through yet. Keep what's in memory and just draw.
@@ -2694,22 +2767,31 @@ export function addSplitter(node) {
   return sp;
 }
 
-export function openLoaderModal(node) {
+/** @param onClose - run after the modal closes, so a caller that renders
+ *  from this node's media (the prompt builder) can pick up the changes. */
+export function openLoaderModal(node, opts = {}) {
   injectCSS();
-  const panel = new LoaderPanel(node);
+  const { onClose, store, storeLabel, draft = false, note = "" } = opts;
+  const panel = new LoaderPanel(node, { store, storeLabel });
   const close = () => {
     node._mmlPanels = (node._mmlPanels || []).filter((p) => p !== panel);
     panel.players.forEach((p) => p.stop());
     overlay.remove();
     window.removeEventListener("keydown", esc);
     node._mmlPanel?.render();
+    try { onClose?.(); } catch (e) {
+      console.error("[Fantastic H3 Media Loader] close callback failed:", e);
+    }
   };
   const esc = (e) => { if (e.key === "Escape") close(); };
   const overlay = el("div", { class: "mml-overlay",
     onmousedown: (e) => { if (e.target === overlay) close(); } },
-    el("div", { class: "mml-modal" },
-      el("div", { class: "mml-modalhead" }, "Fantastic H3 Media Loader",
+    el("div", { class: "mml-modal" + (draft ? " draft" : "") },
+      el("div", { class: "mml-modalhead" },
+        draft ? el("span", { class: "mml-draftbadge" }, "DRAFT") : null,
+        storeLabel || "Fantastic H3 Media Loader",
         el("button", { title: "Close", onclick: close }, "\u2715")),
+      note ? el("div", { class: "mml-draftnote" }, note) : null,
       el("div", { class: "mml-modalbody" }, panel.root)));
   window.addEventListener("keydown", esc);
   document.body.append(overlay);
@@ -2745,7 +2827,8 @@ app.registerExtension({
         const widget = this.addDOMWidget("mml_panel", "div", this._mmlPanel.root,
           { serialize: false });
         this._mmlWidget = widget;
-        applyCanvasSizing(this, widget, NODE_W, PANEL_H);
+        // A fresh node starts at the size you actually work at.
+        applyStoredScale(this, { force: true });
         return r;
       } catch (err) {
         // Without this the node still registers but none of the UI
@@ -2779,8 +2862,10 @@ app.registerExtension({
           this._mmlPanel.items = this._mmlPanel.read();
           this._mmlPanel.render();
         }
-        applyCanvasSizing(this, this.widgets?.find((w) => w.name === "mml_panel"),
-          NODE_W, PANEL_H);
+        // Re-apply the saved scale: the panel was just rebuilt from base
+        // dimensions, so without this the workspace comes back at 100%
+        // inside a correctly-sized node.
+        applyStoredScale(this);
       }, 0);
       return r;
     };

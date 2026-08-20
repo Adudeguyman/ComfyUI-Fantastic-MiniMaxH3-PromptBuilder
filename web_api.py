@@ -50,8 +50,9 @@ def _target_dir():
     return path
 
 
-def _preset_dir():
-    """Presets live with the user's data so they survive extension updates."""
+def _storage_base():
+    """The user-data root every store hangs off: user dir, else output dir,
+    else the pack dir (dev fallback — wiped on update, better than nothing)."""
     base = None
     if folder_paths is not None:
         for getter in ("get_user_directory", "get_output_directory"):
@@ -62,6 +63,12 @@ def _preset_dir():
                     break
                 except Exception:
                     continue
+    return base
+
+
+def _preset_dir():
+    """Presets live with the user's data so they survive extension updates."""
+    base = _storage_base()
     if not base:
         base = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(base, "minimax_h3_presets")
@@ -70,16 +77,7 @@ def _preset_dir():
 
 
 def _prompt_dir():
-    base = None
-    if folder_paths is not None:
-        for getter in ("get_user_directory", "get_output_directory"):
-            fn = getattr(folder_paths, getter, None)
-            if callable(fn):
-                try:
-                    base = fn()
-                    break
-                except Exception:
-                    continue
+    base = _storage_base()
     if not base:
         base = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(base, "minimax_h3_prompts")
@@ -145,6 +143,38 @@ def _prompt_path(entry_id):
     if not slug:
         return None, None
     return slug, os.path.join(_prompt_dir(), slug + ".json")
+
+
+def _draft_dir():
+    """Scratch drafts live beside the user libraries but in their own
+    directory, so no listing route can ever surface them: the library and
+    preset routes simply never look here. One JSON file holds every draft,
+    keyed by a node-minted id — thousands of tiny files was the failure mode
+    this avoids."""
+    base = _storage_base()
+    if not base:
+        base = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "minimax_h3_drafts")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _drafts_file():
+    return os.path.join(_draft_dir(), "drafts.json")
+
+
+DRAFT_CAP = 25          # LRU by updated stamp; abandoned drafts fall off
+
+
+def _read_drafts():
+    try:
+        with open(_drafts_file(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and isinstance(data.get("drafts"), dict):
+            return data
+    except Exception:
+        pass
+    return {"contract": 1, "drafts": {}}
 
 
 def _write_json(path, record):
@@ -567,6 +597,80 @@ if PromptServer is not None and web is not None:
         except Exception as exc:
             return web.json_response({"error": f"delete failed: {exc}"}, status=500)
         return web.json_response({"deleted": name})
+
+    # -- drafts -----------------------------------------------------------
+    # Scratch space for the editor's Draft mode. One file, a keyed map, an
+    # LRU cap. The client never sends the whole map — each save replaces one
+    # key server-side — so two tabs writing different drafts can't clobber
+    # each other by holding stale copies.
+
+    @routes.post("/minimax_h3/drafts/load")
+    async def draft_load(request):
+        body = await request.json()
+        draft_id = str(body.get("id") or "").strip()
+        if not draft_id:
+            return web.json_response({"error": "missing draft id"}, status=400)
+        entry = _read_drafts()["drafts"].get(draft_id)
+        return web.json_response({"exists": entry is not None,
+                                  "draft": entry})
+
+    @routes.post("/minimax_h3/drafts/save")
+    async def draft_save(request):
+        body = await request.json()
+        draft_id = str(body.get("id") or "").strip()
+        if not draft_id:
+            return web.json_response({"error": "missing draft id"}, status=400)
+        payload = body.get("draft")
+        data = _read_drafts()
+        if not isinstance(payload, dict):
+            # An empty payload is a clear — the no-empty-drafts rule lives
+            # client-side, but honour the shape here too.
+            data["drafts"].pop(draft_id, None)
+        else:
+            payload["updated"] = time.time()
+            data["drafts"][draft_id] = payload
+            if len(data["drafts"]) > DRAFT_CAP:
+                keep = sorted(data["drafts"].items(),
+                              key=lambda kv: kv[1].get("updated", 0),
+                              reverse=True)[:DRAFT_CAP]
+                data["drafts"] = dict(keep)
+        try:
+            _write_json(_drafts_file(), data)
+        except Exception as exc:
+            return web.json_response({"error": f"save failed: {exc}"},
+                                     status=500)
+        return web.json_response({"saved": bool(isinstance(payload, dict)),
+                                  "count": len(data["drafts"])})
+
+    @routes.get("/minimax_h3/drafts")
+    async def draft_count(request):
+        return web.json_response({"count": len(_read_drafts()["drafts"])})
+
+    @routes.post("/minimax_h3/drafts/clear_all")
+    async def draft_clear_all(request):
+        data = _read_drafts()
+        n = len(data["drafts"])
+        data["drafts"] = {}
+        try:
+            _write_json(_drafts_file(), data)
+        except Exception as exc:
+            return web.json_response({"error": f"clear failed: {exc}"},
+                                     status=500)
+        return web.json_response({"cleared": n, "count": 0})
+
+    @routes.post("/minimax_h3/drafts/clear")
+    async def draft_clear(request):
+        body = await request.json()
+        draft_id = str(body.get("id") or "").strip()
+        data = _read_drafts()
+        existed = data["drafts"].pop(draft_id, None) is not None
+        try:
+            _write_json(_drafts_file(), data)
+        except Exception as exc:
+            return web.json_response({"error": f"clear failed: {exc}"},
+                                     status=500)
+        return web.json_response({"cleared": existed,
+                                  "count": len(data["drafts"])})
 
     # -- prompt library ---------------------------------------------------
 
