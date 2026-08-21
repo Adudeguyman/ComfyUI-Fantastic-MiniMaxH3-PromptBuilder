@@ -1,5 +1,6 @@
 """HTTP routes backing the Media Loader's drag-drop and file picker."""
 
+import hashlib
 import json
 import os
 import re
@@ -164,6 +165,48 @@ def _drafts_file():
 
 
 DRAFT_CAP = 25          # LRU by updated stamp; abandoned drafts fall off
+
+# Fields that describe the reference set itself. Anything outside this list —
+# uid (per-session identity), learned dimensions, cached probe data — must not
+# make two otherwise-identical sets look different.
+def _canonical_items(items):
+    """The comparable shape of a media set, order preserved because
+    reference numbering is positional.
+
+    Compares EFFECTIVE values, not literal ones. A field that is absent and
+    a field that holds its default describe the same reference set, and the
+    two turn up on opposite sides constantly: presets/load backfills
+    audio_mode and probe data into items whose stored form never had them,
+    so a freshly loaded preset would otherwise never match the file it came
+    from — every load reported itself as edited."""
+    out = []
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        row = {"kind": it.get("kind"), "file": it.get("file"),
+               "name": it.get("name") or it.get("file")}
+        # Absent means on; only "enabled": false switches an item off.
+        row["enabled"] = it.get("enabled") is not False
+        # nodes.py reads a missing audio_mode as "paired"; so must this.
+        if it.get("kind") == "video":
+            row["audio_mode"] = it.get("audio_mode") or "paired"
+        # Empty edits are the same as no edits.
+        for k in ("trim", "crop", "size"):
+            v = it.get(k)
+            if v:
+                row[k] = v
+        for k in ("rotate", "mirror"):
+            v = it.get(k)
+            if v:
+                row[k] = v
+        out.append(row)
+    return out
+
+
+def _set_digest(items):
+    blob = json.dumps(_canonical_items(items), sort_keys=True,
+                      separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def _read_drafts():
@@ -502,14 +545,41 @@ if PromptServer is not None and web is not None:
 
     @routes.get("/minimax_h3/presets")
     async def list_presets(request):
-        names = []
+        """Presets with their categories.
+
+        Categories are a VIEW over one flat namespace, never folders: a
+        prompt links to a preset by name and the filename is the name, so
+        two presets sharing a name in different categories would collide on
+        disk and make the link ambiguous. Same rule the prompt library
+        follows."""
+        entries, categories = [], set()
+        base = _preset_dir()
         try:
-            for fn in os.listdir(_preset_dir()):
-                if fn.endswith(".json"):
-                    names.append(fn[:-5])
+            names = [f[:-5] for f in os.listdir(base) if f.endswith(".json")]
         except Exception:
-            pass
-        return web.json_response({"presets": sorted(names, key=str.lower)})
+            names = []
+        for n in sorted(names, key=str.lower):
+            data = _read_prompt(os.path.join(base, n + ".json")) or {}
+            cat = (data.get("category") or "").strip()
+            if cat:
+                categories.add(cat)
+            items = [i for i in (data.get("items") or []) if isinstance(i, dict)]
+            entries.append({
+                "name": n,
+                "category": cat,
+                "count": len(items),
+                "counts": {k: sum(1 for i in items
+                                  if i.get("kind") == k
+                                  and i.get("enabled") is not False)
+                           for k in ("picture", "video", "audio")},
+            })
+        return web.json_response({
+            "presets": entries,
+            # Kept so an older client (or a stale browser cache) still gets
+            # a usable list rather than an empty picker.
+            "names": [e["name"] for e in entries],
+            "categories": sorted(categories, key=str.lower),
+        })
 
     @routes.post("/minimax_h3/presets/save")
     async def save_preset(request):
@@ -523,11 +593,100 @@ if PromptServer is not None and web is not None:
         items = body.get("items")
         if not isinstance(items, list):
             return web.json_response({"error": "items must be a list"}, status=400)
+        previous = _read_prompt(path) or {}
+        # Absent category means "leave it alone" — re-saving a set from the
+        # loader shouldn't silently strip the category someone filed it under.
+        category = body.get("category")
+        if category is None:
+            category = previous.get("category") or ""
+        record = {"version": 1, "items": items,
+                  "category": str(category).strip()}
         try:
-            _write_json(path, {"version": 1, "items": items})
+            _write_json(path, record)
         except Exception as exc:
             return web.json_response({"error": f"save failed: {exc}"}, status=500)
-        return web.json_response({"name": name, "count": len(items)})
+        return web.json_response({"name": name, "count": len(items),
+                                  "category": record["category"]})
+
+    @routes.post("/minimax_h3/presets/meta")
+    async def preset_meta(request):
+        """Set one preset's category without touching its items.
+
+        Without this the only way to file an existing preset is to load it
+        and save it again, which is a lot of ceremony for a label — and it
+        rewrites the items, so it can't be done safely from a picker."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name, path = _preset_path(body.get("name"))
+        if not path or not os.path.exists(path):
+            return web.json_response({"error": "preset not found"}, status=404)
+        data = _read_prompt(path)
+        if not data:
+            return web.json_response({"error": "preset unreadable"}, status=500)
+        data["category"] = str(body.get("category") or "").strip()
+        try:
+            _write_json(path, data)
+        except Exception as exc:
+            return web.json_response({"error": f"save failed: {exc}"}, status=500)
+        return web.json_response({"name": name, "category": data["category"]})
+
+    @routes.post("/minimax_h3/presets/category")
+    async def preset_category(request):
+        """Rename a category across every preset, or clear it (to = "")."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        src_cat = (body.get("from") or "").strip()
+        dst_cat = (body.get("to") or "").strip()
+        if not src_cat:
+            return web.json_response({"error": "missing category"}, status=400)
+        base = _preset_dir()
+        changed = 0
+        try:
+            names = [f[:-5] for f in os.listdir(base) if f.endswith(".json")]
+        except Exception:
+            names = []
+        for n in names:
+            p = os.path.join(base, n + ".json")
+            data = _read_prompt(p)
+            if not data or (data.get("category") or "").strip() != src_cat:
+                continue
+            data["category"] = dst_cat
+            try:
+                _write_json(p, data)
+                changed += 1
+            except Exception:
+                pass
+        return web.json_response({"changed": changed})
+
+    @routes.post("/minimax_h3/presets/match")
+    async def match_preset(request):
+        """Which saved preset, if any, IS this media set?
+
+        Asked server-side on purpose: the client would otherwise need its own
+        digest implementation that has to agree with this one forever, and
+        that kind of cross-language parity is where silent drift lives."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        items = body.get("items")
+        if not isinstance(items, list):
+            return web.json_response({"error": "items must be a list"}, status=400)
+        want = _set_digest(items)
+        base = _preset_dir()
+        try:
+            names = [f[:-5] for f in os.listdir(base) if f.endswith(".json")]
+        except Exception:
+            names = []
+        for n in sorted(names, key=str.lower):
+            data = _read_prompt(os.path.join(base, n + ".json")) or {}
+            if _set_digest(data.get("items")) == want:
+                return web.json_response({"name": n, "digest": want})
+        return web.json_response({"name": None, "digest": want})
 
     @routes.post("/minimax_h3/presets/load")
     async def load_preset(request):
@@ -581,7 +740,10 @@ if PromptServer is not None and web is not None:
             if kind == "video" and item.get("has_audio") \
                     and not item.get("audio_mode"):
                 item["audio_mode"] = "paired"
-        return web.json_response({"name": name, "items": kept, "missing": missing})
+        return web.json_response({"name": name, "items": kept,
+                                 "missing": missing,
+                                 "category": (data.get("category") or "").strip(),
+                                 "digest": _set_digest(items)})
 
     @routes.post("/minimax_h3/presets/delete")
     async def delete_preset(request):
@@ -734,6 +896,27 @@ if PromptServer is not None and web is not None:
     async def list_prompts(request):
         entries, categories = [], set()
         directory = _prompt_dir()
+        # Counts for linked presets, read fresh rather than stored on the
+        # prompt: a preset edited after linking would otherwise show the
+        # composition it had at link time, which is exactly the kind of
+        # quietly-stale number this pack keeps getting bitten by. Each
+        # distinct preset is read once per request.
+        preset_counts = {}
+
+        def counts_for(preset_name):
+            if preset_name in preset_counts:
+                return preset_counts[preset_name]
+            out = None
+            data = _read_prompt(os.path.join(_preset_dir(),
+                                             _slug(preset_name) + ".json"))
+            if data:
+                items = [i for i in (data.get("items") or [])
+                         if isinstance(i, dict) and i.get("enabled") is not False]
+                out = {k: sum(1 for i in items if i.get("kind") == k)
+                       for k in ("picture", "video", "audio")}
+            preset_counts[preset_name] = out
+            return out
+
         try:
             names = [f for f in os.listdir(directory) if f.endswith(".json")]
         except Exception:
@@ -754,6 +937,9 @@ if PromptServer is not None and web is not None:
                 "mode": data.get("mode") or "",
                 "updated": data.get("updated") or 0,
                 "refs": data.get("refs") or 0,
+                "media_preset": data.get("media_preset") or None,
+                "media_counts": (counts_for(data["media_preset"])
+                                 if data.get("media_preset") else None),
                 "preview": " ".join(text.split())[:150],
             })
         entries.sort(key=lambda e: (not e["favorite"], -float(e["updated"] or 0),
@@ -792,6 +978,12 @@ if PromptServer is not None and web is not None:
             "favorite": bool(body.get("favorite", previous.get("favorite"))),
             "mode": body.get("mode") or "",
             "refs": body.get("refs") or 0,
+            # Optional link to a media preset, plus the digest of that preset
+            # as it stood when linked. Reference tags are positional, so a
+            # preset edited afterwards can silently retarget <Picture 3> —
+            # the digest is what lets the load path say so.
+            "media_preset": (body.get("media_preset") or "").strip() or None,
+            "media_digest": (body.get("media_digest") or "").strip() or None,
             "prompt": body.get("prompt") or "",
             "state": body["state"],
             "created": previous.get("created") or time.time(),

@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Prompt Writing Guide — combined reference</title>
+<style>
+:root{
+  --bg:#eeeff1; --surface:#fff; --surface-2:#f6f7f8;
+  --ink:#15171b; --ink-2:#4b515a; --ink-3:#79818d;
+  --rule:#d8dbe0; --rule-2:#e7e9ec;
+  --accent:#0d6b82; --accent-b:#9a2a5d;
+  --accent-soft:rgba(13,107,130,.10);
+  --mono-bg:#13161b; --mono-ink:#e4e8ee; --mono-dim:#8b95a3;
+  --mark:#ffd84d; --mark-ink:#2a2200;
+  --shadow:0 1px 2px rgba(16,20,28,.06),0 8px 24px -16px rgba(16,20,28,.28);
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  --cond:'Archivo Narrow','Roboto Condensed','Liberation Sans Narrow','Arial Narrow',system-ui,sans-serif;
+  --mono:ui-monospace,'SFMono-Regular','DejaVu Sans Mono','Liberation Mono',Menlo,Consolas,monospace;
+  --topbar:60px;
+}
+html[data-theme=dark]{
+  --bg:#0f1115; --surface:#161a20; --surface-2:#1b1f26;
+  --ink:#e8ebef; --ink-2:#aab1bc; --ink-3:#79818d;
+  --rule:#272c34; --rule-2:#1f242b;
+  --accent:#54bcd2; --accent-b:#e987b1;
+  --accent-soft:rgba(84,188,210,.13);
+  --mono-bg:#0a0c10; --mono-ink:#dfe4ea;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 28px -18px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);
+  font:400 16px/1.68 var(--sans);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:2px}
+a:hover{text-decoration-color:currentColor}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+
+/* ---------- signature: color-bar spine ---------- */
+.spine{position:fixed;left:0;top:0;bottom:0;width:9px;z-index:60;
+  background:linear-gradient(to bottom,
+    #9aa0a6 0 14.28%,#c8bd3a 14.28% 28.56%,#3aa6b8 28.56% 42.84%,
+    #4a9e63 42.84% 57.12%,#a8508a 57.12% 71.4%,#b8484a 71.4% 85.68%,#3d5ea8 85.68% 100%);
+}
+.spine i{position:absolute;left:0;right:0;bottom:0;display:block;
+  background:color-mix(in srgb,var(--bg) 58%,transparent);
+  backdrop-filter:grayscale(.9);-webkit-backdrop-filter:grayscale(.9);
+  transition:height .12s linear}
+
+/* ---------- top bar ---------- */
+.topbar{position:sticky;top:0;z-index:50;height:var(--topbar);
+  display:flex;align-items:center;gap:16px;padding:0 20px 0 24px;
+  background:color-mix(in srgb,var(--surface) 88%,transparent);
+  backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px);
+  border-bottom:1px solid var(--rule)}
+.brand{display:flex;align-items:baseline;gap:10px;min-width:0;text-decoration:none;color:inherit}
+.brand:hover b{color:var(--accent)}
+.brand b{font:600 15px/1 var(--sans);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand span{font:500 12px/1 var(--cond);letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+.searchbox{position:relative;flex:1 1 200px;min-width:0;max-width:520px;margin-left:auto}
+.searchbox svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--ink-3)}
+#q{width:100%;height:36px;padding:0 76px 0 34px;border:1px solid var(--rule);
+  background:var(--bg);color:var(--ink);border-radius:3px;
+  font:400 14px/1 var(--sans)}
+#q::placeholder{color:var(--ink-3)}
+#q::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}
+.searchbox.typing .kbd{display:none}
+#q:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.kbd{position:absolute;right:9px;top:50%;transform:translateY(-50%);display:flex;gap:4px;pointer-events:none}
+.kbd b{font:500 11px/16px var(--mono);color:var(--ink-3);border:1px solid var(--rule);
+  border-radius:3px;padding:1px 5px;background:var(--surface)}
+.iconbtn{height:36px;min-width:36px;padding:0 9px;border:1px solid var(--rule);background:var(--surface);
+  color:var(--ink-2);border-radius:3px;cursor:pointer;font:500 12px/1 var(--cond);
+  letter-spacing:.12em;text-transform:uppercase;display:inline-flex;align-items:center;gap:6px}
+.iconbtn:hover{border-color:var(--accent);color:var(--accent)}
+#menu{display:none}
+
+/* ---------- layout ---------- */
+.shell{display:grid;grid-template-columns:288px minmax(0,1fr);gap:0;align-items:start}
+.sidebar{position:sticky;top:var(--topbar);height:calc(100vh - var(--topbar));overflow-y:auto;
+  padding:22px 18px 60px 24px;border-right:1px solid var(--rule);scrollbar-width:thin}
+main{padding:0 40px 140px;max-width:900px;min-width:0}
+
+/* ---------- table of contents ---------- */
+.toc-group{margin-bottom:26px}
+.toc-part{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding-bottom:8px;
+  border-bottom:1px solid var(--rule);
+  font:600 12px/1 var(--cond);letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2)}
+.toc-part .key{background:var(--ink);color:var(--bg);padding:3px 6px;border-radius:2px;letter-spacing:.1em;white-space:nowrap}
+.toc-group[data-group=b] .toc-part .key{background:var(--accent-b);color:#fff}
+.sidebar a{display:flex;gap:8px;text-decoration:none;color:var(--ink-2);
+  padding:4px 8px;border-radius:3px;border-left:2px solid transparent;margin-left:-2px}
+.sidebar a:hover{background:var(--surface);color:var(--ink)}
+.toc-2{font:500 14px/1.35 var(--sans)}
+.toc-3{font:400 13px/1.35 var(--sans);color:var(--ink-3);padding-left:20px}
+.tnum{font:500 11px/1.5 var(--mono);color:var(--ink-3);min-width:22px}
+.toc-3 .tnum{min-width:26px}
+.sidebar a.active{color:var(--accent);border-left-color:var(--accent);background:var(--accent-soft)}
+.toc-group[data-group=b] a.active{color:var(--accent-b);border-left-color:var(--accent-b);
+  background:color-mix(in srgb,var(--accent-b) 10%,transparent)}
+.sidebar a.active .tnum{color:inherit}
+
+/* ---------- hero ---------- */
+.hero{padding:52px 0 34px;border-bottom:1px solid var(--rule)}
+.eyebrow{margin:0 0 14px;font:600 12px/1 var(--cond);letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3)}
+.eyebrow .dot{color:var(--accent)}
+.hero h1{margin:0;font:700 clamp(34px,5.2vw,54px)/1.02 var(--sans);letter-spacing:-.028em;max-width:15ch}
+.hero p.lede{margin:18px 0 0;max-width:62ch;font-size:17px;color:var(--ink-2)}
+.modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;margin-top:34px;
+  background:var(--rule);border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.mode{background:var(--surface);padding:14px 16px 16px;text-decoration:none;color:inherit;display:block}
+.mode:hover{background:var(--accent-soft)}
+.mode b{display:block;font:500 13px/1 var(--mono);letter-spacing:.02em;color:var(--accent)}
+.mode span{display:block;margin-top:7px;font-size:13.5px;line-height:1.45;color:var(--ink-2)}
+.hero .jump{margin-top:20px;font-size:14px;color:var(--ink-3)}
+
+/* ---------- parts & sections ---------- */
+.part-head{padding:46px 0 12px;border-bottom:2px solid var(--ink)}
+.part-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px}
+.part-source{margin:10px 0 0;display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;
+  font:400 13.5px/1.4 var(--sans);color:var(--ink-2)}
+.part-source .file{font:400 11.5px/1.4 var(--mono);color:var(--ink-3)}
+.part-key{font:600 12px/1 var(--cond);letter-spacing:.16em;text-transform:uppercase;white-space:nowrap;
+  background:var(--ink);color:var(--bg);padding:5px 8px;border-radius:2px}
+.part-b .part-key{background:var(--accent-b);color:#fff}
+.part-label{font:700 21px/1.1 var(--sans);letter-spacing:-.015em}
+.part-blurb{flex:1 1 240px;font-size:14px;color:var(--ink-3)}
+.part-b{--accent:var(--accent-b);--accent-soft:color-mix(in srgb,var(--accent-b) 10%,transparent)}
+.chunk{scroll-margin-top:calc(var(--topbar) + 18px)}
+.chunk-intro{padding-top:26px}
+.doc-title{margin:6px 0 14px;font:700 27px/1.18 var(--sans);letter-spacing:-.02em}
+.head{position:relative;display:flex;align-items:baseline;gap:12px;letter-spacing:-.015em}
+h2.head{margin:44px 0 14px;font:600 25px/1.2 var(--sans);padding-top:14px;border-top:1px solid var(--rule)}
+.part-head + .chunk h2.head{border-top:0;padding-top:0;margin-top:30px}
+h3.head{margin:34px 0 10px;font:600 18.5px/1.3 var(--sans)}
+.head .num{font:500 13px/1.6 var(--mono);color:var(--accent);flex:none;padding-top:3px}
+h3.head .num{font-size:12px}
+.anchor{opacity:0;text-decoration:none;color:var(--ink-3);font:400 15px/1 var(--mono);
+  align-self:center;transition:opacity .12s}
+.head:hover .anchor,.anchor:focus{opacity:1}
+
+p{margin:0 0 14px;max-width:70ch}
+ul,ol{margin:0 0 16px;padding-left:22px;max-width:70ch}
+li{margin:5px 0}
+li::marker{color:var(--ink-3)}
+strong{font-weight:600}
+hr{border:0;border-top:1px solid var(--rule);margin:32px 0}
+
+code{font:400 .875em/1.5 var(--mono);background:var(--surface-2);border:1px solid var(--rule-2);
+  padding:1px 5px;border-radius:3px;white-space:nowrap}
+html[data-theme=dark] code{background:var(--surface-2);border-color:var(--rule)}
+td code,th code,li code{white-space:normal}
+
+/* ---------- code panels ---------- */
+.codewrap{position:relative;margin:0 0 20px}
+pre{margin:0;background:var(--mono-bg);color:var(--mono-ink);border-radius:4px;
+  padding:16px 18px;overflow-x:auto;border:1px solid transparent}
+html[data-theme=dark] pre{border-color:var(--rule)}
+pre code{background:none;border:0;padding:0;color:inherit;white-space:pre-wrap;
+  overflow-wrap:break-word;font:400 13px/1.72 var(--mono)}
+.copy{position:absolute;top:8px;right:8px;opacity:0;transition:opacity .12s;
+  border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.07);color:#cfd6de;
+  font:500 11px/1 var(--cond);letter-spacing:.14em;text-transform:uppercase;
+  padding:5px 8px;border-radius:3px;cursor:pointer}
+.codewrap:hover .copy,.copy:focus{opacity:1}
+.copy:hover{background:rgba(255,255,255,.16);color:#fff}
+.copy.done{color:#8fe0a8;border-color:#8fe0a8}
+
+/* ---------- tables ---------- */
+.tablewrap{overflow-x:auto;margin:0 0 22px;border:1px solid var(--rule);border-radius:4px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14.5px}
+th{text-align:left;font:600 11.5px/1.3 var(--cond);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-2);background:var(--surface-2);padding:10px 14px;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:10px 14px;border-bottom:1px solid var(--rule-2);vertical-align:top;color:var(--ink-2)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--accent-soft)}
+td:first-child{color:var(--ink);font-weight:500}
+
+/* ---------- notes & details ---------- */
+blockquote{margin:0 0 20px;padding:12px 0 12px 16px;border-left:3px solid var(--accent);
+  color:var(--ink-2);font-size:15px;background:linear-gradient(90deg,var(--accent-soft),transparent 70%)}
+blockquote p:last-child{margin-bottom:0}
+details{margin:0 0 22px;border:1px solid var(--rule);border-radius:4px;background:var(--surface);overflow:hidden}
+summary{cursor:pointer;padding:12px 16px;font:600 12px/1 var(--cond);letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-2);list-style:none;display:flex;align-items:center;gap:9px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸";color:var(--accent);font-size:13px}
+details[open] summary{border-bottom:1px solid var(--rule)}
+details[open] summary::before{content:"▾"}
+summary:hover{color:var(--accent)}
+details .codewrap{margin:16px}
+
+/* ---------- search state ---------- */
+.searchstate{display:none;align-items:center;gap:12px;margin:22px 0 0;padding:11px 14px;
+  border:1px solid var(--accent);background:var(--accent-soft);border-radius:4px;
+  font:500 13px/1 var(--sans);color:var(--ink)}
+.searchstate.on{display:flex}
+.searchstate button{margin-left:auto;border:1px solid var(--rule);background:var(--surface);
+  color:var(--ink-2);border-radius:3px;padding:5px 9px;cursor:pointer;
+  font:500 11px/1 var(--cond);letter-spacing:.12em;text-transform:uppercase}
+.searchstate button:hover{color:var(--accent);border-color:var(--accent)}
+mark{background:var(--mark);color:var(--mark-ink);border-radius:2px;padding:0 1px}
+.hidden{display:none !important}
+body.searching .hero{display:none}
+.empty{display:none;padding:60px 0;color:var(--ink-3)}
+.empty.on{display:block}
+.empty b{display:block;font:600 20px/1.3 var(--sans);color:var(--ink);margin-bottom:8px}
+
+/* ---------- responsive ---------- */
+.scrim{display:none}
+@media (max-width:1080px){
+  .spine{display:none}
+  .shell{grid-template-columns:minmax(0,1fr)}
+  main{padding:0 22px 120px}
+  .topbar{padding:0 14px}
+  #menu{display:inline-flex;padding:0 8px}
+  .topbar{gap:10px}
+  .brand{flex:0 1 auto;min-width:0;overflow:hidden}
+  .brand span{display:none}
+  .brand b{font-size:14px}
+  .iconbtn{font-size:11px}
+  .kbd{display:none}
+  #q{padding-right:12px}
+  .sidebar{position:fixed;top:var(--topbar);left:0;width:300px;max-width:86vw;z-index:45;
+    background:var(--surface);transform:translateX(-102%);transition:transform .2s ease;
+    box-shadow:var(--shadow);padding-left:18px}
+  .sidebar.open{transform:none}
+  .scrim.on{display:block;position:fixed;inset:var(--topbar) 0 0;background:rgba(10,12,16,.4);z-index:44}
+  .hero{padding-top:34px}
+}
+@media (max-width:620px){
+  .brand{display:none}
+  main{padding:0 16px 100px}
+  .modes{grid-template-columns:1fr 1fr}
+  .modes .mode:last-child{grid-column:1/-1}
+  .hero h1{font-size:clamp(28px,9vw,40px)}
+  .part-head{padding-top:34px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{transition:none !important}
+}
+@media print{
+  .topbar,.sidebar,.spine,.searchstate,.copy,.scrim{display:none !important}
+  .shell{display:block}main{max-width:none;padding:0}
+  pre{background:#f4f4f4;color:#111;border:1px solid #ccc}
+  .chunk,.part-head{break-inside:avoid}
+  details{border:0}details>*{display:block}
+}
+</style>
+</head>
+<body>
+<div class="spine" aria-hidden="true"><i id="veil" style="height:100%"></i></div>
+
+<header class="topbar">
+  <button class="iconbtn" id="menu" aria-label="Show contents">Contents</button>
+  <a class="brand" id="home" href="#"><b>Video Prompt Writing Guide</b><span>Combined reference</span></a>
+  <div class="searchbox">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input id="q" type="search" placeholder="Search both guides…" autocomplete="off" spellcheck="false" aria-label="Search the guides">
+    <span class="kbd"><b>/</b></span>
+  </div>
+  <button class="iconbtn" id="theme" aria-label="Switch to dark theme">Dark</button>
+</header>
+
+<div class="scrim" id="scrim"></div>
+
+<div class="shell">
+  <nav class="sidebar" id="toc" aria-label="Table of contents">
+<div class="toc-group" data-group="a"><p class="toc-part"><span class="key">Part A</span>Base modes</p><a class="toc-2" href="#a-1-task-overview" data-target="a-1-task-overview"><span class="tnum">1</span><span class="tlabel">Task Overview</span></a><a class="toc-2" href="#a-2-final-prompt-structure" data-target="a-2-final-prompt-structure"><span class="tnum">2</span><span class="tlabel">Final Prompt Structure</span></a><a class="toc-3" href="#a-2-1-part-one-is-the-instruction" data-target="a-2-1-part-one-is-the-instruction"><span class="tnum">2.1</span><span class="tlabel">Part One Is the Instruction</span></a><a class="toc-3" href="#a-2-2-part-two-contains-the-three-core-fields" data-target="a-2-2-part-two-contains-the-three-core-fields"><span class="tnum">2.2</span><span class="tlabel">Part Two Contains the Three Core Fields</span></a><a class="toc-2" href="#a-3-how-to-incorporate-keyframes-into-the-multimodal-description" data-target="a-3-how-to-incorporate-keyframes-into-the-multimodal-description"><span class="tnum">3</span><span class="tlabel">How to Incorporate Keyframes into the Multimodal Description</span></a><a class="toc-3" href="#a-3-1-i2va-begin-from-the-image-and-develop-forward" data-target="a-3-1-i2va-begin-from-the-image-and-develop-forward"><span class="tnum">3.1</span><span class="tlabel">I2VA: Begin from the Image and Develop Forward</span></a><a class="toc-3" href="#a-3-2-fl2va-describe-the-path-between-the-first-and-last-frames" data-target="a-3-2-fl2va-describe-the-path-between-the-first-and-last-frames"><span class="tnum">3.2</span><span class="tlabel">FL2VA: Describe the Path Between the First and Last Frames</span></a><a class="toc-3" href="#a-3-3-l2va-infer-the-opening-and-land-on-the-image-at-the-end" data-target="a-3-3-l2va-infer-the-opening-and-land-on-the-image-at-the-end"><span class="tnum">3.3</span><span class="tlabel">L2VA: Infer the Opening and Land on the Image at the End</span></a><a class="toc-2" href="#a-4-how-to-write-the-three-shared-core-sections" data-target="a-4-how-to-write-the-three-shared-core-sections"><span class="tnum">4</span><span class="tlabel">How to Write the Three Shared Core Sections</span></a><a class="toc-3" href="#a-4-1-develop-the-multimodal-description-along-the-timeline" data-target="a-4-1-develop-the-multimodal-description-along-the-timeline"><span class="tnum">4.1</span><span class="tlabel">Develop the Multimodal Description Along the Timeline</span></a><a class="toc-3" href="#a-4-2-shots-and-cuts" data-target="a-4-2-shots-and-cuts"><span class="tnum">4.2</span><span class="tlabel">Shots and Cuts</span></a><a class="toc-3" href="#a-4-3-camera-motion-motion-type-amplitude-speed" data-target="a-4-3-camera-motion-motion-type-amplitude-speed"><span class="tnum">4.3</span><span class="tlabel">Camera Motion: Motion Type + Amplitude + Speed</span></a><a class="toc-3" href="#a-4-4-speakers-dialogue-and-singing" data-target="a-4-4-speakers-dialogue-and-singing"><span class="tnum">4.4</span><span class="tlabel">Speakers, Dialogue, and Singing</span></a><a class="toc-3" href="#a-4-5-on-screen-text" data-target="a-4-5-on-screen-text"><span class="tnum">4.5</span><span class="tlabel">On-Screen Text</span></a><a class="toc-3" href="#a-4-6-overall-soundscape" data-target="a-4-6-overall-soundscape"><span class="tnum">4.6</span><span class="tlabel">overall_soundscape</span></a><a class="toc-3" href="#a-4-7-non-diegetic-music" data-target="a-4-7-non-diegetic-music"><span class="tnum">4.7</span><span class="tlabel">non_diegetic_music</span></a><a class="toc-2" href="#a-5-cases" data-target="a-5-cases"><span class="tnum">5</span><span class="tlabel">Cases</span></a><a class="toc-3" href="#a-case-1-t2va" data-target="a-case-1-t2va"><span class="tnum"></span><span class="tlabel">Case 1: T2VA</span></a><a class="toc-3" href="#a-case-2-i2va" data-target="a-case-2-i2va"><span class="tnum"></span><span class="tlabel">Case 2: I2VA</span></a><a class="toc-3" href="#a-case-3-fl2va" data-target="a-case-3-fl2va"><span class="tnum"></span><span class="tlabel">Case 3: FL2VA</span></a><a class="toc-3" href="#a-case-4-l2va" data-target="a-case-4-l2va"><span class="tnum"></span><span class="tlabel">Case 4: L2VA</span></a></div>
+<div class="toc-group" data-group="b"><p class="toc-part"><span class="key">Part B</span>Full-reference mode</p><a class="toc-2" href="#b-top" data-target="b-top"><span class="tnum"></span><span class="tlabel">Introduction</span></a><a class="toc-2" href="#b-1-overall-structure" data-target="b-1-overall-structure"><span class="tnum">1</span><span class="tlabel">Overall Structure</span></a><a class="toc-2" href="#b-2-reference-labels-and-definitions-subject-definitions" data-target="b-2-reference-labels-and-definitions-subject-definitions"><span class="tnum">2</span><span class="tlabel">Reference Labels and Definitions (subject_definitions)</span></a><a class="toc-3" href="#b-2-1-subject-n" data-target="b-2-1-subject-n"><span class="tnum">2.1</span><span class="tlabel">&lt;Subject N&gt;</span></a><a class="toc-3" href="#b-2-2-picture-n" data-target="b-2-2-picture-n"><span class="tnum">2.2</span><span class="tlabel">&lt;Picture N&gt;</span></a><a class="toc-3" href="#b-2-3-video-n" data-target="b-2-3-video-n"><span class="tnum">2.3</span><span class="tlabel">&lt;Video N&gt;</span></a><a class="toc-3" href="#b-2-4-audio-n" data-target="b-2-4-audio-n"><span class="tnum">2.4</span><span class="tlabel">&lt;Audio N&gt;</span></a><a class="toc-3" href="#b-2-5-visual-and-audio-tracks-from-the-same-reference-video" data-target="b-2-5-visual-and-audio-tracks-from-the-same-reference-video"><span class="tnum">2.5</span><span class="tlabel">Visual and Audio Tracks from the Same Reference Video</span></a><a class="toc-2" href="#b-3-summary" data-target="b-3-summary"><span class="tnum">3</span><span class="tlabel">summary</span></a><a class="toc-2" href="#b-4-retention-analysis" data-target="b-4-retention-analysis"><span class="tnum">4</span><span class="tlabel">retention_analysis</span></a><a class="toc-3" href="#b-4-1-visible-content" data-target="b-4-1-visible-content"><span class="tnum">4.1</span><span class="tlabel">Visible Content</span></a><a class="toc-3" href="#b-4-2-audio" data-target="b-4-2-audio"><span class="tnum">4.2</span><span class="tlabel">Audio</span></a><a class="toc-2" href="#b-5-detailed-description" data-target="b-5-detailed-description"><span class="tnum">5</span><span class="tlabel">detailed_description</span></a><a class="toc-3" href="#b-5-1-basic-format" data-target="b-5-1-basic-format"><span class="tnum">5.1</span><span class="tlabel">Basic Format</span></a><a class="toc-3" href="#b-5-2-full-reference-mode-differences" data-target="b-5-2-full-reference-mode-differences"><span class="tnum">5.2</span><span class="tlabel">Full-Reference Mode Differences</span></a><a class="toc-3" href="#b-5-3-using-reference-labels-in-shots" data-target="b-5-3-using-reference-labels-in-shots"><span class="tnum">5.3</span><span class="tlabel">Using Reference Labels in Shots</span></a><a class="toc-3" href="#b-5-4-speakers-audio-sources-and-dialogue" data-target="b-5-4-speakers-audio-sources-and-dialogue"><span class="tnum">5.4</span><span class="tlabel">Speakers, Audio Sources, and Dialogue</span></a><a class="toc-2" href="#b-6-overall-soundscape-and-non-diegetic-music" data-target="b-6-overall-soundscape-and-non-diegetic-music"><span class="tnum">6</span><span class="tlabel">overall_soundscape and non_diegetic_music</span></a><a class="toc-2" href="#b-7-complete-example" data-target="b-7-complete-example"><span class="tnum">7</span><span class="tlabel">Complete Example</span></a></div>
+  </nav>
+
+  <main>
+    <section class="hero">
+      <p class="eyebrow">Two guides <span class="dot">/</span> one index</p>
+      <h1>Video Prompt Writing Guide</h1>
+      <p class="lede">Everything needed to rewrite a user request into a generation prompt: the base modes that build an audiovisual timeline from text and keyframes, and full-reference mode, which adds labelled reference assets and its own six-section output.</p>
+      <div class="modes">
+        <a class="mode" href="#a-1-task-overview"><b>T2VA</b><span>Text only. Build the whole timeline.</span></a>
+        <a class="mode" href="#a-1-task-overview"><b>I2VA</b><span>First frame given. Develop forward.</span></a>
+        <a class="mode" href="#a-1-task-overview"><b>FL2VA</b><span>First and last frames. Connect them.</span></a>
+        <a class="mode" href="#a-1-task-overview"><b>L2VA</b><span>Last frame given. Land on it.</span></a>
+        <a class="mode" href="#b-1-overall-structure"><b>Full-reference</b><span>Subjects, pictures, videos, audio.</span></a>
+      </div>
+      <p class="jump">Jump to what people look up most: <a href="#a-4-3-camera-motion-motion-type-amplitude-speed">camera motion vocabulary</a>, <a href="#a-4-4-speakers-dialogue-and-singing">speaker and dialogue tags</a>, <a href="#a-5-cases">the four worked cases</a>, or <a href="#b-7-complete-example">the full-reference example</a>.</p>
+    </section>
+
+    <div class="searchstate" id="state"><span id="statetext"></span><button id="clear">Clear search</button></div>
+    <div class="empty" id="empty"><b>No matches</b>Try a shorter term, a field name like <code>non_diegetic_music</code>, or a tag like <code>scenetrans</code>.</div>
+
+<article class="part part-a" id="part-a"><header class="part-head"><div class="part-row"><span class="part-key">Part A</span><span class="part-label">Base modes</span><span class="part-blurb">Prompt structure for text-to-video and keyframe tasks.</span></div><p class="part-source">Video Prompt Writing Guide (T2VA / I2VA / FL2VA / L2VA)<span class="file">VIDEO_PROMPT_WRITING_GUIDE_base_en.md</span></p></header><section class="chunk lvl2" id="a-1-task-overview" data-toc="a-1-task-overview"><h2 class="head"><span class="num">1</span><span class="htext">Task Overview</span><a class="anchor" href="#a-1-task-overview" aria-label="Link to this section">#</a></h2><ul>
+<li><strong>T2VA</strong>: Builds a complete audiovisual timeline from text.</li>
+<li><strong>I2VA</strong>: T2VA body + first-frame instruction + a visual path that develops forward from the first frame.</li>
+<li><strong>FL2VA</strong>: T2VA body + first-and-last-frame instruction + a continuous path from the first frame to the last frame.</li>
+<li><strong>L2VA</strong>: T2VA body + last-frame instruction + a path that converges from a plausible preceding state to the last frame.</li>
+</ul></section><section class="chunk lvl2" id="a-2-final-prompt-structure" data-toc="a-2-final-prompt-structure"><h2 class="head"><span class="num">2</span><span class="htext">Final Prompt Structure</span><a class="anchor" href="#a-2-final-prompt-structure" aria-label="Link to this section">#</a></h2></section><section class="chunk lvl3" id="a-2-1-part-one-is-the-instruction" data-toc="a-2-1-part-one-is-the-instruction"><h3 class="head"><span class="num">2.1</span><span class="htext">Part One Is the Instruction</span><a class="anchor" href="#a-2-1-part-one-is-the-instruction" aria-label="Link to this section">#</a></h3><p><strong>T2VA</strong> has no image-alignment instruction and begins directly with the three core fields.</p>
+<p><strong>I2VA</strong> always uses:</p>
+<pre><code class="language-text">For the target video, at 0.00 seconds into the target video, &lt;Picture 1&gt; (from [Shot 1]) is fully referenced.
+</code></pre>
+<p><strong>FL2VA</strong> always uses:</p>
+<pre><code class="language-text">How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot N) aligns with the S.SS-second mark of the target video.
+</code></pre>
+<p><strong>L2VA</strong> always uses:</p>
+<pre><code class="language-text">How the reference pictures align with the target video — &lt;Picture 1&gt; (from [Shot N]) aligns with the S.SS-second mark of the target video.
+</code></pre>
+<p>Here, <code>N</code> is the index of the actual final shot, and <code>S.SS</code> is the effective video duration formatted to exactly two decimal places. The instruction must be the first line of the final prompt, followed by one blank line before the core fields.</p></section><section class="chunk lvl3" id="a-2-2-part-two-contains-the-three-core-fields" data-toc="a-2-2-part-two-contains-the-three-core-fields"><h3 class="head"><span class="num">2.2</span><span class="htext">Part Two Contains the Three Core Fields</span><a class="anchor" href="#a-2-2-part-two-contains-the-three-core-fields" aria-label="Link to this section">#</a></h3><pre><code class="language-text">integrated_multimodal_description: [Shot 1] ...
+
+overall_soundscape: ...
+
+non_diegetic_music: ...
+</code></pre>
+<ul>
+<li><strong>integrated_multimodal_description</strong>: Describes visuals, actions, shots, speakers, dialogue, singing, and diegetic audio along the timeline.</li>
+<li><strong>overall_soundscape</strong>: Summarizes ambient sound, physical action sounds, and non-verbal human sounds across the entire video.</li>
+<li><strong>non_diegetic_music</strong>: Describes background music that the characters cannot hear and only the audience can hear.</li>
+</ul></section><section class="chunk lvl2" id="a-3-how-to-incorporate-keyframes-into-the-multimodal-description" data-toc="a-3-how-to-incorporate-keyframes-into-the-multimodal-description"><h2 class="head"><span class="num">3</span><span class="htext">How to Incorporate Keyframes into the Multimodal Description</span><a class="anchor" href="#a-3-how-to-incorporate-keyframes-into-the-multimodal-description" aria-label="Link to this section">#</a></h2></section><section class="chunk lvl3" id="a-3-1-i2va-begin-from-the-image-and-develop-forward" data-toc="a-3-1-i2va-begin-from-the-image-and-develop-forward"><h3 class="head"><span class="num">3.1</span><span class="htext">I2VA: Begin from the Image and Develop Forward</span><a class="anchor" href="#a-3-1-i2va-begin-from-the-image-and-develop-forward" aria-label="Link to this section">#</a></h3><p><code>&lt;Picture 1&gt;</code> is the actual first frame of the video at 0.00 seconds and belongs to <code>[Shot 1]</code>. The description should first establish the style, subjects, composition, and scene anchors in the image, then describe the next action. Character identity, clothing, colors, key objects, and spatial relationships should remain consistent.</p>
+<p>Recommended structure: <strong>first-frame anchor → action onset → continuous development → result or reaction</strong>.</p></section><section class="chunk lvl3" id="a-3-2-fl2va-describe-the-path-between-the-first-and-last-frames" data-toc="a-3-2-fl2va-describe-the-path-between-the-first-and-last-frames"><h3 class="head"><span class="num">3.2</span><span class="htext">FL2VA: Describe the Path Between the First and Last Frames</span><a class="anchor" href="#a-3-2-fl2va-describe-the-path-between-the-first-and-last-frames" aria-label="Link to this section">#</a></h3><p>Picture 1 is the opening, and Picture 2 is the ending. Focus on how the subject moves, how poses change, how objects are manipulated, how the composition evolves, and how the scene or lighting transitions.</p>
+<p>FL2VA generally favors a single shot so the model can interpolate continuously from the first frame to the last frame. Use multiple shots only when they are explicitly specified. The last frame must be reached by the final <code>[Shot N]</code> at the end of the video.</p>
+<p>Recommended structure: <strong>first-frame state → observable intermediate changes → progressively narrowing differences → last-frame state</strong>.</p></section><section class="chunk lvl3" id="a-3-3-l2va-infer-the-opening-and-land-on-the-image-at-the-end" data-toc="a-3-3-l2va-infer-the-opening-and-land-on-the-image-at-the-end"><h3 class="head"><span class="num">3.3</span><span class="htext">L2VA: Infer the Opening and Land on the Image at the End</span><a class="anchor" href="#a-3-3-l2va-infer-the-opening-and-land-on-the-image-at-the-end" aria-label="Link to this section">#</a></h3><p><code>&lt;Picture 1&gt;</code> is the final frame of the video and belongs to the last <code>[Shot N]</code>; it does not inherently belong to Shot 1. Infer a plausible earlier state from the user's intent and the last frame, then describe how the characters, objects, camera, and scene gradually approach the reference image.</p>
+<p>Recommended structure: <strong>plausible preceding state → explicit action and transition path → gradual convergence in the final shot → last-frame landing</strong>.</p></section><section class="chunk lvl2" id="a-4-how-to-write-the-three-shared-core-sections" data-toc="a-4-how-to-write-the-three-shared-core-sections"><h2 class="head"><span class="num">4</span><span class="htext">How to Write the Three Shared Core Sections</span><a class="anchor" href="#a-4-how-to-write-the-three-shared-core-sections" aria-label="Link to this section">#</a></h2></section><section class="chunk lvl3" id="a-4-1-develop-the-multimodal-description-along-the-timeline" data-toc="a-4-1-develop-the-multimodal-description-along-the-timeline"><h3 class="head"><span class="num">4.1</span><span class="htext">Develop the Multimodal Description Along the Timeline</span><a class="anchor" href="#a-4-1-develop-the-multimodal-description-along-the-timeline" aria-label="Link to this section">#</a></h3><p><code>integrated_multimodal_description</code> is the main body of the rewritten prompt. Every detail should correspond to something visible or audible: visual style, initial composition, subject appearance and position, scene and key props, actions and reactions, shot changes, spoken language, and synchronized diegetic sound.</p>
+<p>At the beginning of <code>[Shot 1]</code>, state the overall style and initial composition. Common styles include <code>Cinematic</code>, <code>live-action</code>, <code>2D-animated</code>, <code>3D CG</code>, <code>claymation</code>, <code>watercolor</code>, and <code>vintage film</code>. For keyframe tasks, derive the style from the reference image; for T2VA, select it from the user's text.</p>
+<pre><code class="language-text">[Shot 1] Live-action, cinematic, a medium-wide shot frames...
+</code></pre></section><section class="chunk lvl3" id="a-4-2-shots-and-cuts" data-toc="a-4-2-shots-and-cuts"><h3 class="head"><span class="num">4.2</span><span class="htext">Shots and Cuts</span><a class="anchor" href="#a-4-2-shots-and-cuts" aria-label="Link to this section">#</a></h3><p>Do not add a timestamp to the first shot. Use sequential shot numbers for later shots, and begin each one with a strictly increasing cut time that falls within the video duration:</p>
+<pre><code class="language-text">[Shot 2] At 00:03.500, the camera cuts to...
+</code></pre>
+<p>For ordinary cuts, use <code>the camera cuts to</code>, <code>the shot cuts to</code>, <code>the shot transitions to</code>, <code>the shot changes to</code>, or <code>the shot switches to</code>. When explicitly requested by the user, cross-dissolve, fade, or wipe may also be used. A cut should introduce new information about the subject, space, state, viewpoint, or time. If only the distance or a slight angle needs to change, prefer camera motion.</p></section><section class="chunk lvl3" id="a-4-3-camera-motion-motion-type-amplitude-speed" data-toc="a-4-3-camera-motion-motion-type-amplitude-speed"><h3 class="head"><span class="num">4.3</span><span class="htext">Camera Motion: Motion Type + Amplitude + Speed</span><a class="anchor" href="#a-4-3-camera-motion-motion-type-amplitude-speed" aria-label="Link to this section">#</a></h3><p>A complete camera-motion expression has three dimensions: the <strong>motion type</strong> defines how the camera moves, <strong>amplitude</strong> defines the range of compositional change, and <strong>speed</strong> defines the pacing of that change. Add amplitude and speed only when they are meaningful; medium amplitude and normal speed are usually omitted.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Available Expression</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Motion type</td>
+<td><code>Zoom In / Zoom Out</code></td>
+<td>The focal length changes while the camera body remains stationary</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Push In / Pull Out</code></td>
+<td>The camera moves forward / backward</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Pan Left / Pan Right</code></td>
+<td>The camera remains in place while the lens pivots horizontally</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Truck Left / Truck Right</code></td>
+<td>The camera translates horizontally</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Tilt Up / Tilt Down</code></td>
+<td>The camera remains in place while the lens pivots vertically</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Pedestal Up / Pedestal Down</code></td>
+<td>The entire camera moves upward / downward</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Arc Shot</code></td>
+<td>The camera moves in an arc around the subject</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Tracking Shot</code></td>
+<td>The camera follows a moving subject</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Static Shot</code></td>
+<td>The camera position and lens remain still</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Shake Slightly / Shake Strongly</code></td>
+<td>Slight / strong camera shake</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>POV</code></td>
+<td>The subject's point of view</td>
+</tr>
+<tr>
+<td>Motion type</td>
+<td><code>Roll Clockwise / Roll Counterclockwise</code></td>
+<td>The camera rolls clockwise / counterclockwise around the lens axis</td>
+</tr>
+<tr>
+<td>Amplitude</td>
+<td><code>with small amplitude</code></td>
+<td>Small-range change</td>
+</tr>
+<tr>
+<td>Amplitude</td>
+<td><code>with large amplitude</code></td>
+<td>Large-range change</td>
+</tr>
+<tr>
+<td>Speed</td>
+<td><code>at slow speed</code></td>
+<td>Slow movement</td>
+</tr>
+<tr>
+<td>Speed</td>
+<td><code>at fast speed</code></td>
+<td>Fast movement</td>
+</tr>
+</tbody>
+</table>
+<p>Camera motion should be written as a natural English action within the shot, rather than stacked as separate labels at the end of a sentence:</p>
+<pre><code class="language-text">The camera pushes in with small amplitude at slow speed toward the folded letter in her hands.
+The camera pans right with large amplitude at fast speed, revealing the open doorway.
+The camera holds a static shot as the runner exits the frame.
+</code></pre></section><section class="chunk lvl3" id="a-4-4-speakers-dialogue-and-singing" data-toc="a-4-4-speakers-dialogue-and-singing"><h3 class="head"><span class="num">4.4</span><span class="htext">Speakers, Dialogue, and Singing</span><a class="anchor" href="#a-4-4-speakers-dialogue-and-singing" aria-label="Link to this section">#</a></h3><p>Subjects who speak, sing, or produce an off-screen human voice use stable IDs such as <code>(S1)</code> and <code>(S2)</code>. When multiple already-numbered speakers speak or sing together, use a compound ID such as <code>(S1,S2)</code>. A speaker keeps the same ID across shots; characters who never vocalize receive no speaker ID.</p>
+<p>When a speaker first appears, provide enough information from the visual and audio context to establish a stable identity, such as character type, age, gender, whether the person is on-screen, pitch, timbre, speaking rate, or accent. Place the speaker's identifying phrase, ID, action, and delivery outside <code>&lt;d&gt;</code>. Inside <code>&lt;d&gt;</code>, include only the language tag and the actual user-provided spoken content. Preserve every original word and punctuation mark verbatim; do not translate or rewrite them.</p>
+<pre><code class="language-text">The young woman with a quiet, breathy voice (S1) says: &lt;d&gt;[English] I get off at the next station.&lt;/d&gt;
+The two children (S1,S2) shout together, &lt;d&gt;[English] Wait for us!&lt;/d&gt;
+</code></pre>
+<p>For voiceover, use the exact phrase <code>says in an off-screen voiceover</code>. Immediately after every voiceover <code>&lt;d&gt;</code> block, state that the corresponding on-screen character's lips remain closed:</p>
+<pre><code class="language-text">The man (S1) says in an off-screen voiceover: &lt;d&gt;[English] I still remember that road.&lt;/d&gt; while his lips remain completely closed.
+</code></pre>
+<p>When the same line of dialogue or lyrics crosses a cut, use <code>&lt;scenetrans&gt;</code> at the connecting points in both parts and explicitly state that the audio continues across the cut. Use <code>&lt;cutoff&gt;</code> when speech is truncated by the end of the video. Continuity may be expressed with <code>continues seamlessly across the cut</code>, <code>continues uninterrupted into the next shot</code>, <code>carries over from the previous shot</code>, or <code>remains audible across the transition</code>.</p></section><section class="chunk lvl3" id="a-4-5-on-screen-text" data-toc="a-4-5-on-screen-text"><h3 class="head"><span class="num">4.5</span><span class="htext">On-Screen Text</span><a class="anchor" href="#a-4-5-on-screen-text" aria-label="Link to this section">#</a></h3><p>Place any banner, sign, label, subtitle, or neon text that is actually visible on screen in English double quotation marks. Preserve the original text and punctuation verbatim, without translation.</p>
+<pre><code class="language-text">A red neon sign reading &quot;营业中&quot; glows above the doorway.
+</code></pre></section><section class="chunk lvl3" id="a-4-6-overall-soundscape" data-toc="a-4-6-overall-soundscape"><h3 class="head"><span class="num">4.6</span><span class="htext">overall_soundscape</span><a class="anchor" href="#a-4-6-overall-soundscape" aria-label="Link to this section">#</a></h3><p>Use 1–4 English sentences in one continuous paragraph to summarize the ambient sound, physical action sounds, and non-verbal human sounds across the full video, such as wind, rain, traffic, footsteps, fabric movement, impacts, breathing, laughter, or panting. Dialogue, singing, and diegetic music already belong in the multimodal description and should not be repeated here. Use <code>N/A</code> only when the user explicitly requests complete silence throughout the video.</p>
+<pre><code class="language-text">overall_soundscape: Steady rain taps against the café windows while low room ambience continues underneath. The entrance bell rings once, followed by wet footsteps and the soft scrape of a chair.
+</code></pre></section><section class="chunk lvl3" id="a-4-7-non-diegetic-music" data-toc="a-4-7-non-diegetic-music"><h3 class="head"><span class="num">4.7</span><span class="htext">non_diegetic_music</span><a class="anchor" href="#a-4-7-non-diegetic-music" aria-label="Link to this section">#</a></h3><p>Use 1–3 English sentences to describe background music that the characters cannot hear and only the audience can hear. Focus on instrumentation, speed, rhythm, and dynamic changes; do not use abstract mood words or explain the emotional function of the score. Singing, instruments, radio, television, or phone music audible to the characters are diegetic events and should appear in the multimodal description. Use <code>N/A</code> when there is no non-diegetic music.</p>
+<pre><code class="language-text">non_diegetic_music: Sparse piano notes at a slow tempo, joined by sustained low strings that gradually increase in volume before fading out.
+</code></pre></section><section class="chunk lvl2" id="a-5-cases" data-toc="a-5-cases"><h2 class="head"><span class="num">5</span><span class="htext">Cases</span><a class="anchor" href="#a-5-cases" aria-label="Link to this section">#</a></h2></section><section class="chunk lvl3" id="a-case-1-t2va" data-toc="a-case-1-t2va"><h3 class="head"><span class="htext">Case 1: T2VA</span><a class="anchor" href="#a-case-1-t2va" aria-label="Link to this section">#</a></h3><p>With no reference image, construct the complete timeline directly from the text. You may add scene, character, action, and sound details that remain consistent with the user's intent.</p>
+<pre><code class="language-text">integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames a baker opening the shutters of a small street bakery before sunrise. The camera pushes in with small amplitude at slow speed as the middle-aged baker with a calm, slightly raspy voice (S1) places a fresh loaf on the wooden counter and says: &lt;d&gt;[English] First batch of the morning.&lt;/d&gt; [Shot 2] At 00:05.000, the camera cuts to a close-up of steam rising from the sliced bread while the baker's final words carry over from the previous shot.
+
+overall_soundscape: Wooden shutters scrape open over a quiet street as trays clink softly inside the bakery. The doorbell rings once, followed by light footsteps and the crisp sound of bread being sliced.
+
+non_diegetic_music: A soft acoustic-guitar pattern at a moderate tempo, joined by sparse upright-bass notes and a gentle fade at the end.
+</code></pre></section><section class="chunk lvl3" id="a-case-2-i2va" data-toc="a-case-2-i2va"><h3 class="head"><span class="htext">Case 2: I2VA</span><a class="anchor" href="#a-case-2-i2va" aria-label="Link to this section">#</a></h3><p>Write the first-frame instruction first, then use the subject, composition, and scene in Picture 1 as the starting point of Shot 1 before describing how the scene continues to develop.</p>
+<pre><code class="language-text">For the target video, at 0.00 seconds into the target video, &lt;Picture 1&gt; (from [Shot 1]) is fully referenced.
+
+integrated_multimodal_description: [Shot 1] Live-action, cinematic, the young woman shown in &lt;Picture 1&gt; remains beside the rain-covered train window, preserving her appearance, clothing, seat position, and the carriage layout. The camera trucks right with small amplitude at slow speed as she lifts her gaze from the folded letter toward the passing city lights. Her reflection moves across the glass while the quiet, breathy young woman (S1) says: &lt;d&gt;[English] I get off at the next station.&lt;/d&gt; She folds the letter along its existing crease.
+
+overall_soundscape: The train wheels produce a steady metallic rhythm beneath a low ventilation hum. Rain ticks against the window while paper rustles softly in her hands.
+
+non_diegetic_music: Sustained cello notes at a slow tempo with widely spaced piano tones, gradually decreasing in volume.
+</code></pre></section><section class="chunk lvl3" id="a-case-3-fl2va" data-toc="a-case-3-fl2va"><h3 class="head"><span class="htext">Case 3: FL2VA</span><a class="anchor" href="#a-case-3-fl2va" aria-label="Link to this section">#</a></h3><p>The two images anchor the opening and ending respectively. The body should not repeat two static image descriptions; instead, it should supply the motion path that connects them. The following example is an eight-second single shot.</p>
+<pre><code class="language-text">How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 8.00-second mark of the target video.
+
+integrated_multimodal_description: [Shot 1] Live-action, cinematic, a rain-soaked cyclist begins in the position and framing established by Picture 1, holding a closed black umbrella beside a silver bicycle. The camera pulls out with small amplitude at slow speed as she releases the bicycle handle, raises the umbrella above her shoulder, and presses the runner upward until the canopy opens. Water rolls from the expanding fabric while she steps beneath it, rotates the handle into the final angle, and settles into the pose, spacing, and composition established by Picture 2 at the end of the shot.
+
+overall_soundscape: Rain falls steadily on the pavement, followed by the metallic click of the umbrella runner and the soft snap of the canopy opening. Water drips from the bicycle frame as distant traffic passes.
+
+non_diegetic_music: N/A
+</code></pre></section><section class="chunk lvl3" id="a-case-4-l2va" data-toc="a-case-4-l2va"><h3 class="head"><span class="htext">Case 4: L2VA</span><a class="anchor" href="#a-case-4-l2va" aria-label="Link to this section">#</a></h3><p>The image anchors only the final moment. First establish a compatible earlier state, then let the actions, object states, and composition gradually land on Picture 1 in the final shot. The following example is a six-second single shot.</p>
+<pre><code class="language-text">How the reference pictures align with the target video — &lt;Picture 1&gt; (from [Shot 1]) aligns with the 6.00-second mark of the target video.
+
+integrated_multimodal_description: [Shot 1] Live-action, cinematic, a close shot begins with an intact drinking glass near the edge of a dark wooden table, while the same hand and sleeve visible in &lt;Picture 1&gt; approach from the right. The camera pushes in with small amplitude at slow speed as the fingertips strike the rim. The glass tips, falls, and hits the floor with a sharp impact; cracks spread through it as fragments slide outward. Toward the end, the moving pieces lose momentum and settle into the exact broken arrangement, hand position, camera angle, lighting, and final composition established by &lt;Picture 1&gt;.
+
+overall_soundscape: Fingertips tap the glass before it scrapes across the tabletop, falls, and breaks with a sharp crash. Small fragments scatter and gradually stop sliding across the floor.
+
+non_diegetic_music: A low electronic pulse at a slow tempo, ending immediately after the glass breaks.
+</code></pre></section></article>
+<article class="part part-b" id="part-b"><header class="part-head"><div class="part-row"><span class="part-key">Part B</span><span class="part-label">Full-reference mode</span><span class="part-blurb">Six-section rewrite output when reference assets are supplied.</span></div><p class="part-source">Full-Reference Mode Rewrite Output Format Guide<span class="file">VIDEO_PROMPT_WRITING_GUIDE_ref_en.md</span></p></header><section class="chunk chunk-intro" id="b-top" data-toc="b-top">
+<p>This guide explains how rewrite outputs are organized and written in full-reference mode.</p>
+<p>Write all six rewrite sections in English. Preserve the original language only for dialogue and lyrics inside <code>&lt;d&gt;</code> and for text visibly present in the scene.</p>
+<p><strong>Description detail:</strong> Make <code>detailed_description</code> as detailed and explicit as possible. For each shot, clearly establish the current composition, subject appearance and position, environment and lighting, actions and state changes, camera movement, current sound, and the points where referenced content actually appears or takes effect. Avoid reducing the description to a plot summary or a list of reference relationships.</p>
+<blockquote>
+<p>The basic formats for shots, camera movement, speakers, dialogue, and ordinary sound are shared with the <a href="#a-top">Video Prompt Writing Guide (T2VA / I2VA / FL2VA / L2VA)</a>. This guide focuses on the reference labels, analysis sections, and format differences specific to full-reference mode.</p>
+</blockquote></section><section class="chunk lvl2" id="b-1-overall-structure" data-toc="b-1-overall-structure"><h2 class="head"><span class="num">1</span><span class="htext">Overall Structure</span><a class="anchor" href="#b-1-overall-structure" aria-label="Link to this section">#</a></h2><p>A complete rewrite output consists of six sections in the following order:</p>
+<table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>subject_definitions</code></td>
+<td>Defines referenced content and its reference labels</td>
+</tr>
+<tr>
+<td><code>summary</code></td>
+<td>Summarizes the task type, target video, and main reference relationships</td>
+</tr>
+<tr>
+<td><code>retention_analysis</code></td>
+<td>Describes how referenced content is preserved, transferred, or reused</td>
+</tr>
+<tr>
+<td><code>detailed_description</code></td>
+<td>Describes visuals, actions, shots, sound, and dialogue in playback order</td>
+</tr>
+<tr>
+<td><code>overall_soundscape</code></td>
+<td>Summarizes ambience and physical sounds</td>
+</tr>
+<tr>
+<td><code>non_diegetic_music</code></td>
+<td>Describes background music audible only to the audience</td>
+</tr>
+</tbody>
+</table></section><section class="chunk lvl2" id="b-2-reference-labels-and-definitions-subject-definitions" data-toc="b-2-reference-labels-and-definitions-subject-definitions"><h2 class="head"><span class="num">2</span><span class="htext">Reference Labels and Definitions (<code>subject_definitions</code>)</span><a class="anchor" href="#b-2-reference-labels-and-definitions-subject-definitions" aria-label="Link to this section">#</a></h2><p>Full-reference rewrites use four types of labels to identify the source and role of referenced content:</p>
+<table>
+<thead>
+<tr>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;Subject N&gt;</code></td>
+<td>Visible content abstracted from reference assets that can be reused or modified in the target video</td>
+</tr>
+<tr>
+<td><code>&lt;Picture N&gt;</code></td>
+<td>A reference image used as a concrete target frame or shot-planning anchor</td>
+</tr>
+<tr>
+<td><code>&lt;Video N&gt;</code></td>
+<td>A reference video that provides an editing source, continuation starting point, or whole-video temporal structure</td>
+</tr>
+<tr>
+<td><code>&lt;Audio N&gt;</code></td>
+<td>An audio signal that is copied or referenced</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Once a reference label is assigned to a piece of content, it keeps the same meaning across <code>subject_definitions</code>, <code>summary</code>, <code>retention_analysis</code>, <code>detailed_description</code>, and the audio sections.</p>
+</blockquote>
+<p><code>subject_definitions</code> defines each piece of referenced content that must be tracked separately later, such as a person, an environment, a source video's structure, or an audio track. Give each item its own line and explain what its label denotes, its reference role, and the main features to follow; name the corresponding source asset when its provenance needs to be made explicit. If <code>&lt;Picture N&gt;</code> or <code>&lt;Video N&gt;</code> only identifies the source of another referenced item and will not be analyzed or used separately later, cite it inside that item's definition without adding a separate line. <code>retention_analysis</code> records where each referenced item appears and whether it is fully preserved, partially preserved, transferred, or reused.</p></section><section class="chunk lvl3" id="b-2-1-subject-n" data-toc="b-2-1-subject-n"><h3 class="head"><span class="num">2.1</span><span class="htext"><code>&lt;Subject N&gt;</code></span><a class="anchor" href="#b-2-1-subject-n" aria-label="Link to this section">#</a></h3><p><code>&lt;Subject N&gt;</code> is used for reusable visible content, including:</p>
+<ul>
+<li>People, animals, or objects</li>
+<li>Scenes, backgrounds, or environments</li>
+<li>Clothing, props, interfaces, or visual effects</li>
+<li>Styles, actions, expressions, or poses</li>
+</ul>
+<p>It represents a content unit that will actually be used in the target video, rather than the source file itself. One subject may be defined by multiple reference assets, and one reference asset may provide multiple subjects.</p>
+<pre><code class="language-text">&lt;Subject 1&gt; is the young woman in &lt;Picture 1&gt;, with long dark hair, a blue cardigan, and a thin silver necklace.
+</code></pre>
+<p>When the same subject comes from multiple assets, combine the sources and state what each asset provides:</p>
+<pre><code class="language-text">&lt;Subject 1&gt; is the woman whose appearance comes from &lt;Picture 1&gt; and whose walking motion comes from &lt;Video 1&gt;.
+</code></pre></section><section class="chunk lvl3" id="b-2-2-picture-n" data-toc="b-2-2-picture-n"><h3 class="head"><span class="num">2.2</span><span class="htext"><code>&lt;Picture N&gt;</code></span><a class="anchor" href="#b-2-2-picture-n" aria-label="Link to this section">#</a></h3><p>Use a standalone <code>&lt;Picture N&gt;</code> when the reference image itself serves as a shot's first frame, keyframe, last frame, edited keyframe, or composition anchor:</p>
+<pre><code class="language-text">&lt;Picture 2&gt; is the first frame of [Shot 1], showing a woman seated beside a café window.
+</code></pre>
+<p>If an image is used only to define a character, scene, costume, or style, do not create a standalone picture entry. Instead, cite the image source inside the corresponding <code>&lt;Subject N&gt;</code> definition.</p>
+<p>When an image acts as a storyboard or shot-planning reference, state which shots it maps to and what planning information it provides:</p>
+<pre><code class="language-text">&lt;Picture 3&gt; is a storyboard reference for [Shot 1] and [Shot 2], defining their viewpoint, subject placement, and shot order.
+</code></pre></section><section class="chunk lvl3" id="b-2-3-video-n" data-toc="b-2-3-video-n"><h3 class="head"><span class="num">2.3</span><span class="htext"><code>&lt;Video N&gt;</code></span><a class="anchor" href="#b-2-3-video-n" aria-label="Link to this section">#</a></h3><p><code>&lt;Video N&gt;</code> is reserved for whole-video relationships, such as:</p>
+<ul>
+<li>Editing an original video</li>
+<li>Continuing from the end of an original video</li>
+<li>Referencing the original video's camera movement, cuts, rhythm, or temporal structure</li>
+</ul>
+<pre><code class="language-text">&lt;Video 1&gt; is the source video for the target video edit.
+</code></pre>
+<p>If a person, object, scene, action, or effect from a reference video is reused as visible content, it still belongs under <code>&lt;Subject N&gt;</code>. <code>&lt;Video N&gt;</code> identifies the asset or structural source and does not replace subject labels.</p></section><section class="chunk lvl3" id="b-2-4-audio-n" data-toc="b-2-4-audio-n"><h3 class="head"><span class="num">2.4</span><span class="htext"><code>&lt;Audio N&gt;</code></span><a class="anchor" href="#b-2-4-audio-n" aria-label="Link to this section">#</a></h3><p><code>&lt;Audio N&gt;</code> represents a standalone audio asset or an enabled synchronized audio track from a reference video. Common uses include:</p>
+<ul>
+<li>Copying all or part of an audio signal</li>
+<li>Referencing a background-music style</li>
+<li>Referencing a speaker's voice timbre and delivery</li>
+<li>Using dialogue, lyrics, or sound effects from the original audio</li>
+<li>Referencing beat, rhythm, or audio continuity</li>
+</ul>
+<p>When an <code>&lt;Audio N&gt;</code> explicitly corresponds to a target speaker, reuse that speaker's global ID in the definition: write <code>&lt;Subject N&gt; (Sx)</code> when the speaker maps to a defined subject, or use a stable voice description followed by <code>(Sx)</code> otherwise. The ID comes from the target video's global speaker order and is not independently assigned or renumbered in the audio definition. See Section 5.4 for the speaker-numbering rules:</p>
+<pre><code class="language-text">&lt;Audio 1&gt; is the voice-timbre reference for &lt;Subject 1&gt; (S1).
+</code></pre>
+<p>When one audio asset serves multiple roles, describe those roles in one natural sentence rather than creating additional subsections.</p></section><section class="chunk lvl3" id="b-2-5-visual-and-audio-tracks-from-the-same-reference-video" data-toc="b-2-5-visual-and-audio-tracks-from-the-same-reference-video"><h3 class="head"><span class="num">2.5</span><span class="htext">Visual and Audio Tracks from the Same Reference Video</span><a class="anchor" href="#b-2-5-visual-and-audio-tracks-from-the-same-reference-video" aria-label="Link to this section">#</a></h3><p><code>&lt;Video N&gt;</code> and <code>&lt;Audio N&gt;</code> are numbered independently. Each index indicates only the label's order within its own category and does not encode a pairing between the two categories. The same reference video may therefore correspond to <code>&lt;Video 1&gt;</code> and <code>&lt;Audio 2&gt;</code>; different indices do not prevent them from coming from the same source asset.</p>
+<p>An ordinary reference video does not create <code>&lt;Audio N&gt;</code> merely because the file contains sound.</p>
+<p>An <code>&lt;Audio N&gt;</code> definition primarily states the audio's role and does not have to name the <code>&lt;Video N&gt;</code> it comes from. State the shared source only when needed to remove provenance ambiguity, for example:</p>
+<pre><code class="language-text">&lt;Video 1&gt; is the source video for the target video edit.
+&lt;Audio 2&gt; is the synchronized audio track of &lt;Video 1&gt; and is reused in the target video.
+</code></pre></section><section class="chunk lvl2" id="b-3-summary" data-toc="b-3-summary"><h2 class="head"><span class="num">3</span><span class="htext"><code>summary</code></span><a class="anchor" href="#b-3-summary" aria-label="Link to this section">#</a></h2><p>This section uses one short English paragraph to summarize the target video and its reference relationships. It begins with a square-bracketed task-type prefix:</p>
+<pre><code class="language-text">[reference generation] ...
+[video editing + reference generation + audio reuse] ...
+</code></pre>
+<p>Choose task types according to the actual role each reference asset plays in the target video:</p>
+<table>
+<thead>
+<tr>
+<th>Task type</th>
+<th>When to use it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>keyframe completion</code></td>
+<td>An image serves as the target video's first frame, keyframe, last frame, edited keyframe, or another concrete frame anchor</td>
+</tr>
+<tr>
+<td><code>reference generation</code></td>
+<td>An image, video, or audio asset provides generation guidance for a character, scene, style, action, camera movement, storyboard, and so on, without serving as a concrete frame or as the source video being edited or continued</td>
+</tr>
+<tr>
+<td><code>video editing</code></td>
+<td>An existing source video is directly modified; editing an image or generating between still keyframes does not belong to this type</td>
+</tr>
+<tr>
+<td><code>video continuation</code></td>
+<td>New content continues, extends, resumes, or transitions from an existing source video</td>
+</tr>
+<tr>
+<td><code>audio reuse</code></td>
+<td>The same audio signal is reused in full or in part</td>
+</tr>
+<tr>
+<td><code>audio reference</code></td>
+<td>The audio signal is not copied directly; only its music style, timbre, dialogue or lyric content, sound-effect texture, beat, or continuity is referenced</td>
+</tr>
+</tbody>
+</table>
+<p>When a task satisfies multiple relationships, combine the task types with <code>+</code> and do not repeat a type. For example, continuing from a source video while using an image as the last frame is written as <code>[video continuation + keyframe completion]</code>. Editing a source video while retaining its original audio may be written as <code>[video editing + audio reuse]</code>.</p>
+<p>The mere presence of video or audio does not automatically create a corresponding task type. If a reference video provides only camera movement, cuts, or rhythm, it normally belongs to <code>reference generation</code>. Use <code>video editing</code> or <code>video continuation</code> only when that video is directly edited or continued.</p>
+<p>When editing a source video, use <code>audio reuse</code> as well if its original audio remains audible. When continuing a source video without directly copying the audio signal, use <code>audio reference</code> if the new audio only continues the original track's audible characteristics.</p>
+<p>The summary uses the previously defined <code>&lt;Subject N&gt;</code>, <code>&lt;Picture N&gt;</code>, <code>&lt;Video N&gt;</code>, and <code>&lt;Audio N&gt;</code> labels to describe the main subjects, shot flow, and roles of the reference assets. Do not introduce new reference labels in this section.</p>
+<p>For video-editing tasks, begin the summary after the task-type prefix with:</p>
+<pre><code class="language-text">The target video is an edited version of &lt;Video 1&gt;.
+</code></pre></section><section class="chunk lvl2" id="b-4-retention-analysis" data-toc="b-4-retention-analysis"><h2 class="head"><span class="num">4</span><span class="htext"><code>retention_analysis</code></span><a class="anchor" href="#b-4-retention-analysis" aria-label="Link to this section">#</a></h2><p>This section describes how each piece of referenced content is preserved, transferred, copied, or referenced in the target video. Use one line for each reference label and preserve the meaning established in <code>subject_definitions</code>.</p></section><section class="chunk lvl3" id="b-4-1-visible-content" data-toc="b-4-1-visible-content"><h3 class="head"><span class="num">4.1</span><span class="htext">Visible Content</span><a class="anchor" href="#b-4-1-visible-content" aria-label="Link to this section">#</a></h3><p><code>&lt;Subject N&gt;</code>, <code>&lt;Picture N&gt;</code>, and <code>&lt;Video N&gt;</code> use the following relationship markers. These markers are fixed English values in the output format:</p>
+<table>
+<thead>
+<tr>
+<th>Relationship marker</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fully_preserved</code></td>
+<td>The defined role of the referenced content is fully preserved</td>
+</tr>
+<tr>
+<td><code>partially_preserved</code></td>
+<td>The referenced content is still used, but some defined characteristics are changed or only partially retained</td>
+</tr>
+<tr>
+<td><code>attribute_transfer</code></td>
+<td>Referenced characteristics are transferred to a different identifiable target subject</td>
+</tr>
+<tr>
+<td><code>weak_reference</code></td>
+<td>Only broad similarity in style, category, composition, or atmosphere is retained</td>
+</tr>
+</tbody>
+</table>
+<p>Subject entry:</p>
+<pre><code class="language-text">&lt;Subject 1&gt; (appears in [Shot 1], [Shot 3]): fully_preserved - ...
+</code></pre>
+<p>Picture entry:</p>
+<pre><code class="language-text">&lt;Picture 2&gt; ([Shot 1] first frame): fully_preserved - ...
+</code></pre>
+<p>Video-structure entry:</p>
+<pre><code class="language-text">&lt;Video 1&gt; (cut and pacing structure): weak_reference - ...
+</code></pre></section><section class="chunk lvl3" id="b-4-2-audio" data-toc="b-4-2-audio"><h3 class="head"><span class="num">4.2</span><span class="htext">Audio</span><a class="anchor" href="#b-4-2-audio" aria-label="Link to this section">#</a></h3><p><code>&lt;Audio N&gt;</code> uses the following relationship markers:</p>
+<table>
+<thead>
+<tr>
+<th>Relationship marker</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fully_copy</code></td>
+<td>The complete source audio serves as the target video's complete final audio track</td>
+</tr>
+<tr>
+<td><code>partially_copy</code></td>
+<td>Only part of the timeline or selected audio layers are copied, or other sounds are added, removed, or replaced after copying</td>
+</tr>
+<tr>
+<td><code>reference</code></td>
+<td>The signal is not copied directly; only timbre, rhythm, music style, dialogue content, or sound texture is referenced</td>
+</tr>
+<tr>
+<td><code>weak_reference</code></td>
+<td>Only broad similarity in category or atmosphere is retained</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-text">&lt;Audio 1&gt;: fully_copy - &lt;Audio 1&gt; is reused 1:1 as the target video's complete final audio track.
+</code></pre>
+<pre><code class="language-text">&lt;Audio 2&gt;: reference - the target speaker follows &lt;Audio 2&gt;'s voice timbre and measured delivery without copying the original signal.
+</code></pre>
+<p>Choose each relationship marker only within the reference role already defined for that label in <code>subject_definitions</code>. Do not treat newly added actions, backgrounds, or plot events in the target video as losses of reference fidelity.</p></section><section class="chunk lvl2" id="b-5-detailed-description" data-toc="b-5-detailed-description"><h2 class="head"><span class="num">5</span><span class="htext"><code>detailed_description</code></span><a class="anchor" href="#b-5-detailed-description" aria-label="Link to this section">#</a></h2><p>This is the main body of a full-reference rewrite. It describes visuals, actions, sound, and dialogue shot by shot in target-video playback order and inserts reference labels where they apply.</p></section><section class="chunk lvl3" id="b-5-1-basic-format" data-toc="b-5-1-basic-format"><h3 class="head"><span class="num">5.1</span><span class="htext">Basic Format</span><a class="anchor" href="#b-5-1-basic-format" aria-label="Link to this section">#</a></h3><p>The basic format follows the <a href="#a-top">Video Prompt Writing Guide (T2VA / I2VA / FL2VA / L2VA)</a>:</p>
+<ul>
+<li>Write the body in English. Preserve the original language of dialogue, lyrics, and visible text.</li>
+<li><code>[Shot 1]</code> marks the opening shot and has no timestamp. Later shots use <code>[Shot N] At MM:SS.mmm, ...</code> to mark cut times.</li>
+<li>Write camera movement as natural English within the current shot, including movement type, amplitude, and speed when they need to be expressed.</li>
+<li>Give vocal sources stable <code>(S1)</code>, <code>(S2)</code>, and subsequent IDs. Write dialogue and lyrics as <code>&lt;d&gt;[Language] ...&lt;/d&gt;</code>.</li>
+<li>Use <code>&lt;scenetrans&gt;</code>, <code>&lt;cutoff&gt;</code>, and the corresponding continuity descriptions for dialogue crossing a cut, speech truncated by the video ending, and continuous audio across shots.</li>
+</ul>
+<p>For complete rules and examples covering camera vocabulary, group speech, voice-over, dialogue across cuts, and visible text, see the <a href="#a-top">Video Prompt Writing Guide (T2VA / I2VA / FL2VA / L2VA)</a>.</p></section><section class="chunk lvl3" id="b-5-2-full-reference-mode-differences" data-toc="b-5-2-full-reference-mode-differences"><h3 class="head"><span class="num">5.2</span><span class="htext">Full-Reference Mode Differences</span><a class="anchor" href="#b-5-2-full-reference-mode-differences" aria-label="Link to this section">#</a></h3><table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>T2VA</th>
+<th>Full-reference mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Main field</td>
+<td><code>integrated_multimodal_description</code></td>
+<td><code>detailed_description</code></td>
+</tr>
+<tr>
+<td>Style opening</td>
+<td>Written after <code>[Shot 1]</code></td>
+<td>Established in one or two English sentences before <code>[Shot 1]</code></td>
+</tr>
+<tr>
+<td>Reference information</td>
+<td>Does not use full-reference labels</td>
+<td>Inserts <code>&lt;Subject N&gt;</code>, <code>&lt;Picture N&gt;</code>, <code>&lt;Video N&gt;</code>, and <code>&lt;Audio N&gt;</code> at their first appearance and where their roles apply</td>
+</tr>
+<tr>
+<td>Audio relationships</td>
+<td>Describes the target video's own sound</td>
+<td>Cites <code>&lt;Audio N&gt;</code> in the corresponding shot or audio phase and states whether the signal is copied or referenced</td>
+</tr>
+</tbody>
+</table>
+<p>Opening example:</p>
+<pre><code class="language-text">The target video is in a cinematic, literary music-video style with soft lighting and a slightly desaturated color palette.
+[Shot 1] The scene opens in a crowded urban street...
+[Shot 2] At 00:09.000, the shot cuts to an extreme close-up...
+</code></pre>
+<p>For generation tasks, <code>detailed_description</code> is normally 350-500 English words. Dialogue-dense content prioritizes fitting the complete spoken timeline rather than mechanically reaching a word count. Video-editing descriptions scale with the complexity of the source video and do not have to follow the generation-task range. A single shot does not automatically justify a shorter description; distribute detail across multiple shots according to their information load.</p></section><section class="chunk lvl3" id="b-5-3-using-reference-labels-in-shots" data-toc="b-5-3-using-reference-labels-in-shots"><h3 class="head"><span class="num">5.3</span><span class="htext">Using Reference Labels in Shots</span><a class="anchor" href="#b-5-3-using-reference-labels-in-shots" aria-label="Link to this section">#</a></h3><p>At the first clear appearance of an important <code>&lt;Subject N&gt;</code>, describe its referenced characteristics, position in the frame, and current action within what is actually visible in the shot. Continue using the same label in later shots without redefining what the label represents.</p>
+<p>Use natural phrasing for concrete frame anchors:</p>
+<pre><code class="language-text">the shot begins from &lt;Picture 1&gt;
+the shot's keyframe corresponds to &lt;Picture 2&gt;
+the shot ends on &lt;Picture 3&gt;
+</code></pre>
+<p>When editing or continuing an original video, cite <code>&lt;Video N&gt;</code> naturally where its source state, structure, or continuation relationship applies. Cite <code>&lt;Audio N&gt;</code> in the shot or semantic phase where the audio relationship is active.</p></section><section class="chunk lvl3" id="b-5-4-speakers-audio-sources-and-dialogue" data-toc="b-5-4-speakers-audio-sources-and-dialogue"><h3 class="head"><span class="num">5.4</span><span class="htext">Speakers, Audio Sources, and Dialogue</span><a class="anchor" href="#b-5-4-speakers-audio-sources-and-dialogue" aria-label="Link to this section">#</a></h3><p>The basic speaker-ID and <code>&lt;d&gt;</code> formats follow T2VA. When a referenced subject physically speaks, retain both the visual reference label and the speaker ID:</p>
+<pre><code class="language-text">&lt;Subject 2&gt; (S1) turns toward the woman and says, &lt;d&gt;[English] Last summer, I went to my grandfather's house. He talked about you.&lt;/d&gt;
+</code></pre>
+<p><code>&lt;Subject N&gt;</code> identifies the referenced subject, while <code>(Sx)</code> identifies the actual speaker. When the subject speaks, write <code>&lt;Subject N&gt; (Sx)</code>. If the same subject speaks off-screen, keep the same form and mark it as <code>off-screen</code>. When the speaker does not correspond to a defined subject, use a stable voice description followed by <code>(Sx)</code>.</p>
+<p>When verbal content is only a cue within a directly reused BGM or complete soundtrack, and no person, character, narrator, or other independent vocal source physically produces it, use <code>&lt;Audio N&gt;</code> as the audible source and do not invent an additional <code>(Sx)</code>. If a concrete person, character, narrator, or other independent vocal source produces the voice, assign and reuse <code>(Sx)</code> for that source:</p>
+<pre><code class="language-text">When &lt;Audio 1&gt; reaches the phrase &lt;d&gt;[English] I'm lonely lonely lonely lonely lonely I'm lonely&lt;/d&gt;, &lt;Subject 1&gt; performs the corresponding hand gesture without becoming a separate speaker source.
+</code></pre>
+<p>When dialogue, narration, or lyrics from reference audio are directly reused, or when the input prompt explicitly requests their reperformance, preserve the exact source words and original language inside <code>&lt;d&gt;</code>. Write <code>[unclear]</code> for unintelligible spans instead of guessing or paraphrasing them. Standardize punctuation to the basic written marks needed to express the sentence, such as <code>,</code>, <code>.</code>, <code>?</code>, and <code>!</code>; remove repeated tildes, emoji, bullets, and repeated or decorative punctuation. End complete statements, questions, and exclamations with <code>.</code>, <code>?</code>, or <code>!</code> respectively before <code>&lt;/d&gt;</code>.</p>
+<p>When only timbre, rhythm, emotion, or delivery is referenced, do not carry the original dialogue from the reference audio into the target video.</p>
+<p>Assign <code>(Sx)</code> once according to the order of actual vocal events in the target video. Reuse the corresponding ID at every actual vocal event in <code>detailed_description</code>; an <code>&lt;Audio N&gt;</code> definition bound to a target speaker in <code>subject_definitions</code> also reuses the same <code>(Sx)</code> but never assigns a new one independently. Do not write <code>(Sx)</code> in <code>retention_analysis</code>. Verbal cues that exist only within a directly reused BGM or complete soundtrack use <code>&lt;Audio N&gt;</code>; voices physically produced by a concrete person, character, narrator, or other independent vocal source use <code>(Sx)</code>.</p></section><section class="chunk lvl2" id="b-6-overall-soundscape-and-non-diegetic-music" data-toc="b-6-overall-soundscape-and-non-diegetic-music"><h2 class="head"><span class="num">6</span><span class="htext"><code>overall_soundscape</code> and <code>non_diegetic_music</code></span><a class="anchor" href="#b-6-overall-soundscape-and-non-diegetic-music" aria-label="Link to this section">#</a></h2><p>The definitions of these two sound categories follow the <a href="#a-top">Video Prompt Writing Guide (T2VA / I2VA / FL2VA / L2VA)</a>.</p>
+<p><code>overall_soundscape</code> summarizes ambience and physical sounds across the full video. Dialogue, singing, and sound events synchronized to a particular shot remain in <code>detailed_description</code>:</p>
+<pre><code class="language-text">overall_soundscape: Quiet indoor room tone and a low ventilation hum continue throughout the video.
+</code></pre>
+<p><code>non_diegetic_music</code> describes background music that the characters cannot hear and that is audible only to the audience. When music is present, state its instrumentation, tempo, and dynamic development:</p>
+<pre><code class="language-text">non_diegetic_music: A restrained solo-piano score at a slow tempo, with sustained low cello underneath and no swell.
+</code></pre>
+<p>When reference audio is used, state its copy or reference relationship only in the section that matches the audible layer: ambience and sound effects belong in <code>overall_soundscape</code>, while audience-only score belongs in <code>non_diegetic_music</code>. If the same audio provides both kinds of content, describe the corresponding relationship in each section:</p>
+<pre><code class="language-text">overall_soundscape: The copied ambience layer from &lt;Audio 1&gt; continues throughout the target video.
+non_diegetic_music: &lt;Audio 2&gt; is directly reused as the complete audience-only score.
+</code></pre>
+<p>Write complete dialogue and lyrics only inside <code>&lt;d&gt;</code> in <code>detailed_description</code>; do not repeat them in these two sections.</p></section><section class="chunk lvl2" id="b-7-complete-example" data-toc="b-7-complete-example"><h2 class="head"><span class="num">7</span><span class="htext">Complete Example</span><a class="anchor" href="#b-7-complete-example" aria-label="Link to this section">#</a></h2><details>
+<summary>Show the complete example</summary>
+
+
+<pre><code class="language-text">subject_definitions:
+&lt;Subject 1&gt; is the coffee-shop environment in &lt;Picture 1&gt;, featuring an exposed brick wall, an orange tufted sofa with patterned pillows, a neon sign, and a wooden coffee table.
+&lt;Subject 2&gt; is the fluffy white Samoyed in &lt;Picture 2&gt;, &lt;Picture 3&gt;, and &lt;Picture 4&gt;, with thick white fur, pointed ears, a dark nose, and a curved tail.
+&lt;Subject 3&gt; is the young blonde woman in &lt;Video 1&gt;, with long blonde hair and a light-pink button-down shirt with rolled-up sleeves.
+&lt;Subject 4&gt; is the young man in &lt;Video 2&gt;, with short wavy brown hair and a dark-grey hoodie with drawstrings.
+&lt;Audio 1&gt; is the voice-timbre reference for &lt;Subject 3&gt; (S1), containing a spoken English vocal layer.
+
+summary:
+[reference generation + audio reference] The target video shows &lt;Subject 3&gt; eating a cookie in &lt;Subject 1&gt;. &lt;Subject 4&gt; enters with &lt;Subject 2&gt;, which lunges toward the cookie. The three-shot exchange uses &lt;Audio 1&gt; as the voice-timbre reference for &lt;Subject 3&gt; and ends with a canned audience laugh.
+
+retention_analysis:
+&lt;Subject 1&gt; (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - the exposed brick wall, orange tufted sofa, patterned pillows, neon sign, and wooden coffee table are retained.
+&lt;Subject 2&gt; (appears in [Shot 1], [Shot 2]): fully_preserved - the Samoyed's thick white fur, pointed ears, dark nose, and curved tail are retained.
+&lt;Subject 3&gt; (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - the blonde woman's identity, long hair, and light-pink shirt are retained.
+&lt;Subject 4&gt; (appears in [Shot 1], [Shot 2]): fully_preserved - the young man's short wavy brown hair and dark-grey hoodie are retained.
+&lt;Audio 1&gt;: reference - its vocal timbre guides the dialogue delivery of &lt;Subject 3&gt; without copying the original signal.
+
+detailed_description:
+The target video uses a realistic multi-camera sitcom style with warm indoor lighting.
+[Shot 1] A medium shot establishes &lt;Subject 1&gt;, the coffee shop with its exposed brick wall, orange tufted sofa, patterned pillows, neon sign, and wooden coffee table. &lt;Subject 3&gt; (S1), the young woman with long blonde hair and a light-pink button-down shirt with rolled-up sleeves, sits on the sofa holding a chocolate-chip cookie. From the left, &lt;Subject 4&gt;, the young man with short wavy brown hair and a dark-grey hoodie with drawstrings, enters holding the leash of &lt;Subject 2&gt;, the thick-furred white Samoyed with pointed ears, a dark nose, and a curved tail. The dog lunges toward the cookie and pulls the leash taut. &lt;Subject 3&gt; (S1) jerks her hand back and, using the clear youthful voice timbre referenced from &lt;Audio 1&gt;, exclaims with light annoyance, &lt;d&gt;[English] Hey! Watch your dog!&lt;/d&gt; She closes her lips and guards the cookie while &lt;Subject 4&gt; pulls the dog back.
+[Shot 2] At 00:03.000, the shot cuts to a close-up of &lt;Subject 4&gt; (S2), the young man in the dark-grey hoodie from Shot 1, sitting beside &lt;Subject 3&gt; on the sofa and holding &lt;Subject 2&gt; securely in his arms. &lt;Subject 4&gt; (S2) says in a casual young male voice with a playful tone and an easy conversational pace, &lt;d&gt;[English] He just likes cookies more than me.&lt;/d&gt; He closes his mouth into an apologetic smile and strokes the dog's thick white fur.
+[Shot 3] At 00:05.000, the shot cuts to a close-up of &lt;Subject 3&gt; (S1), the blonde woman in the light-pink shirt from Shot 1. Her annoyance softens as she looks toward the Samoyed. &lt;Subject 3&gt; (S1) replies in the same clear youthful voice referenced from &lt;Audio 1&gt; with an amused cadence, &lt;d&gt;[English] Well, he has good taste at least.&lt;/d&gt; She smiles and raises the cookie in a small toast-like gesture. A classic canned audience laugh begins immediately after the line and continues through the final frame.
+
+overall_soundscape:
+Soft indoor coffee-shop room tone continues throughout the scene.
+
+non_diegetic_music:
+N/A
+</code></pre>
+
+
+</details></section></article>
+  </main>
+</div>
+
+<script>
+(function(){
+  var chunks = Array.prototype.slice.call(document.querySelectorAll('.chunk'));
+  var links  = Array.prototype.slice.call(document.querySelectorAll('.sidebar a'));
+  var parts  = Array.prototype.slice.call(document.querySelectorAll('.part'));
+  var groups = Array.prototype.slice.call(document.querySelectorAll('.toc-group'));
+  var q = document.getElementById('q');
+  var state = document.getElementById('state'), stateText = document.getElementById('statetext');
+  var empty = document.getElementById('empty');
+  var linkFor = {};
+  links.forEach(function(a){ linkFor[a.dataset.target] = a; });
+
+  /* --- code panels: wrap + copy --- */
+  Array.prototype.slice.call(document.querySelectorAll('pre')).forEach(function(pre){
+    var wrap = document.createElement('div'); wrap.className = 'codewrap';
+    pre.parentNode.insertBefore(wrap, pre); wrap.appendChild(pre);
+    var b = document.createElement('button');
+    b.className = 'copy'; b.type = 'button'; b.textContent = 'Copy';
+    wrap.appendChild(b);
+  });
+
+  document.addEventListener('click', function(e){
+    var b = e.target.closest ? e.target.closest('.copy') : null;
+    if (!b) return;
+    var pre = b.parentNode.querySelector('pre');
+    if (!pre) return;
+    var text = pre.innerText;
+    var done = function(){ b.textContent = 'Copied'; b.classList.add('done');
+      setTimeout(function(){ b.textContent = 'Copy'; b.classList.remove('done'); }, 1400); };
+    function fallback(){
+      var ta = document.createElement('textarea'); ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch(err){ b.textContent = 'Copy failed'; }
+      document.body.removeChild(ta);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else { fallback(); }
+  });
+
+  /* --- tables scroll on narrow screens --- */
+  Array.prototype.slice.call(document.querySelectorAll('table')).forEach(function(t){
+    var w = document.createElement('div'); w.className = 'tablewrap';
+    t.parentNode.insertBefore(w, t); w.appendChild(t);
+  });
+
+  /* --- search --- */
+  chunks.forEach(function(c){ c._html = c.innerHTML; c._text = c.textContent.toLowerCase(); });
+
+  function highlight(node, needle){
+    var walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, null), hits = 0, todo = [];
+    while (walk.nextNode()) {
+      var n = walk.currentNode;
+      if (n.nodeValue.toLowerCase().indexOf(needle) > -1 && n.parentNode.nodeName !== 'BUTTON') todo.push(n);
+    }
+    todo.forEach(function(n){
+      var frag = document.createDocumentFragment(), s = n.nodeValue, low = s.toLowerCase(), i = 0, j;
+      while ((j = low.indexOf(needle, i)) > -1) {
+        if (j > i) frag.appendChild(document.createTextNode(s.slice(i, j)));
+        var m = document.createElement('mark');
+        m.textContent = s.slice(j, j + needle.length);
+        frag.appendChild(m); hits++; i = j + needle.length;
+      }
+      if (i < s.length) frag.appendChild(document.createTextNode(s.slice(i)));
+      n.parentNode.replaceChild(frag, n);
+    });
+    return hits;
+  }
+
+  function reset(){
+    chunks.forEach(function(c){
+      if (c.innerHTML !== c._html) { c.innerHTML = c._html; }
+      c.classList.remove('hidden');
+    });
+    /* copy buttons and table wrappers are inside chunk HTML that was restored */
+    links.forEach(function(a){ a.classList.remove('hidden'); });
+    groups.forEach(function(g){ g.classList.remove('hidden'); });
+    parts.forEach(function(p){ p.classList.remove('hidden'); });
+    state.classList.remove('on'); empty.classList.remove('on');
+  }
+
+  var timer;
+  q.addEventListener('input', function(){
+    document.querySelector('.searchbox').classList.toggle('typing', q.value.length > 0);
+    clearTimeout(timer); timer = setTimeout(run, 130);
+  });
+
+  function run(){
+    var needle = q.value.trim().toLowerCase();
+    reset();
+    if (needle.length < 2) { document.body.classList.remove('searching'); spy(); return; }
+    document.body.classList.add('searching');
+    var hits = 0, shown = 0;
+    chunks.forEach(function(c){
+      if (c._text.indexOf(needle) > -1) { hits += highlight(c, needle); shown++; }
+      else { c.classList.add('hidden'); }
+    });
+    links.forEach(function(a){
+      var t = document.getElementById(a.dataset.target);
+      if (t && t.classList.contains('hidden')) a.classList.add('hidden');
+    });
+    groups.forEach(function(g){
+      var vis = g.querySelectorAll('a:not(.hidden)').length;
+      if (!vis) g.classList.add('hidden');
+    });
+    parts.forEach(function(p){
+      var vis = p.querySelectorAll('.chunk:not(.hidden)').length;
+      if (!vis) p.classList.add('hidden');
+    });
+    Array.prototype.slice.call(document.querySelectorAll('.chunk:not(.hidden) details')).forEach(function(d){
+      if (d.textContent.toLowerCase().indexOf(needle) > -1) d.open = true;
+    });
+    if (window.scrollY > 0) window.scrollTo({top: 0, behavior: 'auto'});
+    stateText.textContent = hits + (hits === 1 ? ' match' : ' matches') + ' in ' +
+      shown + (shown === 1 ? ' section' : ' sections') + ' for “' + q.value.trim() + '”';
+    state.classList.add('on');
+    empty.classList.toggle('on', shown === 0);
+    if (shown === 0) { stateText.textContent = 'No matches for “' + q.value.trim() + '”'; }
+  }
+
+  function clearSearch(){
+    q.value = ''; document.querySelector('.searchbox').classList.remove('typing');
+    document.body.classList.remove('searching'); reset(); spy();
+  }
+  document.getElementById('clear').addEventListener('click', function(){ clearSearch(); q.focus(); });
+  document.getElementById('home').addEventListener('click', function(e){
+    e.preventDefault(); clearSearch(); window.scrollTo({top: 0, behavior: 'smooth'});
+  });
+
+  /* --- keyboard --- */
+  document.addEventListener('keydown', function(e){
+    var typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if ((e.key === '/' && !typing) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k')) {
+      e.preventDefault(); q.focus(); q.select();
+    } else if (e.key === 'Escape' && typing) {
+      clearSearch(); q.blur();
+    }
+  });
+
+  /* --- scroll spy + spine progress --- */
+  var veil = document.getElementById('veil'), active = null, ticking = false;
+  function spy(){
+    var cur = null;
+    var offset = (parseInt(getComputedStyle(document.documentElement).getPropertyValue('--topbar')) || 60) + 30;
+    var visible = chunks.filter(function(c){ return !c.classList.contains('hidden'); });
+    for (var i = 0; i < visible.length; i++) {
+      var r = visible[i].getBoundingClientRect();
+      if (r.top <= offset && r.bottom > offset) { cur = visible[i]; break; }
+    }
+    if (!cur) {
+      for (var j = 0; j < visible.length; j++) {
+        if (visible[j].getBoundingClientRect().top > offset) { cur = visible[j]; break; }
+      }
+    }
+    if (!cur && visible.length) cur = visible[visible.length - 1];
+    if (cur && cur !== active) {
+      active = cur;
+      links.forEach(function(a){ a.classList.remove('active'); });
+      var a = linkFor[cur.dataset.toc];
+      if (a) { a.classList.add('active');
+        var nav = document.getElementById('toc');
+        var ar = a.getBoundingClientRect(), nr = nav.getBoundingClientRect();
+        if (ar.top < nr.top + 8 || ar.bottom > nr.bottom - 8) a.scrollIntoView({block:'nearest'});
+      }
+    }
+    var h = document.documentElement;
+    var p = h.scrollTop / Math.max(1, h.scrollHeight - h.clientHeight);
+    veil.style.height = (100 - Math.min(100, Math.max(0, p * 100))).toFixed(2) + '%';
+    ticking = false;
+  }
+  window.addEventListener('scroll', function(){
+    if (!ticking) { ticking = true; requestAnimationFrame(spy); }
+  }, {passive:true});
+  window.addEventListener('resize', spy, {passive:true});
+
+  /* --- theme --- */
+  var root = document.documentElement, tbtn = document.getElementById('theme');
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) setTheme('dark');
+  function setTheme(t){
+    root.setAttribute('data-theme', t);
+    tbtn.textContent = t === 'dark' ? 'Light' : 'Dark';
+    tbtn.setAttribute('aria-label', 'Switch to ' + (t === 'dark' ? 'light' : 'dark') + ' theme');
+  }
+  tbtn.addEventListener('click', function(){
+    setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+
+  /* --- mobile drawer --- */
+  var nav = document.getElementById('toc'), scrim = document.getElementById('scrim');
+  function drawer(open){ nav.classList.toggle('open', open); scrim.classList.toggle('on', open); }
+  document.getElementById('menu').addEventListener('click', function(){ drawer(!nav.classList.contains('open')); });
+  scrim.addEventListener('click', function(){ drawer(false); });
+  nav.addEventListener('click', function(e){ if (e.target.closest('a')) drawer(false); });
+
+  spy();
+})();
+</script>
+</body>
+</html>

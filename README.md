@@ -1,5 +1,7 @@
 # ComfyUI Fantastic H3 Prompt Builder
 
+![version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FAdudeguyman%2FComfyUI-Fantastic-MiniMaxH3-PromptBuilder%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version&color=0a6166) ![nodes 2.0](https://img.shields.io/badge/Nodes%202.0-compatible-7ec87e) ![license](https://img.shields.io/badge/license-MIT-blue)
+
 Guided prompt writing and reference-media handling for the open-weight
 **MiniMax H3** video model in ComfyUI.
 
@@ -40,6 +42,69 @@ glance which preset matches it. Hover the thumbnail for the exact figures.
 
 *Trim and crop clips on the fly without touching the original files, and pull
 any frame straight out of a video into your picture references.*
+
+---
+
+## What's new in 1.6.1
+
+**Prompts can be linked to a media preset.** A prompt is written for a
+particular set of references, so saving one can remember which. If your
+current media already matches a saved preset it offers to link it; if it
+doesn't, it offers to save it as a preset and link it in the same action.
+Which case applies is decided by comparing the media itself, not by the label
+on the preset picker — that label survives every edit short of *Unload*, so it
+can name a preset your media stopped matching an hour ago. Loading a linked
+prompt never swaps your media silently: a strip names the preset, its
+reference count and how many it would replace, and warns you if the preset has
+been edited since it was linked, because reference numbers are positional and
+`<Picture 3>` may no longer mean the picture you wrote it for. Linked prompts
+carry a badge in the library showing what the preset holds, with a hover
+preview of its contents. In draft mode the media goes to the draft's own set,
+never to the node. See
+[Linking a prompt to its media](#linking-a-prompt-to-its-media).
+
+**Media presets can be categorised.** The picker now has the same bar the
+prompt library does — a search box, a category dropdown and a ✎ to rename or
+clear a category — above a list grouped by category with uncategorised sets
+last. File a preset when you save it, or from the ✎ on its row in the picker,
+which changes only the label and never touches the media. Preset names stay
+unique across every category, because a prompt links to a preset by name.
+
+**Closing can save instead of asking.** A new ⚙ setting, *Save to node when
+closing*, makes ✕, Escape and clicking outside give the node your changes.
+Cancel still discards, and a draft is never written to the node by closing.
+While it's on, the unsaved-changes warning greys out, since it has nothing
+left to warn about.
+
+**The bundled guide is now HTML rather than a PDF** — it opens in a tab,
+searches with Ctrl+F, has a contents sidebar and deep links, and reads
+properly on a phone.
+
+**Fixes:**
+
+- Escape now respects your preferences. It used to close the editor directly,
+  discarding unsaved edits even with *Warn about unsaved changes* switched
+  on — which is the opposite of what that setting says.
+- A draft no longer loses its edits when you switch back to Live and then
+  close the editor.
+- A draft that never had media of its own no longer reverts your Media Loader
+  when it's committed. Media a draft merely displays is now kept separate from
+  media it owns, so only a set you deliberately edited is applied.
+- A draft started while the Media Loader was empty now follows the node's
+  media instead of showing none for ever, and committing it can't clear your
+  loader.
+- Media stored in a draft is checked when it loads; anything unusable is
+  discarded and the banner says how many, rather than a broken reference
+  reaching a generation.
+- The preset picker no longer reports a freshly loaded preset as edited. It
+  compares effective values now, so a preset whose stored form predates a
+  field still matches itself after loading.
+- A preset containing a switched-off item can be recognised again; the
+  comparison was ignoring disabled items on one side only.
+- The draft banner stays pinned above the editor body instead of scrolling
+  away, and survives a failure elsewhere in the form — it's the one thing that
+  tells you the node isn't holding what you're looking at.
+- The ⚙ menu can discard every saved draft, and shows how many there are.
 
 ---
 
@@ -116,12 +181,14 @@ Highlights:
 - **Live checking.** Shot numbering, cut times, dialogue formatting, references
   you connected but never mentioned — flagged while you write, not after a
   failed render.
-- **The official guide is built in.** A 📖 button opens the full PDF.
+- **The official guide is built in.** A 📖 button opens the full guide in a new tab — searchable, linkable, and readable on a phone.
 - **Your work isn't lost by a stray click.** Closing with unsaved changes asks
   first — **Save to node**, **Discard**, or **Keep editing**. Only *Save to
-  node* changes what the node sends; ✕, Cancel and Escape discard. The ⚙ menu
-  turns off click-outside-to-close, or the warning itself, if you'd rather work
-  another way.
+  node* changes what the node sends. If you'd rather work the other way round,
+  ⚙ → *Save to node when closing* makes ✕, Escape and clicking outside hand
+  your changes to the node instead of asking; Cancel still discards, and a
+  draft is never written to the node by closing. The ⚙ menu can also turn off
+  click-outside-to-close, or the warning itself.
 - **Reference tags read as chips** in the text, colour-coded by kind (⚙ has a
   toggle for plain text fields, which keeps the hover previews), with the
   thumbnail on hover — no side panel opening and shifting the layout. Hovering
@@ -342,6 +409,39 @@ Loader node: the draft keeps its own media until you commit. Which set you
 are editing is decided by where you clicked — the node's own panel and its
 "Open loader…" button are always Live, and ▣ Media while drafting is always
 the draft.
+
+### Linking a prompt to its media
+
+A prompt is usually written for a particular set of references, so the save
+form offers to remember which. What it offers depends on your current media:
+
+- **Linked to media — *name*** — your media is already saved as that preset,
+  so ticking the box is all it takes.
+- **Link to media — new preset** — your media isn't saved as a preset yet.
+  Tick the box, give it a name, and it's saved and linked in one go.
+
+The match is decided by comparing the media itself, not by the label on the
+preset picker: that label survives every edit short of **Unload media**, so it
+can name a preset your media stopped matching a while ago. When it has, the
+picker now shows it as *name (edited)*.
+
+Linked prompts carry a badge in the library showing what the preset holds —
+a small icon and count per kind, then the preset name — counted live from the preset itself, so it stays
+right even if you edit the preset afterwards, so you can
+tell at a glance which prompts bring media with them. Hover it for a preview
+of what's in that preset — thumbnails, a count by kind, and a note if any of
+its files have gone missing.
+
+Loading a linked prompt never changes your media silently. A strip appears
+naming the preset, how many references it holds and how many it would
+replace, with **Load the media too** or **Prompt only**. If the preset has
+been edited since it was linked, the strip warns you — reference numbers are
+positional, so `<Picture 3>` in the prompt may no longer mean the picture it
+did when you wrote it. A preset that has since been deleted doesn't block the
+prompt; you're just told it's gone.
+
+In draft mode the media goes to the draft's own set, never to the Media
+Loader node.
 
 ---
 
@@ -706,6 +806,15 @@ repositions on every canvas redraw, and any touch collapses an open native
 picker — the "dropdown flashes and closes" bug. The pack's popover can only be
 closed by you: pick an entry, click elsewhere, or press Escape.
 
+Presets can be filed into **categories**. The picker has the same bar the
+prompt library does — a search box, a category dropdown, and a ✎ to rename or
+clear the selected category — above a list grouped by category, with
+uncategorised sets last. Set a category when you save, or file an existing
+preset from the picker with the ✎ on its row; that only changes the label,
+never the media. Categories are a view, not folders: preset
+names stay unique across the whole set, because a prompt links to a preset by
+name.
+
 Presets point at files you already uploaded rather than copying them, so saving
 and loading is instant. If you later delete one of those files, loading the
 preset skips it and tells you which one is missing. Deleting a preset never
@@ -977,7 +1086,7 @@ script failing, and almost always one of:
    registering. Open the browser console (F12) — the first red error usually
    names the culprit, and it often isn't this pack.
 3. **A partial install.** `custom_nodes/<this pack>/web/` should contain
-   `promptbuilder.js`, `medialoader.js`, `fileprefix.js` and the guide PDF.
+   `promptbuilder.js`, `medialoader.js`, `fileprefix.js` and the guide.
 
 If this pack itself is the one failing, the node now shows a **⚠ UI failed**
 button — click it for the error, and include that text in a bug report.
