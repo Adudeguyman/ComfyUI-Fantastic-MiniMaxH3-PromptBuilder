@@ -539,9 +539,9 @@ def resolve_date_tokens(text, now=None):
             return match.group(0)
 
     out = re.sub(r"%([%YyGmdjHIMSpaAbBcxXZUWuw])", _code, out)
-    # Keep the result inside the output directory.
-    out = out.replace("\\", "/").replace("..", "").lstrip("/")
-    return re.sub(r"/{2,}", "/", out)
+    # Path safety is not this function's job: every caller feeds the result
+    # into _contain_prefix(), which refuses escapes instead of rewriting them.
+    return out
 
 
 # Labels are format descriptions, not example dates: the chosen label is what
@@ -628,10 +628,35 @@ class MiniMaxH3FilenamePrefix:
         name = resolve_date_tokens((filename or "").strip(), now) or "vid"
         name = name.strip("/")
         prefix = "/".join([p for p in parts if p] + [name])
-        prefix = prefix.replace("\\", "/").replace("..", "")
-        prefix = re.sub(r"/{2,}", "/", prefix).lstrip("/")
+        prefix = _contain_prefix(prefix)
         print(f"[MiniMaxH3 FilenamePrefix] -> {prefix}")
         return (prefix,)
+
+
+def _contain_prefix(prefix):
+    """Normalise a save prefix and refuse one that would leave the output root.
+
+    Every widget on the node is free text and a workflow can be queued by
+    anyone who can reach /prompt, so the prefix is attacker-controlled by
+    construction. Core's save nodes do reject an escaping prefix themselves,
+    but this node should not have to be trusted on that: check it here, with
+    the same realpath + commonpath test the routes use, and fail loudly
+    rather than quietly rewriting what the user typed.
+    """
+    prefix = prefix.replace("\\", "/")
+    prefix = re.sub(r"^[A-Za-z]:", "", prefix)        # Windows drive letter
+    prefix = re.sub(r"/{2,}", "/", prefix).lstrip("/")  # UNC / absolute
+    if any(seg == ".." for seg in prefix.split("/")):
+        raise ValueError(
+            "filename_prefix must stay inside ComfyUI's output folder — "
+            "remove '..' from the folder, subfolder or filename.")
+    if folder_paths is not None:
+        root = os.path.realpath(folder_paths.get_output_directory())
+        target = os.path.realpath(os.path.join(root, prefix))
+        if os.path.commonpath((root, target)) != root:
+            raise ValueError(
+                "filename_prefix resolves outside ComfyUI's output folder.")
+    return prefix
 
 
 NODE_CLASS_MAPPINGS = {

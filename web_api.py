@@ -1,9 +1,11 @@
 """HTTP routes backing the Media Loader's drag-drop and file picker."""
 
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import time
 
 from . import media_io
@@ -21,6 +23,16 @@ except Exception:  # pragma: no cover
     folder_paths = None
 
 SUBFOLDER = "minimax_h3"
+
+# One random token per server process. Every state-changing route demands it
+# in a request header; the frontend fetches it from a same-origin GET. A page
+# on another origin can send a POST but cannot read that GET's response, so it
+# can never learn the header value. That is the synchronizer-token pattern —
+# the mitigation the registry's review names outright ("no server-minted
+# CSRF token") — and unlike the Sec-Fetch-Site check it does not fall open
+# for requests that arrive without browser headers.
+_TOKEN = secrets.token_urlsafe(32)
+TOKEN_HEADER = "X-MiniMaxH3-Token"
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg"}
@@ -311,21 +323,28 @@ if PromptServer is not None and web is not None:
         return bool(netloc) and netloc.lower() != host.lower()
 
     def _guard(json_only=True):
-        """Route decorator: refuse cross-site requests before the handler runs.
+        """Route decorator: refuse cross-site or token-less requests before
+        the handler runs.
 
-        `json_only` additionally requires Content-Type: application/json.
-        That is itself a CSRF defence, not pedantry: a JSON content type makes
-        the request non-"simple" under CORS, so a cross-origin page cannot
-        send it without a preflight that these routes never approve. Without
-        it, `request.json()` happily parses a text/plain simple request from
-        any page the operator visits — which is exactly what the registry
-        review flagged.
+        Three checks, cheapest first. The Sec-Fetch-Site/Origin test rejects
+        anything a browser marks as another site. The token check rejects
+        anything that did not first read /minimax_h3/token from this origin
+        — which is every cross-site page, and every request that simply
+        omits browser headers. `json_only` additionally requires
+        Content-Type: application/json, which makes the request non-"simple"
+        under CORS so a cross-origin page cannot send it without a preflight
+        these routes never approve.
         """
         def wrap(handler):
             async def inner(request):
                 if _cross_site(request):
                     return web.json_response(
                         {"error": "cross-site request refused"}, status=403)
+                sent = request.headers.get(TOKEN_HEADER) or ""
+                if not hmac.compare_digest(sent, _TOKEN):
+                    return web.json_response(
+                        {"error": "missing or stale session token",
+                         "token_required": True}, status=403)
                 if json_only:
                     ctype = (request.headers.get("Content-Type") or "") \
                         .split(";")[0].strip().lower()
@@ -338,6 +357,20 @@ if PromptServer is not None and web is not None:
             inner.__doc__ = handler.__doc__
             return inner
         return wrap
+
+    @routes.get("/minimax_h3/token")
+    async def token(request):
+        """Hand the session token to same-origin callers only.
+
+        The cross-site check matters here even though this is a GET: with
+        `--enable-cors-header` a permissive CORS policy would otherwise let
+        another origin read this response and defeat the token.
+        """
+        if _cross_site(request):
+            return web.json_response(
+                {"error": "cross-site request refused"}, status=403)
+        return web.json_response({"token": _TOKEN},
+                                 headers={"Cache-Control": "no-store"})
 
     @routes.post("/minimax_h3/upload")
     @_guard(json_only=False)

@@ -6,7 +6,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
-  safeCanvasFocus, openLoaderModal, isOn } from "./medialoader.js";
+  safeCanvasFocus, openLoaderModal, isOn, postApi } from "./medialoader.js";
 
 const NODE_NAME = "MiniMaxH3PromptBuilder";
 
@@ -1523,8 +1523,7 @@ function toast(msg, ms = 1800) {
  * preset store except through the user's own explicit save. */
 
 async function draftApi(path, body) {
-  const resp = await api.fetchApi("/minimax_h3/drafts" + path, {
-    method: "POST",
+  const resp = await postApi("/minimax_h3/drafts" + path, {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -1606,8 +1605,7 @@ function draftIdFor(node) {
 }
 
 async function presetApi(path, body) {
-  const resp = await api.fetchApi("/minimax_h3/presets" + path, {
-    method: "POST",
+  const resp = await postApi("/minimax_h3/presets" + path, {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -1617,11 +1615,11 @@ async function presetApi(path, body) {
 }
 
 async function libApi(path, body) {
-  const opts = body
-    ? { method: "POST", body: JSON.stringify(body),
-        headers: { "Content-Type": "application/json" } }
-    : {};
-  const resp = await api.fetchApi("/minimax_h3/prompts" + path, opts);
+  const resp = body
+    ? await postApi("/minimax_h3/prompts" + path, {
+        body: JSON.stringify(body),
+        headers: { "Content-Type": "application/json" } })
+    : await api.fetchApi("/minimax_h3/prompts" + path);
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     const err = new Error(data.error || `request failed (${resp.status})`);
@@ -4000,7 +3998,8 @@ class Editor {
         ? el("div", { class: "mmh3-subjrow" }, extraChips) : null,
       el("div", { class: "mmh3-tools" },
         timeIn, shotBtn, camMove, camAmp, camSpd, camBtn, styleSel),
-      this.dialogueRow(lang),
+      this.dialogueSlot = el("div", { class: "mmh3-dialogslot" },
+        this.dialogueRow(lang)),
       this.phraseRow());
   }
 
@@ -4255,8 +4254,7 @@ class Editor {
   async savePhrase(entry) {
     if (!entry.name) { toast("Give the phrase a name", 3500); return; }
     try {
-      const resp = await api.fetchApi("/minimax_h3/phrases/save", {
-        method: "POST",
+      const resp = await postApi("/minimax_h3/phrases/save", {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(entry),
       });
@@ -4284,8 +4282,7 @@ class Editor {
     this.drawPhraseBar();
     if (!p) return;
     try {
-      const resp = await api.fetchApi("/minimax_h3/phrases/delete", {
-        method: "POST",
+      const resp = await postApi("/minimax_h3/phrases/delete", {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: p.id }),
       });
@@ -4312,7 +4309,25 @@ class Editor {
    *  the next unused ID, a voiceover toggle, and the two continuity markers.
    *  Speaker IDs follow the target video's speaking order, so offering a
    *  fixed S1-S4 would invent numbers the prompt has no use for. */
+  /** Rebuild ONLY the dialogue row.
+   *
+   *  insert() can't call render(): a full rebuild replaces the textareas and
+   *  throws away the caret it just placed inside <d>…</d>. So the speaker
+   *  buttons, the pair button and the voiceover state all went stale the
+   *  moment they mattered — you clicked "+ (S1)" and the row kept offering
+   *  "+ (S1)" until some unrelated event forced a render. Swapping just this
+   *  row leaves the focused field untouched. */
+  refreshDialogueRow() {
+    if (!this.dialogueSlot?.isConnected || !this.dialogueLang) return;
+    try {
+      this.dialogueSlot.replaceChildren(this.dialogueRow(this.dialogueLang));
+    } catch (err) {
+      console.error("[MiniMaxH3 PromptBuilder] dialogue row refresh failed:", err);
+    }
+  }
+
   dialogueRow(lang) {
+    this.dialogueLang = lang;          // reused by refreshDialogueRow()
     const used = this.usedSpeakers();
     const next = `S${used.length ? Math.max(...used.map((s) => +s.slice(1))) + 1 : 1}`;
 
@@ -4883,6 +4898,7 @@ class Editor {
 
   updatePreview() {
     this.scheduleDraftSave();      // no-op outside draft mode
+    this.refreshDialogueRow();     // speaker buttons follow the text
     this._paintSubjChips?.();
     const text = generate(this.state);
     this._citeText = text;

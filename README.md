@@ -45,6 +45,19 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.6.3
+
+**Fixes:**
+
+- The crop frame now follows the picture when you rotate it. Turning a
+  picture that had an active crop left the marquee stranded in the black
+  area beside the image, wrongly shaped, and it could barely be dragged and
+  never over the picture itself. The overlay is now placed where the image
+  is actually painted rather than where its untransformed box would be.
+- Two fixes from 1.6.1 that 1.6.2 had accidentally dropped are back: a
+  rotated preview no longer paints over the editor's toolbar, and the
+  dialogue row's speaker buttons keep up with the text again.
+
 ## What's new in 1.6.2
 
 **Security release.** This version exists to address findings from the Comfy
@@ -122,6 +135,12 @@ properly on a phone.
 
 **Fixes:**
 
+- Rotating a picture or clip in the crop editor no longer paints outside the
+  window. A quarter turn used to spill over the toolbar and cover the rotate
+  button itself, so the turn couldn't be undone.
+- The dialogue row's speaker buttons now keep up with your text. Inserting a
+  line for (S1) offers (S2) next, as it always should have — the row was only
+  rebuilt when something else redrew the editor.
 - Escape now respects your preferences. It used to close the editor directly,
   discarding unsaved edits even with *Warn about unsaved changes* switched
   on — which is the opposite of what that setting says.

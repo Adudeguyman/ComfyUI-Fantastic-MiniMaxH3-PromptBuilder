@@ -532,8 +532,17 @@ const CSS = `
   border-bottom:1px solid #2a2f3a;background:#1b1f27;}
 .mml-tmtitle{flex:1;min-width:0;font-size:calc(12px * var(--mml-fs, 1));color:#dde2ea;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
-.mml-tmstage{position:relative;background:#000;line-height:0;}
+/* overflow:hidden is the safety net for the rotate bug: a CSS transform does
+   not change an element's layout box, so a quarter-turned preview painted
+   outside the stage and across the toolbar above it — covering the very
+   buttons you needed to turn it back. sizeMedia() computes a box that fits,
+   and this clip guarantees a mis-measure can never reach the header again. */
+.mml-tmstage{position:relative;background:#000;line-height:0;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;}
 .mml-tmvideo{width:100%;max-height:340px;object-fit:contain;display:block;}
+/* Turned: sizeMedia() sets an explicit width, so the percentage rules that
+   assume an upright box must stand down. */
+.mml-tmvideo.turned{width:auto;max-height:none;}
 .mml-tmcropwrap{position:absolute;inset:0;}
 
 .mml-tmcrop{position:absolute;border:1.5px dashed #4cc3e0;cursor:move;
@@ -869,7 +878,8 @@ class TrimModal {
   buildMedia() {
     const url = viewURL(this.item.file);
     if (this.isStill) {
-      this.media = el("img", { class: "mml-tmvideo", src: url });
+      this.media = el("img", { class: "mml-tmvideo", src: url,
+        onload: () => this.sizeMedia() });   // naturalWidth is 0 until decoded
       this.media.addEventListener("load", () => {
         if (!this.item.width) {
           this.item.width = this.media.naturalWidth;
@@ -887,7 +897,10 @@ class TrimModal {
       this.media = el("audio", { src: url, preload: "auto" });
     }
     // keep playback inside the selected range
-    this.media.addEventListener("loadedmetadata", () => this.updatePlayhead());
+    this.media.addEventListener("loadedmetadata", () => {
+      this.updatePlayhead();
+      this.sizeMedia();               // videoWidth is 0 until metadata lands
+    });
     this.media.addEventListener("seeked", () => this.updatePlayhead());
     this.media.addEventListener("timeupdate", () => {
       if (this.media.currentTime >= this.end - 0.02) {
@@ -1132,7 +1145,8 @@ class TrimModal {
     this.cropWrap = el("div", { class: "mml-tmcropwrap" }, this.cropBox);
     requestAnimationFrame(() => {
       this.stopFit = fitToMedia(this.media, this.cropBox,
-                                this.item.width, this.item.height);
+                                this.item.width, this.item.height,
+                                this.stageEl);
     });
     this.cropInfo = el("span", { class: "mml-tmcropinfo" });
     this.rotBtn = el("button", { class: "mml-btn mml-sm",
@@ -1224,8 +1238,7 @@ class TrimModal {
     }
     this.modalSay("Writing a resized copy\u2026");
     try {
-      const resp = await api.fetchApi("/minimax_h3/bake", {
-        method: "POST",
+      const resp = await postApi("/minimax_h3/bake", {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           file: this.item.file, resize: this.resize, crop: this.crop,
@@ -1274,17 +1287,62 @@ class TrimModal {
     this.note.classList.toggle("bad", !!bad);
   }
 
+  /** Size the preview so its PAINTED box fits the stage.
+   *
+   *  rotate() leaves the layout box alone: a 736x414 element still occupies
+   *  736x414 while painting 414x736, spilling ~161px above and below its
+   *  centre. Above the stage is the toolbar, so the image covered the
+   *  filename, Mirror, Crop, size and Write-copy buttons and the turn could
+   *  not be undone. The thumbnail path already knew this (see .mml-pic.turned)
+   *  — the editor never got the same treatment.
+   *
+   *  For a quarter turn the painted width is the element's HEIGHT and the
+   *  painted height is its WIDTH, so the fit is solved with the axes swapped
+   *  and the stage is given the resulting painted height explicitly. */
+  sizeMedia() {
+    const m = this.media;
+    if (!m || this.item.kind === "audio") return;
+    const stage = m.closest(".mml-tmstage");
+    const turned = !!(this.rotate % 180);
+    m.classList.toggle("turned", turned);
+    if (!turned) {
+      m.style.width = "";
+      m.style.maxHeight = "";
+      if (stage) stage.style.height = "";
+      return;
+    }
+    const cap = 340;                                   // matches the CSS cap
+    const availW = (stage && stage.clientWidth) || 600;
+    // NOT item.width/height: the rotate handler swaps those before calling
+    // us, so they already describe the turned orientation and would apply
+    // the swap twice. The element's natural size is always upright.
+    let nw = m.naturalWidth || m.videoWidth || 0;
+    let nh = m.naturalHeight || m.videoHeight || 0;
+    if (!nw || !nh) {                 // not decoded yet: undo the swap by hand
+      nw = (turned ? this.item.height : this.item.width) || 1;
+      nh = (turned ? this.item.width : this.item.height) || 1;
+    }
+    // painted height = elW <= cap, painted width = elH = elW*nh/nw <= availW
+    const elW = Math.max(1, Math.min(cap, availW * nw / nh));
+    m.style.width = `${Math.round(elW)}px`;
+    m.style.maxHeight = "none";
+    if (stage) stage.style.height = `${Math.round(elW)}px`;
+  }
+
   /** Turn the preview and re-fit the crop overlay to the new bounds. */
   syncRotate() {
     if (this.media) {
       this.media.style.transform =
         `${this.mirror ? "scaleX(-1) " : ""}rotate(${this.rotate}deg)`;
-      // A quarter turn means the drawn box swaps its sides; re-measure.
+      this.sizeMedia();
+      // A quarter turn changes where the pixels land without changing the
+      // layout box; re-measure against the painted rect.
       if (this.cropBox) {
         requestAnimationFrame(() => {
           const w = this.item.width, h = this.item.height;
           if (this.stopFit) this.stopFit();
-          this.stopFit = fitToMedia(this.media, this.cropBox, w, h);
+          this.stopFit = fitToMedia(this.media, this.cropBox, w, h,
+                                    this.stageEl);
         });
       }
     }
@@ -1480,8 +1538,7 @@ class TrimModal {
     panel.say(`Extracting ${span.toFixed(1)}s of audio\u2026`);
     panel.render();
     try {
-      const resp = await api.fetchApi("/minimax_h3/extract_audio", {
-        method: "POST",
+      const resp = await postApi("/minimax_h3/extract_audio", {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file: this.item.file,
           start: +this.start.toFixed(3), end: +this.end.toFixed(3) }),
@@ -1521,6 +1578,10 @@ class TrimModal {
       ? el("div", { class: "mml-tmstage" }, this.media,
           (this.cropUI = this.buildCrop(), this.cropWrap))
       : null;
+    // The crop overlay is a child of the stage, so that is the frame its
+    // coordinates are in. buildCrop() defers its first fit to a rAF, which
+    // runs after this assignment.
+    this.stageEl = stage;
 
     const chips = [2, 3].map((secs) =>
       this.dur > secs ? el("button", { class: "mml-btn mml-sm",
@@ -1697,9 +1758,45 @@ function fitTurned(img) {
 }
 
 /** Keep an overlay box glued to the drawn media, now and on every resize. */
-function fitToMedia(mediaEl, boxEl, natW, natH) {
+/** Where the picture is actually PAINTED, in hostEl's coordinate space.
+ *
+ *  drawnBox() above reads the LAYOUT box, which a CSS transform does not
+ *  touch. That is right for the thumbnail path, where `.mml-cropfit` carries
+ *  the same transform as the image and the two share one frame. The editor
+ *  rotates only the image, so its overlay has to be placed where the pixels
+ *  land: getBoundingClientRect() does account for transforms.
+ *
+ *  It also positions against hostEl rather than the media element. drawnBox
+ *  returns offsets measured inside the media box but the overlay is a child
+ *  of the stage; those two agreed only while the media filled the stage.
+ *  sizeMedia() gives a turned preview an explicit width and centres it, so
+ *  they no longer do — the marquee landed in the letterbox beside the image.
+ *
+ *  natW/natH describe the DISPLAYED orientation. The rotate handler swaps
+ *  item.width/height on every quarter turn, so passing those is already
+ *  correct; naturalWidth/naturalHeight are upright and only stand in before
+ *  the media has decoded. */
+function paintedBox(mediaEl, natW, natH, hostEl) {
+  const host = hostEl && hostEl.getBoundingClientRect();
+  if (!host || !host.width) return null;
+  const r = mediaEl.getBoundingClientRect();
+  const bw = r.width, bh = r.height;
+  const nw = natW || mediaEl.naturalWidth || mediaEl.videoWidth;
+  const nh = natH || mediaEl.naturalHeight || mediaEl.videoHeight;
+  if (!bw || !bh || !nw || !nh) return null;
+  // object-fit:contain letterboxes inside the element when the element's
+  // aspect and the media's disagree — the cap on the long edge can do that.
+  const nat = nw / nh, box = bw / bh;
+  const w = nat > box ? bw : bh * nat;
+  const h = nat > box ? bw / nat : bh;
+  return { x: r.left - host.left + (bw - w) / 2,
+           y: r.top - host.top + (bh - h) / 2, w, h };
+}
+
+function fitToMedia(mediaEl, boxEl, natW, natH, hostEl) {
   const place = () => {
-    const d = drawnBox(mediaEl, natW, natH);
+    const d = hostEl ? paintedBox(mediaEl, natW, natH, hostEl)
+                     : drawnBox(mediaEl, natW, natH);
     if (!d) return;
     Object.assign(boxEl.style, {
       left: `${d.x}px`, top: `${d.y}px`,
@@ -1825,12 +1922,44 @@ function capabilities() {
   return capsPromise;
 }
 
+/* Every state-changing route wants the session token the server minted at
+   startup, sent as a header. Fetch it once from the same origin and reuse
+   it; a page on another origin cannot read that GET, which is the whole
+   defence. If the server restarts while this page stays open the token
+   goes stale and the first POST comes back 403 — refetch and retry once. */
+const TOKEN_HEADER = "X-MiniMaxH3-Token";
+let tokenPromise = null;
+function sessionToken(fresh = false) {
+  if (fresh || !tokenPromise) {
+    tokenPromise = api.fetchApi("/minimax_h3/token")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`token ${r.status}`))))
+      .then((j) => j.token || Promise.reject(new Error("no token in response")))
+      .catch((err) => { tokenPromise = null; throw err; });
+  }
+  return tokenPromise;
+}
+
+/** POST to one of this pack's routes with the session token attached.
+ *  `init` is the usual fetch init minus `method`. */
+export async function postApi(path, init = {}) {
+  const send = async (token) => api.fetchApi(path, {
+    ...init, method: "POST",
+    headers: { ...(init.headers || {}), [TOKEN_HEADER]: token },
+  });
+  let resp = await send(await sessionToken());
+  if (resp.status === 403) {
+    const data = await resp.clone().json().catch(() => ({}));
+    if (data.token_required) resp = await send(await sessionToken(true));
+  }
+  return resp;
+}
+
 async function presetApi(path, body) {
-  const opts = body
-    ? { method: "POST", body: JSON.stringify(body),
-        headers: { "Content-Type": "application/json" } }
-    : {};
-  const resp = await api.fetchApi("/minimax_h3/presets" + path, opts);
+  const resp = body
+    ? await postApi("/minimax_h3/presets" + path, {
+        body: JSON.stringify(body),
+        headers: { "Content-Type": "application/json" } })
+    : await api.fetchApi("/minimax_h3/presets" + path);
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || `request failed (${resp.status})`);
   return data;
@@ -1839,7 +1968,7 @@ async function presetApi(path, body) {
 async function uploadFile(file) {
   const body = new FormData();
   body.append("file", file, file.name);
-  const resp = await api.fetchApi("/minimax_h3/upload", { method: "POST", body });
+  const resp = await postApi("/minimax_h3/upload", { body });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error || `upload failed (${resp.status})`);
   return data;

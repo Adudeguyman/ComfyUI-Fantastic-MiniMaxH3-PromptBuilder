@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { postApi } from "./medialoader.js";
 
 /* Folder browser for MiniMax H3 Filename Prefix. Navigates the ComfyUI output
    directory server-side; the node itself only ever holds a relative path. */
@@ -116,8 +117,7 @@ function openBrowser(startPath, onPick) {
     const name = newName.value.trim();
     if (!name) { newName.focus(); return; }
     try {
-      const resp = await api.fetchApi("/minimax_h3/mkdir", {
-        method: "POST",
+      const resp = await postApi("/minimax_h3/mkdir", {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path, name }),
       });
