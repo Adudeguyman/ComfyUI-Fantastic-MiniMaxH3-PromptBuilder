@@ -45,6 +45,23 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.6.4
+
+**Features:**
+
+- A new **Delivery** row in the editor, directly under the dialogue row,
+  inserts the community-found performance tags that shape how a line is
+  spoken: pauses and breaths, emphasis and whispering, and non-verbal
+  sounds such as laughs, sighs and gasps. Pick a group, pick a tag, and
+  hover the picker to preview an example line before inserting it. These
+  tags aren't in MiniMax's published guide, so results may vary.
+- The tags that wrap text, like `<i>` and `<whisper>`, wrap whatever you
+  have selected and leave it selected. With nothing selected, the caret
+  lands between the opening and closing halves, ready to type.
+- The bundled writing guide has a new **Community Discoveries** section
+  listing the same tags with an example for each, clearly marked as
+  community findings rather than official guidance.
+
 ## What's new in 1.6.3
 
 **Fixes:**

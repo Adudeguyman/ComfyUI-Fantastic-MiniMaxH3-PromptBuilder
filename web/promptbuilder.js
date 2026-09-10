@@ -10,6 +10,68 @@ import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
 
 const NODE_NAME = "MiniMaxH3PromptBuilder";
 
+/* Delivery tags — community findings, not from MiniMax's published guide.
+ * They go INSIDE a <d> block to shape performance. Kept in one table so the
+ * picker, the hover preview and section 6.1 of the bundled guide can never
+ * drift apart; if you edit this list, edit the guide's table to match.
+ *
+ * `wrap: true` marks a tag that surrounds text rather than standing alone:
+ * inserting one wraps the selection, or drops the caret between the halves. */
+const DELIVERY_TAGS = [
+  { group: "Pauses and breath", tag: "<pause>", what: "Short pause",
+    ex: "Okay, so. <pause> This is just me talking." },
+  { group: "Pauses and breath", tag: "<long pause>", what: "Longer pause",
+    ex: "I mean\u2026 <long pause> I don't even know." },
+  { group: "Pauses and breath", tag: "<breath>", what: "Breathing sound",
+    ex: "And then\u2026 <breath> it just happened." },
+  { group: "Pauses and breath", tag: "<inhale>", what: "In breath",
+    ex: "<inhale> Alright, let's do this." },
+  { group: "Pauses and breath", tag: "<exhale>", what: "Out breath",
+    ex: "<exhale> Fine. Have it your way." },
+  { group: "Pauses and breath", tag: "<catches breath>", what: "Out of breath",
+    ex: "Wait\u2026 <catches breath> hold on a sec." },
+  { group: "Pauses and breath", tag: "<deep breath>", what: "Calming down",
+    ex: "<deep breath> Okay. I can do this." },
+  { group: "Pauses and breath", tag: "<pants>", what: "Panting",
+    ex: "Run\u2026 <pants> run now!" },
+
+  { group: "Delivery and emphasis", tag: "<i>", what: "Emphasize 1\u20134 words",
+    ex: "I was <i>not</i> expecting that.", wrap: true },
+  { group: "Delivery and emphasis", tag: "<whisper>", what: "Whisper delivery",
+    ex: "<whisper> Don't tell anyone this.</whisper>", wrap: true },
+  { group: "Delivery and emphasis", tag: "<softer>", what: "Quieter delivery",
+    ex: "<softer> I don't think I can say it." },
+  { group: "Delivery and emphasis", tag: "<humming>", what: "Humming a tune",
+    ex: "<humming> da-da-da-beautiful-day.</humming>", wrap: true },
+  { group: "Delivery and emphasis", tag: "<stutter>", what: "Stutters the words",
+    ex: "<stutter> I ca can't believe that." },
+  { group: "Delivery and emphasis", tag: "<uh>", what: "Filler / hesitation",
+    ex: "So, like\u2026 <uh> what was I saying?" },
+
+  { group: "Non-verbal sounds", tag: "<laughs>", what: "Laughing",
+    ex: "That's\u2026 <laughs> that's actually funny." },
+  { group: "Non-verbal sounds", tag: "<chuckle>", what: "Small laugh",
+    ex: "<chuckle> You're not serious." },
+  { group: "Non-verbal sounds", tag: "<sighs>", what: "Sigh",
+    ex: "<sighs> I really tried." },
+  { group: "Non-verbal sounds", tag: "<gasp>", what: "Sharp intake",
+    ex: "<gasp> Oh my God." },
+  { group: "Non-verbal sounds", tag: "<coughs>", what: "Cough",
+    ex: "<coughs> Sorry, one sec." },
+  { group: "Non-verbal sounds", tag: "<clears throat>", what: "Throat clear",
+    ex: "<clears throat> So anyway\u2026" },
+  { group: "Non-verbal sounds", tag: "<sniff>", what: "Sniffing",
+    ex: "<sniff> It's just\u2026 really sad." },
+  { group: "Non-verbal sounds", tag: "<smacks lips>", what:
+    "Lip smack. Closed, it lands where you put it; left unclosed it lands " +
+    "at the end of the sentence.",
+    ex: "<smacks lips></smacks lips> Okay.", wrap: true },
+  { group: "Non-verbal sounds", tag: "<mhm>", what: "Agreement sound",
+    ex: "Yeah, <mhm> exactly." },
+  { group: "Non-verbal sounds", tag: "<phew>", what: "Relief",
+    ex: "<phew> That was close." },
+];
+
 /* ------------------------------------------------------------------ */
 /* Reference data straight from the guides                             */
 /* ------------------------------------------------------------------ */
@@ -1139,6 +1201,7 @@ const CSS = `
   letter-spacing:.06em;}
 .mmh3-phrasepeektext{font-size:calc(12px * var(--mmh3-fs, 1));color:#a9b2c2;line-height:1.5;
   white-space:pre-wrap;max-height:220px;overflow:hidden;}
+.mmh3-tagpeekwhat{margin-top:5px;font-size:calc(11px * var(--mmh3-fs, 1));color:#6b7484;line-height:1.45;}
 .mmh3-ctxmenu{position:fixed;z-index:10006;min-width:190px;background:#1e222a;
   border:1px solid #3a4252;border-radius:8px;padding:4px;
   box-shadow:0 16px 40px rgba(0,0,0,.55);}
@@ -2266,8 +2329,13 @@ class Editor {
   }
 
   /* ---------- insertion ---------- */
-  /* opts.newline: start the insert on its own line (for block-level items
-     like shot headers), collapsing any trailing whitespace first. */
+  /** Insert a snippet at the caret.
+   *
+   *  opts.newline  — only for [Shot N]; see below.
+   *  opts.wrap     — `text` is an opening tag whose closing half is supplied
+   *                  here. Any selected text is kept and wrapped rather than
+   *                  overwritten; with no selection the caret lands between
+   *                  the two halves, ready to type. */
   insert(text, opts = {}) {
     const t = this.lastFocus;
     if (!t || !t.isConnected) { toast("Click into a text field first"); return; }
@@ -2286,10 +2354,21 @@ class Editor {
       pad = before && !/[\s(\u2014]$/.test(before) ? " " : "";
     }
     const after = t.value.slice(end);
-    t.value = before + pad + text + after;
     const base = before.length + pad.length;
-    const dPos = text.indexOf("</d>");
-    t.selectionStart = t.selectionEnd = dPos >= 0 ? base + dPos : base + text.length;
+
+    if (opts.wrap) {
+      const held = t.value.slice(start, end);
+      t.value = before + pad + text + held + opts.wrap + after;
+      // Selection wrapped: leave it selected so it can be re-wrapped or
+      // retyped. Nothing selected: sit between the halves.
+      t.selectionStart = base + text.length;
+      t.selectionEnd = base + text.length + held.length;
+    } else {
+      t.value = before + pad + text + after;
+      const dPos = text.indexOf("</d>");
+      t.selectionStart = t.selectionEnd =
+        dPos >= 0 ? base + dPos : base + text.length;
+    }
     t.focus();
     t.dispatchEvent(new Event("input", { bubbles: true }));
   }
@@ -2727,6 +2806,7 @@ class Editor {
     this.closePeek();
     this.closeCtx();
     this.hidePhrasePeek();
+    this.hideTagPeek();
     window.removeEventListener("keydown", this.escHandler);
     // The DRAFT buffer flushes to disk with the mode it closed in, so the
     // editor reopens where you left off. The LIVE buffer carries nothing
@@ -4000,7 +4080,94 @@ class Editor {
         timeIn, shotBtn, camMove, camAmp, camSpd, camBtn, styleSel),
       this.dialogueSlot = el("div", { class: "mmh3-dialogslot" },
         this.dialogueRow(lang)),
+      this.tagRow(),
       this.phraseRow());
+  }
+
+  /* --- delivery tags: community findings, inserted inside <d> -------- */
+
+  /** The tag picker row. Deliberately its own row rather than an extension of
+   *  the dialogue row: that one already grows with every speaker, and 24 tags
+   *  need a picker, not buttons. Sits directly under dialogue because these
+   *  tags belong inside <d>, and insert() parks the caret before </d>. */
+  tagRow() {
+    const groups = [...new Set(DELIVERY_TAGS.map((t) => t.group))];
+    this.tagGroup = this.tagGroup || groups[0];
+
+    this.tagGroupEl = el("select", { class: "mmh3-phrasecat",
+      title: "Filter delivery tags by kind",
+      onchange: () => { this.tagGroup = this.tagGroupEl.value;
+        this.drawTags(); } });
+    this.tagEl = el("select", { class: "mmh3-phrasesel",
+      onchange: () => this.showTagPeek(),
+      onmouseenter: () => this.showTagPeek(),
+      onmouseleave: () => this.hideTagPeek(),
+      onmousedown: () => this.hideTagPeek(),
+      onblur: () => this.hideTagPeek() });
+
+    this.tagBar = el("div", { class: "mmh3-tools mmh3-phraserow" },
+      el("span", { class: "mmh3-toollabel" }, "Delivery:"),
+      this.tagGroupEl, this.tagEl,
+      el("button", { class: "mmh3-btn",
+        title: "Insert the selected tag at the caret. Tags belong inside a " +
+               "<d> block \u2014 insert a dialogue line first.",
+        onclick: () => this.insertTag() }, "insert"));
+    this.drawTags();
+    return this.tagBar;
+  }
+
+  selectedTag() {
+    return DELIVERY_TAGS.find((t) => t.tag === this.tagEl?.value) || null;
+  }
+
+  drawTags() {
+    if (!this.tagGroupEl) return;
+    this.hideTagPeek();
+    const groups = [...new Set(DELIVERY_TAGS.map((t) => t.group))];
+    this.tagGroupEl.replaceChildren(...groups.map((g) =>
+      el("option", { value: g, selected: g === this.tagGroup }, g)));
+    const list = DELIVERY_TAGS.filter((t) => t.group === this.tagGroup);
+    this.tagEl.replaceChildren(...list.map((t) =>
+      el("option", { value: t.tag, title: t.what },
+        `${t.tag}\u2002\u2014\u2002${t.what.split(".")[0]}`)));
+  }
+
+  insertTag() {
+    const t = this.selectedTag();
+    if (!t) return;
+    if (t.wrap) {
+      const close = `</${t.tag.slice(1)}`;      // <whisper> -> </whisper>
+      this.insert(t.tag, { wrap: close });
+    } else {
+      this.insert(t.tag);
+    }
+  }
+
+  /** Show the example on hover: the picker only has room for the tag and a
+   *  few words, and the example is what tells you how it reads in a line. */
+  showTagPeek() {
+    this.hideTagPeek();
+    const t = this.selectedTag();
+    if (!t) return;
+    const box = el("div", { class: "mmh3-phrasepeek" },
+      el("div", { class: "mmh3-phrasepeekhead" },
+        el("span", {}, t.tag),
+        el("span", { class: "mmh3-phrasepeekcat" }, t.group)),
+      el("div", { class: "mmh3-phrasepeektext" }, t.ex),
+      el("div", { class: "mmh3-tagpeekwhat" }, t.what));
+    document.body.append(box);
+    const r = this.tagEl.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    box.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - b.width - 8))}px`;
+    box.style.top = r.top - b.height - 6 >= 8
+      ? `${r.top - b.height - 6}px`
+      : `${r.bottom + 6}px`;
+    this._tagPeek = box;
+  }
+
+  hideTagPeek() {
+    this._tagPeek?.remove();
+    this._tagPeek = null;
   }
 
   /* --- phrases: reusable fragments, saved server-side ---------------- */
