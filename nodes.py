@@ -82,7 +82,9 @@ class MiniMaxH3PromptBuilder:
         "Outputs the final prompt STRING plus a pass-through for every "
         "reference slot, so media can carry on to MiniMaxH3ReferenceToVideo. "
         "Each media output prefers its own input, falling back to the matching "
-        "item from a connected Media Loader 'references' bundle."
+        "item from a connected Media Loader 'references' bundle. A RefMod "
+        "Stack wired to 'mods' shows its labels in the editor and passes "
+        "through to the 'mods' output for RefMod Text Encode."
     )
 
     RETURN_TYPES = (
@@ -92,11 +94,14 @@ class MiniMaxH3PromptBuilder:
         + ("AUDIO",) * VIDEO_AUDIOS
         + ("AUDIO",) * AUDIOS
         + ("H3_REFS",)
+        + ("H3_REF_MODS",)
     )
-    RETURN_NAMES = ("prompt",) + tuple(_media_names()) + ("references",)
+    RETURN_NAMES = ("prompt",) + tuple(_media_names()) + ("references", "mods")
     # references (slot 19) is the gated bundle passthrough: what this node's
     # individual outputs carry, reassembled for a Reference Splitter. Appended
     # last — inserting earlier would renumber slots in every saved workflow.
+    # mods (slot 20) is the RefMod bundle passthrough, appended after it for
+    # the same reason.
     FUNCTION = "build"
 
     @classmethod
@@ -122,7 +127,11 @@ class MiniMaxH3PromptBuilder:
                 "builder_state": ("STRING", {"multiline": False, "default": "{}"}),
             },
             "optional": dict(
-                references=("H3_REFS", {"lazy": True}), **optional
+                references=("H3_REFS", {"lazy": True}),
+                mods=("H3_REF_MODS", {"lazy": True, "tooltip":
+                    "A RefMod Stack. The editor shows its labels, and the bundle "
+                    "passes through to the 'mods' output for RefMod Text Encode."}),
+                **optional
             ),
             "hidden": {"prompt": "PROMPT", "unique_id": "UNIQUE_ID"},
         }
@@ -184,7 +193,7 @@ class MiniMaxH3PromptBuilder:
 
     def check_lazy_status(
         self, prompt_text=None, builder_state=None, references=None,
-        prompt=None, unique_id=None, **kwargs
+        prompt=None, unique_id=None, mods=None, **kwargs
     ):
         """Pull only what a downstream node actually reads.
 
@@ -218,6 +227,11 @@ class MiniMaxH3PromptBuilder:
                 want_bundle = True
         if want_bundle and references is None:
             needed.append("references")
+        # The RefMod bundle is only pulled when the mods output is read.
+        mods_out = ref_out + 1
+        if (mods is None and (linked is None or "mods" in linked)
+                and (consumed is None or mods_out in consumed)):
+            needed.append("mods")
         print(f"[MiniMaxH3 Builder] lazy: consumed slots="
               f"{sorted(consumed) if consumed is not None else 'unknown (evaluate all)'} "
               f"linked={sorted(linked) if linked else linked} -> requesting {needed or 'nothing'}")
@@ -244,7 +258,7 @@ class MiniMaxH3PromptBuilder:
 
     def build(
         self, prompt_text, builder_state, references=None,
-        prompt=None, unique_id=None, **kwargs
+        prompt=None, unique_id=None, mods=None, **kwargs
     ):
         # The saved mode decides what the outputs carry. Mode and prompt are
         # written together by the editor's Save, so they can't disagree; if
@@ -298,7 +312,10 @@ class MiniMaxH3PromptBuilder:
             "video_audios": media[b:c],
             "audios": media[c:],
         }
-        return (prompt_text.strip(),) + tuple(media) + (out_bundle,)
+        # An unwired mods input passes an empty bundle, which Text Encode
+        # treats as "no RefMods" rather than an error.
+        out_mods = mods if mods is not None else []
+        return (prompt_text.strip(),) + tuple(media) + (out_bundle, out_mods)
 
 
 class MiniMaxH3MediaLoader:

@@ -661,6 +661,113 @@ if PromptServer is not None and web is not None:
         caps["version"] = _pack_version()
         return web.json_response(caps)
 
+    # -- RefMod library -----------------------------------------------------
+    # Read-only, so no session token: the same posture as /browse. Both
+    # routes resolve names through refmods.resolve_file, which refuses
+    # anything that does not land inside a registered RefMod root.
+
+    @routes.get("/minimax_h3/refmods")
+    async def refmod_library(request):
+        """Every RefMod on disk, paired and costed, for the stack's browser."""
+        try:
+            from . import refmods
+            data = dict(refmods.scan_library())
+            data["pack_installed"] = refmods.origin_module() is not None
+            return web.json_response(data, headers={"Cache-Control": "no-store"})
+        except Exception as exc:
+            return web.json_response({"error": f"scan failed: {exc}"}, status=500)
+
+    @routes.get("/minimax_h3/refmods/preview")
+    async def refmod_preview(request):
+        """The image saved beside a RefMod, for its thumbnail."""
+        from . import refmods
+        path = refmods.resolve_file(request.query.get("name", ""),
+                                    refmods.PREVIEW_EXT)
+        if not path:
+            return web.json_response({"error": "no preview"}, status=404)
+        return web.FileResponse(path, headers={"Cache-Control": "max-age=60"})
+
+    @routes.post("/minimax_h3/refmods/rename")
+    @_guard()
+    async def refmod_rename(request):
+        """Move an item (its files, pair suffixes kept) to a new name/folder."""
+        from . import refmods
+        try:
+            body = await request.json()
+            moved = refmods.rename_item(body.get("files"), body.get("preview"),
+                                        body.get("new_name", ""))
+            return web.json_response({"moved": moved})
+        except (ValueError, FileNotFoundError, FileExistsError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": f"rename failed: {exc}"}, status=500)
+
+    @routes.post("/minimax_h3/refmods/meta")
+    @_guard()
+    async def refmod_meta(request):
+        """Rewrite description / concept_type in each file's header."""
+        from . import refmods
+        try:
+            body = await request.json()
+            fields = {}
+            if "description" in body:
+                fields["description"] = str(body.get("description") or "")[:2000]
+            if "concept_type" in body:
+                fields["concept_type"] = str(body.get("concept_type") or "generic")[:40]
+            refmods.rewrite_meta(body.get("files"), **fields)
+            return web.json_response({"ok": True})
+        except (ValueError, FileNotFoundError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": f"update failed: {exc}"}, status=500)
+
+    @routes.post("/minimax_h3/refmods/delete")
+    @_guard()
+    async def refmod_delete(request):
+        from . import refmods
+        try:
+            body = await request.json()
+            removed = refmods.delete_item(body.get("files"), body.get("preview"))
+            return web.json_response({"removed": removed})
+        except (ValueError, FileNotFoundError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": f"delete failed: {exc}"}, status=500)
+
+    @routes.post("/minimax_h3/refmods/set_preview")
+    @_guard(json_only=False)
+    async def refmod_set_preview(request):
+        """Multipart: `stem` (relative name) + `file` (an image) -> <stem>.png."""
+        from . import refmods
+        try:
+            reader = await request.multipart()
+            stem, data = "", None
+            field = await reader.next()
+            while field is not None:
+                if field.name == "stem":
+                    stem = (await field.text()).strip()
+                elif field.name == "file":
+                    chunks = []
+                    total = 0
+                    while True:
+                        chunk = await field.read_chunk()
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > 32 << 20:
+                            return web.json_response({"error": "image too large"}, status=413)
+                        chunks.append(chunk)
+                    data = b"".join(chunks)
+                field = await reader.next()
+            if not data:
+                return web.json_response({"error": "no image"}, status=400)
+            saved = refmods.set_preview(stem, data)
+            return web.json_response({"preview": saved})
+        except (ValueError, FileNotFoundError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": f"preview failed: {exc}"}, status=500)
+
     @routes.get("/minimax_h3/presets")
     async def list_presets(request):
         """Presets with their categories.

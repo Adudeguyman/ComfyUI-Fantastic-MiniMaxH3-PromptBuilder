@@ -6,7 +6,10 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
-  safeCanvasFocus, openLoaderModal, isOn, postApi } from "./medialoader.js";
+  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets } from "./medialoader.js";
+import { STACK_NAME, ENCODE_NAMES, readStack, deriveEntries, labelGroups,
+  rangeText as refmodRange, previewURL as refmodPreviewURL, KIND as REFMOD_KIND,
+  openStackModal } from "./refmodstack.js";
 
 const NODE_NAME = "MiniMaxH3PromptBuilder";
 
@@ -698,7 +701,96 @@ function slotsFromBundle(node) {
   return slotsFromItems(items, "Media Loader");
 }
 
+/** Walk a mods chain upstream from `head`. RefMod Stacks are collected in
+ *  bundle order; Prompt Builders are stepped through (their mods output is
+ *  the bundle they were given). Anything else heads the chain with entries
+ *  we cannot see, so the result is marked partial. */
+function modsChain(head) {
+  const chain = [];
+  let partial = false, n = head, guard = 0;
+  while (n && guard++ < 32) {
+    if (n.type !== STACK_NAME && n.type !== NODE_NAME) { partial = true; break; }
+    if (n.type === STACK_NAME) chain.unshift(n);
+    const up = (n.inputs || []).findIndex((i) => i.name === "mods");
+    if (up < 0 || n.inputs[up].link == null) break;
+    n = originNode(n, up);
+  }
+  return { chain, partial };
+}
+
+/** Where this builder's RefMods come from: its own mods input when that is
+ *  wired, otherwise the mods input of a RefMod Text Encode its prompt feeds
+ *  (the older wiring, still honoured). */
+function refmodSource(node) {
+  const own = (node.inputs || []).findIndex((i) => i.name === "mods");
+  if (own >= 0 && node.inputs[own].link != null)
+    return { head: originNode(node, own), direct: true };
+  const enc = outputTargets(node, 0).find((n) => ENCODE_NAMES.has(n?.type));
+  if (!enc) return { head: null, why: "encode" };
+  const mi = (enc.inputs || []).findIndex((i) => i.name === "mods");
+  if (mi < 0 || enc.inputs[mi].link == null) return { head: null, why: "mods" };
+  return { head: originNode(enc, mi), direct: false };
+}
+
+/** True when this builder's RefMods reach a Text Encode: its mods output is
+ *  wired somewhere, or a Text Encode its prompt feeds has mods of its own. */
+function refmodsReachEncode(node) {
+  const out = (node.outputs || []).findIndex((o) => o.name === "mods");
+  if (out >= 0 && outputTargets(node, out).length) return true;
+  return outputTargets(node, 0).some((enc) => ENCODE_NAMES.has(enc?.type) &&
+    (enc.inputs || []).some((i) => i.name === "mods" && i.link != null));
+}
+
+/** Reference slots when this prompt uses RefMods.
+ *
+ * RefMod Text Encode (ours or ComfyUI-MiniMaxH3Mod's) labels its bundle
+ * itself: one counter per kind, in bundle order, every copy numbered. Find
+ * the stacks (see refmodSource) and reproduce that numbering. A non-stack
+ * loader at the head of the chain contributes entries we cannot see, so the
+ * result is marked partial and the numbers are best-effort.
+ */
+function refmodSlots(node) {
+  const src = refmodSource(node);
+  if (!src.head) return null;
+  const { chain, partial } = modsChain(src.head);
+  if (!chain.length) return null;
+
+  const groups = labelGroups(chain.flatMap((st) => deriveEntries(readStack(st).picks)));
+  const out = [];
+  const copyTags = new Set();
+  for (const g of groups) {
+    if (!g.nums.length) continue;
+    const kind = REFMOD_KIND[g.kind].label;
+    const tags = g.nums.map((num) => `<${kind} ${num}>`);
+    tags.slice(1).forEach((t) => copyTags.add(t));
+    out.push({
+      tag: tags[0], kind, idx: g.nums[0], cls: TAG_CLASS[kind],
+      note: g.key === "audio" ? "voice" : null,
+      copies: tags.slice(1), range: refmodRange(g),
+      slotName: `refmod:${g.file}`,
+      source: `RefMod Stack \u2022 ${g.name}`,
+      preview: g.preview ? { type: "img", url: refmodPreviewURL(g.preview) } : null,
+    });
+  }
+  out.refmod = true;
+  out.partial = partial;
+  out.copyTags = copyTags;
+  out.unsent = !!src.direct && !refmodsReachEncode(node);
+  return out;
+}
+
+/** The RefMod Stack this prompt's references come from (the one nearest the
+ *  builder), or null with a reason: "encode", "mods" or "other". */
+function refmodStackFor(node) {
+  const src = refmodSource(node);
+  if (!src.head) return { stack: null, why: src.why };
+  const { chain } = modsChain(src.head);
+  return chain.length ? { stack: chain[chain.length - 1] } : { stack: null, why: "other" };
+}
+
 function getRefSlots(node) {
+  const viaRefmod = refmodSlots(node);
+  if (viaRefmod) return viaRefmod;
   const bundled = slotsFromBundle(node);
   if (bundled) return bundled;
   const group = (re) => {
@@ -872,7 +964,18 @@ function validate(state, slots) {
     );
   });
 
-  if (state.mode === "REF") {
+  if (slots.refmod) {
+    // The prompt feeds H3 RefMod Text Encode, which labels whatever the
+    // stack sends regardless of mode — none of the per-mode capacity rules
+    // below apply. What matters is that the numbers line up.
+    if (slots.unsent)
+      warn("RefMods are wired into this node, but its mods output isn't connected " +
+        "to RefMod Text Encode \u2014 wire mods into the Text Encode's mods input, " +
+        "or the model won't see them.");
+    if (slots.partial)
+      info("A loader that isn't a RefMod Stack heads this chain, so its entries " +
+        "are numbered first and the labels shown here may be shifted.");
+  } else if (state.mode === "REF") {
     const total = live.length;
     if (cap.total && total > cap.total) {
       err(
@@ -963,7 +1066,7 @@ function validate(state, slots) {
   const cited = new Set([...full.matchAll(/<(Picture|Video|Audio) (\d+)>/g)]
     .map((m) => `<${m[1]} ${m[2]}>`));
   const uncited = live.filter((s) => {
-    const usable = state.mode === "REF" ||
+    const usable = slots.refmod || state.mode === "REF" ||
       (s.kind === "Picture" && s.idx <= cap.Picture);
     return usable && !cited.has(s.tag);
   }).map((s) => s.tag);
@@ -974,9 +1077,20 @@ function validate(state, slots) {
       uncited.join(", ") + ".");
   }
   const connected = new Set(live.map((s) => s.tag));
+  const copyTags = slots.copyTags || new Set();
   for (const t of cited) {
     const [, kind, num] = t.match(/<(\w+) (\d+)>/);
-    if (cap[kind] === 0) {
+    if (slots.refmod) {
+      if (copyTags.has(t)) {
+        const owner = live.find((s) => s.copies?.includes(t));
+        info(`${t} is a copy of ${owner?.tag || "another label"} (${owner?.source || "RefMod Stack"}); citing ${owner?.tag || "the first label"} is enough.`);
+      } else if (!connected.has(t)) {
+        if (slots.partial)
+          info(`${t} is cited but no RefMod Stack in the chain provides it — the upstream loader may.`);
+        else
+          warn(`${t} is cited but the RefMod Stack does not provide it. Check the stack's order and weights.`);
+      }
+    } else if (cap[kind] === 0) {
       warn(`${t} is cited, but ${state.mode} has no ${kind.toLowerCase()} reference to bind it to.`);
     } else if (+num > cap[kind]) {
       warn(`${t} is cited, but ${state.mode} only uses ${kind} 1${cap[kind] > 1 ? `\u2013${cap[kind]}` : ""}.`);
@@ -1128,6 +1242,7 @@ const CSS = `
 .mmh3-sec>label.off ~ *{opacity:.45;}
 .mmh3-sec>label{display:block;font-size:calc(11px * var(--mmh3-fs, 1));text-transform:uppercase;letter-spacing:.08em;
   color:#8a93a3;margin-bottom:5px;}
+.mmh3-refmodnone{font-size:calc(10.5px * var(--mmh3-fs, 1));color:#6b7484;font-style:italic;align-self:center;}
 .mmh3-sec .hint{font-size:calc(11px * var(--mmh3-fs, 1));color:#6b7484;margin-top:4px;line-height:1.4;}
 .mmh3-form textarea,.mmh3-form input[type=text],.mmh3-form input[type=number],.mmh3-form select{
   width:100%;box-sizing:border-box;background:#12151b;color:#dde2ea;border:1px solid #2e3440;
@@ -1765,7 +1880,9 @@ class Library {
     // was stacked on top of it.
     this.escHandler = (e) => {
       if (e.key !== "Escape") return;
-      if (document.querySelector(".mml-overlay")) return;   // loader owns it
+      // A window opened from here owns Escape: the Media Loader, the RefMod
+      // Stack or library, or a crop editor.
+      if (document.querySelector(".mml-overlay, .mmr-overlay, .mml-tmover")) return;
       this.close();
     };
     window.addEventListener("keydown", this.escHandler);
@@ -2434,6 +2551,9 @@ class Editor {
             title: "Open the connected Media Loader without leaving the editor",
             onclick: () => this.openMedia() }, "\u25a3 Media"),
           el("button", { class: "mmh3-btn",
+            title: "Open the RefMod Stack this prompt's references come from",
+            onclick: () => this.openRefMods() }, "\u25c8 RefMods"),
+          el("button", { class: "mmh3-btn",
             title: "Browse saved prompts",
             onclick: () => new Library(this) }, "\u2630 Library"),
           el("button", { class: "mmh3-btn",
@@ -2511,7 +2631,9 @@ class Editor {
     // discard your edits silently" false — it discarded silently either way.
     this.escHandler = (e) => {
       if (e.key !== "Escape") return;
-      if (document.querySelector(".mml-overlay")) return;   // loader owns it
+      // A window opened from here owns Escape: the Media Loader, the RefMod
+      // Stack or library, or a crop editor.
+      if (document.querySelector(".mml-overlay, .mmr-overlay, .mml-tmover")) return;
       // A strip is already asking a question; Escape shouldn't answer it.
       if (this.closePending || this.clearPending || this.linkOffer) return;
       this.requestClose();
@@ -2855,6 +2977,20 @@ class Editor {
    *  overlay is all "Open loader…" does — so this needs no new UI, just a
    *  refresh afterwards: adding or reordering media renumbers the tags this
    *  editor renders. */
+  /** The RefMods counterpart of openMedia: the stack's own panel in a
+   *  window, with its library and Create a click away. */
+  openRefMods() {
+    let { stack, why } = refmodStackFor(this.node);
+    if (!stack && why === "other") {
+      toast("This prompt's RefMods come from a node that isn't a RefMod Stack, " +
+        "so there's no stack panel to open.", 6000);
+      return;
+    }
+    if (!stack) stack = addRefModStack(this.node, { focus: false });
+    if (!stack) return;
+    openStackModal(stack, { onClose: () => { this.refreshSlots(); this.render(); } });
+  }
+
   openMedia() {
     const idx = (this.node.inputs || []).findIndex(
       (i) => i.name === "references");
@@ -3788,6 +3924,8 @@ class Editor {
 
   /** Whether the current mode can use this reference at all. */
   usable(slot) {
+    // Text Encode has no per-mode caps: whatever the stack sends, it labels.
+    if (this.slots?.refmod) return true;
     const cap = MODE_CAPACITY[this.state.mode] || {};
     return (cap[slot.kind] || 0) >= slot.idx;
   }
@@ -3957,8 +4095,13 @@ class Editor {
           "reference tag \u2014 they may all be switched off. Commit or clear " +
           "the draft to go back to the node's own media.");
       }
+      if (this.slots?.refmod) {
+        return el("span", { class: "mmh3-refmodnone",
+          title: "The RefMod Stack connected to this prompt isn't sending anything yet." },
+          "No RefMods loaded");
+      }
       return el("span", { class: "hint" },
-        "No reference media on this node yet \u2014 use '+ Media loader', or wire " +
+        "No reference media on this node yet \u2014 use '+ Media loader' or '+ RefMods', or wire " +
         "loaders into the picture_/video_/audio_ inputs." +
         (this.bufferMode === "draft"
           ? " (This draft has no snapshot of its own, so it follows the node.)"
@@ -3988,7 +4131,12 @@ class Editor {
                 cites || "\u2013")
             : el("span", { class: "mmh3-cite off", title: this.modeNote(s) },
                 "\u2298")),
-        s.note && s.note !== "standalone"
+        s.copies?.length
+          ? el("span", { class: "mmh3-cardnote",
+              title: `${s.range} \u2014 ${s.copies.length} extra ` +
+                     `${s.copies.length === 1 ? "copy" : "copies"}; citing ${s.tag} is enough` },
+              `\u00d7${s.copies.length + 1}`)
+          : s.note && s.note !== "standalone" && s.note !== "voice"
           ? el("span", { class: "mmh3-cardnote" },
               "\u266a\u2192V" + (s.note.match(/\d+/) || [""])[0])
           : null);
@@ -5115,6 +5263,84 @@ function hideWidget(node, name) {
   if (w.element) w.element.style.display = "none";
 }
 
+/** The one place this file links two nodes. */
+function wire(from, outSlot, to, inSlot) {
+  return from.connect(outSlot, to, inSlot);
+}
+
+function redraw(node) {
+  try {
+    node.setDirtyCanvas?.(true, true);
+    app.graph.setDirtyCanvas(true, true);
+  } catch (e) { /* Vue redraws itself */ }
+}
+
+/** Wire a RefMod Stack into this builder's mods input. Focuses the stack
+ *  already there; otherwise adopts one already feeding a RefMod Text Encode
+ *  this prompt drives, or creates a new one beside the node and passes the
+ *  builder's mods output on to any such Text Encode whose mods input is
+ *  empty. Returns the stack, or null. */
+function addRefModStack(node, { focus = true } = {}) {
+  const inIdx = (node.inputs || []).findIndex((i) => i.name === "mods");
+  const outIdx = (node.outputs || []).findIndex((o) => o.name === "mods");
+  if (inIdx < 0 || outIdx < 0) {
+    toast("This Prompt Builder has no mods socket \u2014 restart ComfyUI and reload the page", 6000);
+    return null;
+  }
+
+  if (node.inputs[inIdx].link != null) {
+    const { stack } = refmodStackFor(node);
+    if (stack && focus && !safeCanvasFocus(stack))
+      openStackModal(stack, { onClose: () => updateSummary(node) });
+    if (!stack) toast("Something other than a RefMod Stack is on this node's mods input");
+    else if (focus) toast("A RefMod Stack is already connected");
+    return stack;
+  }
+
+  const encoders = outputTargets(node, 0).filter((n) => ENCODE_NAMES.has(n?.type));
+  const modsInput = (enc) => (enc.inputs || []).findIndex((i) => i.name === "mods");
+  for (const enc of encoders) {
+    const mi = modsInput(enc);
+    const head = mi >= 0 && enc.inputs[mi].link != null ? originNode(enc, mi) : null;
+    if (head?.type === STACK_NAME) {
+      wire(head, 0, node, inIdx);     // slot 0 is the stack's mods bundle
+      redraw(node);
+      toast("Connected the RefMod Stack that already feeds RefMod Text Encode");
+      return head;
+    }
+  }
+
+  let stack = null;
+  try {
+    stack = LiteGraph.createNode(STACK_NAME);
+  } catch (e) { stack = null; }
+  if (!stack) {
+    toast("RefMod Stack node not found \u2014 restart ComfyUI");
+    return null;
+  }
+  app.graph.add(stack);
+  try {
+    // Left of the builder like the Media Loader, below it when one is there.
+    const refIdx = (node.inputs || []).findIndex((i) => i.name === "references");
+    const loader = refIdx >= 0 && node.inputs[refIdx].link != null ? originNode(node, refIdx) : null;
+    const x = node.pos[0] - ((stack.size?.[0] || 560) + 60);
+    const y = loader ? loader.pos[1] + (loader.size?.[1] || 400) + 60 : node.pos[1];
+    stack.pos = [x, y];
+  } catch (e) { /* let the renderer place it */ }
+  wire(stack, 0, node, inIdx);
+  let fed = 0;
+  for (const enc of encoders) {
+    const mi = modsInput(enc);
+    if (mi >= 0 && enc.inputs[mi].link == null) { wire(node, outIdx, enc, mi); fed++; }
+  }
+  redraw(node);
+  toast(fed
+    ? "RefMod Stack added and connected \u2014 its bundle goes on to RefMod Text Encode"
+    : "RefMod Stack added and connected. Wire this node's mods output into " +
+      "RefMod Text Encode's mods input.", 6000);
+  return stack;
+}
+
 /** Create a Media Loader beside this node and connect it, or focus the
  *  existing one if the references input is already wired. */
 function addMediaLoader(node) {
@@ -5141,11 +5367,8 @@ function addMediaLoader(node) {
   try {
     loader.pos = [node.pos[0] - ((loader.size?.[0] || 430) + 60), node.pos[1]];
   } catch (e) { /* let the renderer place it */ }
-  loader.connect(0, node, inIdx);   // slot 0 is the references bundle
-  try {
-    node.setDirtyCanvas?.(true, true);
-    app.graph.setDirtyCanvas(true, true);
-  } catch (e) { /* Vue redraws itself */ }
+  wire(loader, 0, node, inIdx);   // slot 0 is the references bundle
+  redraw(node);
   toast("Media Loader added and connected");
 }
 
@@ -5219,6 +5442,7 @@ app.registerExtension({
         // Canvas buttons first so no DOM widget can sit on top of them.
         this.addWidget("button", "Edit prompt\u2026", null, () => openEditor(this));
         this.addWidget("button", "+ Media loader", null, () => addMediaLoader(this));
+        this.addWidget("button", "+ RefMods", null, () => addRefModStack(this));
 
         // Clickable DOM summary as a second, layout-independent way in.
         if (this.addDOMWidget) {

@@ -230,6 +230,7 @@ reference mid-sentence doesn't mean finding the node on the canvas.
 - [Draft mode](#draft-mode)
 - [Reference mode](#reference-mode)
 - [FAQ: wiring reference media](#faq-wiring-reference-media)
+- [RefMods](#refmods)
 - [Dated output folders](#dated-output-folders)
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
@@ -1101,6 +1102,143 @@ has to match the length you're actually generating. The editor shows the correct
 frame count for your chosen end time — put that number into the native node's
 `length`. H3 only accepts certain frame counts, and the editor already rounds to
 a valid one.
+
+---
+
+## RefMods
+
+RefMods are saved reference files for H3: a character's look, a voice, a
+place or a style, compressed once into a small latent and reused without
+re-encoding the source media. The format comes from
+[ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod)
+(MIT), and this pack can make, keep and use them on its own: the nodes below
+carry their own copy of that pack's runtime, credited in `refmod_core.py`
+and `refmod_create.py`, and share its `H3_REF_MODS` bundle type, so the two
+mix freely in one graph — our stack into its Step Curve or Inspect, its
+loaders into our Text Encode.
+
+### The library
+
+**Fantastic H3 RefMod Stack** holds every pick in one node. **Browse
+library…** opens the library: a thumbnail grid of everything under your
+`refmods` folders (including any mapped in `extra_model_paths.yaml`), with
+search, folders and a type filter. A card shows the file's token cost
+before you add it, and a look-and-voice pair saved as two files —
+`hero_visual` + `hero_audio`, or the H3RefMods fork's `hero_Video` +
+`hero_Audio` — appears as one card and one row. Click a card for its
+details, where you can rename it, move it to another folder, edit its
+description and concept, replace its preview image, or delete it. A
+preview is any `.png`, `.jpg` or `.webp` saved beside the file with the
+same name.
+
+The details panel also has **Show what's stored**. A RefMod holds a latent,
+not a picture, so this runs it back through the H3 VAE (through the queue,
+like Create) and shows what the model is actually given: each stored frame
+as a thumbnail — right for a stack of photos — or the frames played as a
+clip, and the voice as an audio player. The **Strength** slider previews
+the softening a weight below 1 applies, so you can see what 0.5 really
+looks like. **Fantastic H3 Inspect RefMod** does the same in a graph.
+
+**Edit frames & voice…** in the details panel pulls a RefMod back into
+the Create tab. Its stored frames are listed first as sources — untick or
+remove the ones you don't want, drag to reorder, and drop new pictures or
+clips in to add them; they're encoded to the file's own size and style and
+the previews show how each one is trimmed or squeezed to fit. Frames you
+keep are copied exactly as they are, never decoded and re-encoded. The
+voice is a source too: untick it to remove it, or add an audio file (or
+tick a clip's soundtrack) to replace it — the first *Voice seconds* are
+kept. **Save changes** writes the result through the queue and the library
+reselects the file; tick **Save as a copy** and give it a name to leave the
+original alone and write the result as a new RefMod (its voice and preview
+come along). A RefMod that had no voice is renamed to the
+`_visual`/`_audio` pair when one is added. **Fantastic H3 Edit RefMod** is
+the node behind it, should you want it in a graph.
+
+The **Create** tab makes new ones. Drop pictures, clips or audio anywhere
+on the library, or pull the items from any Media Loader in the workflow
+(the loader's right-click menu has *RefMod library* for the same thing), so
+a clip you have already trimmed and cropped goes in as it stands. By
+default everything becomes **one RefMod**: six photos of a character are
+stacked into a single reference, one frame per photo, and any voices —
+audio files, or clips whose soundtrack you keep — are joined into one voice
+saved beside it. Every photo in it takes the first one's shape (portrait,
+landscape or square): in Full the others have their edges trimmed to fit,
+in Compressed they are squeezed to fit. Each photo's preview shows exactly
+what will be trimmed or how it will be squeezed, so drag your best-framed
+one to the top. Rather than accept the automatic trim, click **Crop to
+fit…** on any other photo: the crop editor opens locked to the first
+photo's shape, and you drag the box over the part you want to keep. Every
+row also has **Crop…** (or **Crop / trim…** for a clip) for rotating,
+mirroring and trimming. These edits apply to the RefMod only; the Media
+Loader keeps its own settings. A stacked RefMod is cited in prompts as one
+video, like `<Video 1>`. Switch to **One
+per source** to turn a batch of unrelated items into separate RefMods
+instead.
+
+Under the Create button the tab shows how many frames and tokens the
+result will have. If that goes over the token limit, Create is blocked
+until you raise the limit, lower the resolution, switch to Compressed or
+leave some sources out — it never quietly drops photos to fit. Creation
+runs through the queue like any workflow, so ComfyUI manages memory and you
+can follow it in the queue panel, and the new card appears in the library
+when it lands, with a preview image written beside the file.
+
+**Fantastic H3 Create RefMod** is the node the library queues. It also
+works by hand in a graph with IMAGE and AUDIO inputs, and its `source`
+field takes a Media Loader item, or a list of them to stack, as JSON. Not carried over from the
+original pack: masks, multi-reference merging, motion-only mode and
+presets.
+
+**Full or Compressed?** Full keeps as much of your picture or clip as
+possible, so faces, characters, products and text come through clearly,
+but it makes generation slower. Compressed keeps the overall look (colours,
+layout, shapes and style) and drops the fine detail, which makes it much
+lighter; it suits settings, styles and moods, or using many references at
+once. If you're not sure, make one of each and try them with the same
+prompt.
+
+### Weights and labels
+
+Each stack row has a weight per channel. Up to 1 is plain strength. Above
+1 adds copies: 2.7 sends two full copies and a third at 0.7, and the
+readout next to the slider spells that out along with the token cost.
+Switch a channel to **S × C** for several copies at the same reduced
+strength. Rows can be switched off without removing them, and dragged to
+reorder, which matters because order sets the label numbers. The footer
+shows the bundle's total, an optional `max_total_tokens` limit that the
+queue will enforce, and the labels the next node will assign.
+
+To use RefMods with this builder, click **+ RefMods** on the node. It adds
+a RefMod Stack wired into the builder's `mods` input (or connects the stack
+already feeding your Text Encode), and the builder passes the bundle on
+through its `mods` output. Wire the builder's `prompt` and `mods` outputs
+into RefMod Text Encode — the button does the `mods` half itself when the
+Text Encode is already there, and the editor warns when the bundle doesn't
+reach one. A stack wired straight to the Text Encode still works: the
+builder finds it by following its `prompt` output.
+
+**Fantastic H3 RefMod Text Encode** takes the H3 CLIP, the bundle, the H3
+video VAE and a prompt, and
+presents each reference to the model's own encoder during tokenization, so
+the prompt can cite `<Picture n>`, `<Video n>` and `<Audio n>`. It numbers
+them one counter per kind in bundle order, with every copy numbered, and
+reports the map on `reference_map`. Connect its conditioning straight to the
+sampler; it has already attached the references. The builder shows the same
+labels as its reference chips, groups a pick's
+copies under its first label (citing `<Picture 1>` is enough when 1–3 are
+the same file), and warns when the prompt cites a label the stack doesn't
+send. The stack's `labels` output carries the same map as text, and its
+optional `mods` input appends to another stack or loader, whose entries are
+numbered first.
+
+**Fantastic H3 RefMod Apply** appends the references to conditioning encoded
+elsewhere, with a `retention` multiplier on every entry. The model sees them,
+but the prompt cannot name them — use it when a workflow already has its
+own text encoding.
+
+Files from the H3RefMods fork's older "combined" format keep a voice inside
+the visual file; they load with the visual half only and are marked
+*embedded audio ignored* in the library.
 
 ---
 

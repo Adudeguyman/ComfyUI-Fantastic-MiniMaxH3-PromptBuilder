@@ -565,6 +565,8 @@ const CSS = `
 .mml-tmcropinfo{font-size:calc(10px * var(--mml-fs, 1));color:#8a93a3;font-family:ui-monospace,monospace;
   white-space:nowrap;}
 .mml-tmcropinfo.changed{color:#4cc3e0;}
+.mml-tmlock{font-size:calc(11px * var(--mml-fs, 1));color:#b9cdef;border:1px solid #4d6ea6;border-radius:6px;
+  padding:3px 8px;white-space:nowrap;}
 .mml-tmaspect{background:#12151b;color:#c9cfda;border:1px solid #2e3440;
   border-radius:6px;padding:2px 5px;font-size:calc(11px * var(--mml-fs, 1));}
 .mml-btn.on{background:#173642;border-color:#4cc3e0;color:#9fe3f5;}
@@ -761,18 +763,29 @@ const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")
 /** Popout editor for a clip's trim range and (for video) a crop rect.
  *  Writes item.trim {start,end} and item.crop {x,y,w,h} on Apply only. */
 class TrimModal {
-  constructor(panel, item) {
+  /** @param opts.aspect - lock the crop to this width/height ratio and open
+   *  straight into crop editing (used by the RefMod library to fit a photo
+   *  to the first one in a stack). @param opts.aspectLabel - its name in the
+   *  ratio menu. @param opts.noAdd - hide the buttons that add new items to
+   *  a loader (capture frame, use audio), for callers that have no loader. */
+  constructor(panel, item, opts = {}) {
     this.panel = panel;
     this.item = item;
+    this.opts = opts;
     this.dur = item.duration || 0;
     this.start = item.trim?.start || 0;
     this.end = item.trim?.end ?? this.dur;
     this.crop = item.crop ? { ...item.crop } : null;
     this.mirror = !!item.mirror;
     this.rotate = ((parseInt(item.rotate, 10) || 0) % 360 + 360) % 360;
-    this.resize = parseInt(item.resize, 10) || 0;
+    // RefMods ignore the loader's size cap (Create's resolution decides size).
+    this.resize = opts.refmod ? 0 : (parseInt(item.resize, 10) || 0);
     this.cropMode = false;
     this.aspect = "free";
+    if (opts.aspect > 0) {
+      this.aspect = String(opts.aspect);
+      if (!this.crop) this.crop = coverRect(item.width, item.height, opts.aspect);
+    }
     this.drag = null;
     injectCSS();
     this.build();
@@ -822,14 +835,14 @@ class TrimModal {
         e.preventDefault();
         this.end = Math.max(at, this.start + 0.1); this.layoutTimeline(); break;
       case "a": case "A":
-        if (this.item.kind === "audio" || this.item.has_audio) {
+        if (!this.opts.noAdd && (this.item.kind === "audio" || this.item.has_audio)) {
           e.preventDefault(); this.useAudio();
         }
         break;
       case "m": case "M":
         e.preventDefault(); this.toggleMute(); break;
       case "c": case "C":
-        if (this.item.kind === "video") { e.preventDefault(); this.captureFrame(); }
+        if (!this.opts.noAdd && this.item.kind === "video") { e.preventDefault(); this.captureFrame(); }
         break;
       default: break;
     }
@@ -1164,6 +1177,9 @@ class TrimModal {
         }
         const t = this.item.width; this.item.width = this.item.height;
         this.item.height = t;
+        // A locked shape can't be turned with the picture: re-fit it.
+        if (this.opts.aspect > 0)
+          this.crop = coverRect(this.item.width, this.item.height, this.opts.aspect);
         this.syncRotate();
         this.syncCrop();
       } }, "\u21bb");
@@ -1186,15 +1202,18 @@ class TrimModal {
       } }, "\u25a3 Crop");
     this.aspectEl = el("select", { class: "mml-tmaspect",
       onchange: (e) => { this.aspect = e.target.value; this.forceAspect(); } },
-      [["free", "freeform"], ["1", "1:1"],
+      [...(this.opts?.aspect > 0 ? [[String(this.opts.aspect), this.opts.aspectLabel || "locked"]] : []),
+       ["free", "freeform"], ["1", "1:1"],
        [String(16 / 9), "16:9"], [String(9 / 16), "9:16"],
        [String(4 / 3), "4:3"], [String(3 / 4), "3:4"],
        [String(3 / 2), "3:2"], [String(2 / 3), "2:3"],
        [String(21 / 9), "21:9"], [String(9 / 21), "9:21"],
       ].map(([v, l]) => el("option", { value: v }, l)));
+    this.aspectEl.value = this.aspect;
     // Pictures get a size cap: a 4K reference is decoded and rescaled on
     // every run, and the model downsizes it to the generation area anyway.
-    this.sizeEl = (this.isStill || this.item.kind === "video")
+    // Not for RefMods: Create's resolution setting decides their size.
+    this.sizeEl = (!this.opts.refmod && (this.isStill || this.item.kind === "video"))
       ? el("select", { class: "mml-tmaspect",
           title: "Cap the long edge of what's sent. The model rescales " +
                  "references anyway, so this mostly saves decode time and RAM " +
@@ -1212,14 +1231,22 @@ class TrimModal {
       : null;
     // Only for stills: writing a resized copy of a video would mean
     // re-encoding it, which is a different job entirely.
-    this.bakeBtn = this.isStill
+    this.bakeBtn = (this.isStill && !this.opts.refmod)
       ? el("button", { class: "mml-btn mml-sm",
           title: "Write a resized copy into ComfyUI's input folder and use " +
                  "that instead. Your original file is left alone.",
           onclick: () => this.bake() }, "\u2b07 Write copy")
       : null;
+    const locked = this.opts.aspect > 0;
+    this.lockEl = locked
+      ? el("span", { class: "mml-tmlock",
+          title: "Every photo in the RefMod takes this shape, so the box can " +
+                 "be moved and resized but not reshaped." },
+          `\u{1F512} Shape locked to the ${this.opts.aspectLabel || "first photo"}`)
+      : null;
     return el("span", { class: "mml-tmcropbar" },
-      this.rotBtn, this.mirrorBtn, this.cropBtn, this.aspectEl,
+      this.rotBtn, this.mirrorBtn,
+      locked ? this.lockEl : this.cropBtn, locked ? null : this.aspectEl,
       this.sizeEl, this.bakeBtn, this.cropInfo);
   }
 
@@ -1418,7 +1445,7 @@ class TrimModal {
     this.cropWrap.style.pointerEvents = this.cropMode ? "" : "none";
     this.cropRect.classList.toggle("locked", !this.cropMode);
     this.cropBtn.classList.toggle("on", !!this.crop);
-    this.aspectEl.style.display = this.cropMode ? "" : "none";
+    this.aspectEl.style.display = this.cropMode && !(this.opts.aspect > 0) ? "" : "none";
     if (this.crop && this.cropRect) {
       const c = this.crop;
       Object.assign(this.cropRect.style, {
@@ -1636,21 +1663,28 @@ class TrimModal {
             "Last \u23ed")),
         el("div", { class: "mml-tmfoot act" },
           ...(still ? [] : chips),
-          (isVid && !still) ? el("button", { class: "mml-btn mml-sm",
+          (isVid && !still && !this.opts.noAdd) ? el("button", { class: "mml-btn mml-sm",
             title: "Add the frame shown above as a picture reference  ( C )",
             onclick: () => this.captureFrame() }, "\u{1F4F7} Use frame") : null,
-          (!still && (this.item.kind === "audio" || this.item.has_audio))
+          (!still && !this.opts.noAdd && (this.item.kind === "audio" || this.item.has_audio))
             ? el("button", { class: "mml-btn mml-sm",
                 title: "Save the kept range as its own audio reference  ( A )",
                 onclick: () => this.useAudio() }, "\u{1F3B5} Use audio")
             : null,
           el("span", { class: "mml-tmspace" }),
-          (this.item.trim || this.item.crop)
+          (this.item.trim || this.item.crop || this.opts.aspect > 0)
             ? el("button", { class: "mml-btn mml-sm",
-                title: "Whole clip, no crop",
+                title: this.opts.aspect > 0 ? "Back to the automatic centred fit" : "Whole clip, no crop",
                 onclick: () => { this.start = 0; this.end = this.dur;
+                  if (this.rotate % 180) {          // undo the turn's size swap too
+                    const t = this.item.width; this.item.width = this.item.height; this.item.height = t;
+                  }
                   this.crop = null; this.cropMode = false; this.mirror = false;
                   this.rotate = 0; this.resize = 0;
+                  if (this.opts.aspect > 0) {
+                    this.crop = coverRect(this.item.width, this.item.height, this.opts.aspect);
+                    this.cropMode = true;
+                  }
                   if (this.sizeEl) this.sizeEl.value = "0";
                   this.syncCrop(); this.syncMirror(); this.syncRotate();
                   this.layoutTimeline(); } },
@@ -1661,8 +1695,9 @@ class TrimModal {
           el("button", { class: "mml-btn mml-sm",
             onclick: () => this.close() }, "Cancel")),
         this.note,
-        still ? el("div", { class: "mml-tmkeys" },
-          "Drag a box to crop \u00b7 \u25a3 toggles editing \u00b7 esc closes")
+        still ? el("div", { class: "mml-tmkeys" }, this.opts.aspect > 0
+          ? "Drag the box over the part to keep \u00b7 drag a corner to resize \u00b7 esc closes"
+          : "Drag a box to crop \u00b7 \u25a3 toggles editing \u00b7 esc closes")
         : el("div", { class: "mml-tmkeys" },
           "\u2190 \u2192 step a frame (shift = 10) \u00b7 space play \u00b7 " +
           "[ ] set start/end here \u00b7 home/end jump \u00b7 M mute \u00b7 A use audio" +
@@ -1671,12 +1706,44 @@ class TrimModal {
     // only reason to be here; rotate and size mean it no longer is. Start in
     // whatever state the picture is already in.
     if (still && this.crop) this.cropMode = false;
+    if (this.opts.aspect > 0) this.cropMode = true;
     this.showSize();
     this.syncCrop();
     this.syncMirror();
     this.syncRotate();
     if (!still) this.seek(this.start, false);
   }
+}
+
+/** The largest centred rect of `aspect` (w/h) inside a w x h frame, in the
+ *  normalised x/y/w/h the crop uses — the same region an automatic
+ *  centre-crop keeps. */
+function coverRect(w, h, aspect) {
+  const px = (w || 1) / (h || 1);
+  if (px > aspect) { const cw = aspect / px; return { x: (1 - cw) / 2, y: 0, w: cw, h: 1 }; }
+  const ch = px / aspect;
+  return { x: 0, y: (1 - ch) / 2, w: 1, h: ch };
+}
+
+/** The trim/crop editor for an item that doesn't live in a Media Loader.
+ *  Edits are written to `item` on Apply, then `onApply(item)` runs. */
+export function openCropEditor(item, { onApply, aspect, aspectLabel, say } = {}) {
+  const panel = {
+    node: null,
+    live: () => item,
+    commit: () => onApply?.(item),
+    say: (msg) => say?.(msg),
+  };
+  // Rotating swaps item.width/height straight away; on Cancel put them back,
+  // or the item would describe a turn it never got.
+  const size = [item.width, item.height];
+  let applied = false;
+  const modal = new TrimModal(panel, item, { aspect, aspectLabel, noAdd: true, refmod: true });
+  const apply = modal.apply.bind(modal), close = modal.close.bind(modal);
+  modal.apply = () => { applied = true; apply(); };
+  modal.close = () => { close(); if (!applied) [item.width, item.height] = size; };
+  modal.overlay.style.zIndex = "10060";          // above the RefMod library
+  return modal;
 }
 
 function lightbox(item, tag) {
