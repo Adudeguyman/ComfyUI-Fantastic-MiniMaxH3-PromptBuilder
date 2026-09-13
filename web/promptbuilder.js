@@ -348,6 +348,49 @@ const ROLE_HINTS = [
     note: "the source structure is retained where the edit does not change it." },
 ];
 
+/* What a RefMod's saved concept says about it, in the guide's own wording.
+   `subject` lines open with <Subject N>; the others are standalone reference
+   lines. Concept names are the library's (refmods.CONCEPT_TYPES). */
+const REFMOD_CONCEPTS = {
+  identity: { subject: true, marker: "fully_preserved", task: "reference generation",
+    text: (c) => `${c.subj} is the person in ${c.tag}.`,
+    note: (c) => `${c.subj}'s identity and appearance from ${c.tag} are retained.` },
+  clothing: { subject: true, marker: "attribute_transfer", task: "reference generation",
+    text: (c) => `${c.subj} is the outfit in ${c.tag}.`,
+    note: (c) => `the garments, colours and fit of ${c.subj} from ${c.tag} are transferred.` },
+  background: { subject: true, marker: "fully_preserved", task: "reference generation",
+    text: (c) => `${c.subj} is the environment in ${c.tag}.`,
+    note: (c) => `the layout, surfaces and lighting of ${c.subj} from ${c.tag} are retained.` },
+  style: { subject: false, marker: "attribute_transfer", task: "reference generation",
+    text: (c) => `${c.tag} is the visual-style reference; its palette, lighting and rendering look guide the target video.`,
+    note: (c) => `its colour palette, lighting and rendering style are transferred; its content is not reproduced.` },
+  pose_motion: { subject: false, marker: "attribute_transfer", task: "reference generation",
+    text: (c) => `${c.tag} is the pose and motion reference; its movement and timing guide the target video.`,
+    note: (c) => `its poses and motion timing are transferred; its subject is not reproduced.` },
+  voice: { audio: true, marker: "reference", task: "audio reference",
+    text: (c) => `${c.tag} is the voice-timbre reference for ${c.subj} (${c.sx}), guiding delivery and speaking rate without copying the original signal.`,
+    note: (c) => `its vocal timbre guides the dialogue delivery of ${c.subj} without copying the original signal.`,
+    speaker: (c) => `${c.subj} is the speaker heard in ${c.tag}.` },
+  singing: { audio: true, marker: "reference", task: "audio reference",
+    text: (c) => `${c.tag} is the singing-voice timbre reference for ${c.subj} (${c.sx}), guiding vocal tone without copying the original signal.`,
+    note: (c) => `its singing timbre guides the vocal delivery of ${c.subj} without copying the original signal.`,
+    speaker: (c) => `${c.subj} is the singer heard in ${c.tag}.` },
+  music_style: { audio: true, marker: "reference", task: "audio reference",
+    text: (c) => `${c.tag} is the background-music style reference for the target video's audience-only score.`,
+    note: () => "only its instrumentation, tempo, and rhythmic feel guide the new score; the signal is not copied." },
+  sound_fx: { audio: true, marker: "reference", task: "audio reference",
+    text: (c) => `${c.tag} is the sound-effect texture reference for the target video's physical action sounds.`,
+    note: () => "only its sound-effect texture is referenced; the signal is not copied." },
+  ambience: { audio: true, marker: "reference", task: "audio reference",
+    text: (c) => `${c.tag} is the ambience reference for the target video's background sound.`,
+    note: () => "only its ambient texture is referenced; the signal is not copied." },
+};
+const VISUAL_CONCEPTS = ["identity", "clothing", "background", "style", "pose_motion"];
+const AUDIO_CONCEPTS = ["voice", "singing", "music_style", "sound_fx", "ambience"];
+const CONCEPT_LABEL = { identity: "a person / character", clothing: "an outfit", background: "a place / setting",
+  style: "a visual style", pose_motion: "a pose or motion", voice: "a speaking voice", singing: "a singing voice",
+  music_style: "a music style", sound_fx: "sound effects", ambience: "ambience" };
+
 function roleHint(text) {
   return ROLE_HINTS.find((h) => h.re.test(text || "")) || null;
 }
@@ -836,8 +879,11 @@ function refmodSlots(node, opts = {}) {
       offset[m.kind] = Math.max(offset[m.kind], m.idx);
     }
   }
+  const allPicks = chain.flatMap((st) => picksOf(st));
+  const pickByUid = new Map(allPicks.map((p) => [p.uid, p]));
   const groups = labelGroups(chain.flatMap((st) => deriveEntries(picksOf(st))));
   const copyTags = new Set();
+  const firstRefmod = out.length;
   for (const g of groups) {
     if (!g.nums.length) continue;
     const kind = REFMOD_KIND[g.kind].label;
@@ -851,7 +897,15 @@ function refmodSlots(node, opts = {}) {
       slotName: `refmod:${g.file}`,
       source: `${sourceLabel} \u2022 ${g.name}`,
       preview: g.preview ? { type: "img", url: refmodPreviewURL(g.preview) } : null,
+      refmod: { uid: g.uid, name: g.name, role: g.key === "audio" ? "voice" : "look",
+        weight: weightText(pickByUid.get(g.uid)?.[g.key]), tokens: g.tokens * g.nums.length,
+        draft: !!opts.picks },
     });
+  }
+  // A RefMod's look and voice name each other in the hover card.
+  for (const sl of out.slice(firstRefmod)) {
+    const other = out.slice(firstRefmod).find((o) => o !== sl && o.refmod.uid === sl.refmod.uid);
+    if (other) sl.refmod.pair = { role: other.refmod.role, tag: other.tag };
   }
   out.refmod = true;
   out.partial = partial || reach === "other";
@@ -860,6 +914,13 @@ function refmodSlots(node, opts = {}) {
   out.media = reach;
   out.mediaUnsent = !reach && (media || []).some((m) => m.tag);
   return out;
+}
+
+/** A stack channel's weight the way its row shows it. */
+function weightText(ch) {
+  if (!ch) return "";
+  if (ch.mode === "sc") return `strength ${Number(ch.s ?? 1).toFixed(2)} \u00d7 ${ch.c ?? 1}`;
+  return `weight ${Number(ch.w ?? 1).toFixed(2).replace(/\.?0+$/, "")}`;
 }
 
 /** The RefMod Stack this prompt's references come from (the one nearest the
@@ -1306,6 +1367,21 @@ const CSS = `
 .mmh3-card.unusable:hover{opacity:.5;border-color:#3a4252 !important;}
 .mmh3-card.unusable .mmh3-tagname{color:#6b7484 !important;}
 .mmh3-cardnote{display:block;font-size:calc(8px * var(--mmh3-fs, 1));color:#8a7ab0;padding:0 4px 3px;}
+.mmh3-card.refmod{position:relative;}
+.mmh3-cardbadge{position:absolute;top:2px;left:2px;background:rgba(8,10,14,.82);color:#e692c8;
+  border:1px solid #7a4d6b;border-radius:4px;font-size:calc(9px * var(--mmh3-fs, 1));line-height:1.3;
+  padding:0 3px;pointer-events:none;}
+.mmh3-cardvoice{position:absolute;top:22px;right:4px;color:#b48ce8;font-size:calc(12px * var(--mmh3-fs, 1));
+  text-shadow:0 0 3px #000,0 0 2px #000;pointer-events:none;}
+.mmh3-cardgroup{display:flex;flex-direction:column;gap:3px;flex:0 0 auto;}
+.mmh3-cardgroupcards{display:flex;gap:6px;}
+.mmh3-cardstrip{box-sizing:border-box;width:0;min-width:100%;font-size:calc(9px * var(--mmh3-fs, 1));
+  color:#8a93a3;border:1px solid #2e3440;border-radius:4px;padding:0 5px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;}
+.mmh3-cardgroup.refmod .mmh3-cardstrip{color:#e692c8;border-color:#7a4d6b;background:rgba(230,146,200,.10);}
+.mmh3-peekrefmod{display:flex;justify-content:space-between;gap:6px;font-size:calc(10px * var(--mmh3-fs, 1));
+  color:#e692c8;margin-bottom:3px;}
+.mmh3-peekrefmod span:last-child{color:#8a93a3;}
 .mmh3-peek{position:fixed;z-index:10002;width:240px;background:#1e222a;
   border:1px solid #3a4252;border-radius:9px;overflow:hidden;
   box-shadow:0 12px 32px rgba(0,0,0,.5);}
@@ -1475,6 +1551,7 @@ const CSS = `
   padding:5px 12px;font-size:calc(12px * var(--mmh3-fs, 1));cursor:pointer;}
 .mmh3-btn:hover{background:#333b4d;}
 .mmh3-btn.primary{background:#3f5a86;border-color:#4d6ea6;color:#fff;}
+.mmh3-btn.danger{border-color:#7a4a3a;color:#e0a090;} .mmh3-btn.danger:hover{background:#3a2622;}
 .mmh3-btn.off,.mmh3-btn:disabled{background:#22262e;border-color:#2e3440;
   color:#5c6472;cursor:not-allowed;}
 .mmh3-btn.off:hover,.mmh3-btn:disabled:hover{background:#22262e;}
@@ -1490,6 +1567,18 @@ const CSS = `
 .mmh3-minitag.aud{color:#b48ce8;border-color:#5d4a86;}
 .mmh3-minitag.subj{color:#7ec87e;border-color:#3e6b3e;}
 .mmh3-roles{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:-4px 0 10px 2px;}
+.mmh3-conceptover{position:fixed;inset:0;z-index:10007;background:rgba(8,10,14,.55);display:flex;
+  align-items:center;justify-content:center;}
+.mmh3-conceptbox{width:min(440px,92vw);background:#1e222a;border:1px solid #3a4252;border-radius:10px;
+  padding:14px 16px;display:flex;flex-direction:column;gap:9px;color:#d7dbe2;
+  box-shadow:0 24px 64px rgba(0,0,0,.55);font-size:calc(12px * var(--mmh3-fs, 1));}
+.mmh3-concepthead{font-weight:600;font-size:calc(14px * var(--mmh3-fs, 1));}
+.mmh3-conceptrow{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.mmh3-conceptrow span{color:#e692c8;} .mmh3-conceptrow small{color:#8a93a3;}
+.mmh3-conceptrow select{flex:0 1 220px;}
+.mmh3-conceptbtns{display:flex;justify-content:flex-end;gap:6px;margin-top:4px;}
+.mmh3-conceptbox .mmh3-dim{color:#8a93a3;font-size:calc(11px * var(--mmh3-fs, 1));}
+.mmh3-conceptbox .mmh3-inline{display:flex;align-items:center;gap:6px;color:#a9b2c2;}
 .mmh3-rolelabel{font-size:calc(10px * var(--mmh3-fs, 1));text-transform:uppercase;letter-spacing:.07em;
   color:#6b7484;margin-right:2px;}
 .mmh3-rolechip{font-size:calc(11px * var(--mmh3-fs, 1));border-radius:10px;padding:2px 9px;cursor:pointer;
@@ -4190,6 +4279,165 @@ class Editor {
     return cv;
   }
 
+  /* --- draft definitions from RefMods ------------------------------ */
+
+  /** One definition line and one retention entry per RefMod in the stack,
+   *  worded from the concept saved in the library (a person, a place, a
+   *  style, a voice…). Names and descriptions are the user's own notes and
+   *  never go into the prompt. Loose loader media is left alone: nothing is known
+   *  about it. A RefMod whose concept was never set is asked about first,
+   *  and the answer can be written back to the library so it isn't asked
+   *  again. Labels that already have a line are skipped. */
+  async draftFromRefmods() {
+    const r = this.state.ref;
+    const slots = this.slots.filter((s) => s.refmod && s.tag);
+    if (!slots.length) { toast("No RefMods are connected"); return; }
+    let library = [];
+    try {
+      const resp = await api.fetchApi("/minimax_h3/refmods", { cache: "no-store" });
+      library = (await resp.json()).items || [];
+    } catch (e) { /* the concept picker covers the gap */ }
+    const infoOf = (file) => {
+      const it = library.find((x) => x.visual?.file === file || x.audio?.file === file);
+      return { concept: it?.concept || "generic" };
+    };
+    // Group each RefMod's look and voice; a voice-only RefMod has no look.
+    const mods = [];
+    for (const s of slots) {
+      const file = s.slotName.replace(/^refmod:/, "");
+      let m = mods.find((x) => x.uid === s.refmod.uid);
+      if (!m) { m = { uid: s.refmod.uid, name: s.refmod.name, ...infoOf(file) }; mods.push(m); }
+      if (s.refmod.role === "voice") m.voice = s; else m.look = s;
+      // The concept is written to the half it describes: the look's file,
+      // or the voice's when the RefMod is a voice only.
+      if (s.refmod.role !== "voice" || !m.file) m.file = file;
+    }
+    // Existing lines: add to them, or start the two sections over.
+    const hasText = r.subjectDefs.some((d) => (d.text || "").trim()) || r.retention.some((x) => x.label);
+    if (hasText) {
+      const how = await this.askOverwrite();
+      if (!how) return;
+      if (how === "replace") { r.subjectDefs = []; r.retention = []; }
+    }
+    const defText = () => r.subjectDefs.map((d) => d.text).join("\n");
+    const cited = (tag) => defText().includes(tag);
+    const pending = mods.filter((m) => (m.look && !cited(m.look.tag)) || (m.voice && !cited(m.voice.tag)));
+    if (!pending.length) { toast("Every RefMod already has a definition line", 3000); return; }
+
+    // Ask about the ones the library can't describe.
+    const unknown = pending.filter((m) => m.look ? !VISUAL_CONCEPTS.includes(m.concept)
+                                            : !AUDIO_CONCEPTS.includes(m.concept));
+    if (unknown.length) {
+      const answers = await this.askConcepts(unknown);
+      if (!answers) return;                       // cancelled
+      for (const m of unknown) m.concept = answers.choice[m.uid];
+      if (answers.remember) {
+        for (const m of unknown) {
+          try {
+            await postApi("/minimax_h3/refmods/meta", { headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ files: [m.file], concept_type: m.concept }) });
+          } catch (e) { /* the draft still goes ahead */ }
+        }
+      }
+    }
+
+    const usedSpeakers = () => new Set([...defText().matchAll(/\(S(\d+)\)/g)].map((x) => +x[1]));
+    const nextSpeaker = () => { const u = usedSpeakers(); let i = 1; while (u.has(i)) i++; return `S${i}`; };
+    const nextSubject = () => {
+      const n = [...defText().matchAll(/<Subject (\d+)>/g)].map((x) => +x[1]);
+      return `<Subject ${Math.max(0, ...n) + 1}>`;
+    };
+    const ensureRet = (label, marker, note) => {
+      if (r.retention.some((x) => x.label === label)) return;
+      r.retention.push({ label, context: "", marker, note });
+    };
+    const ensureTask = (t) => { if (!r.summaryTypes.includes(t)) r.summaryTypes.push(t); };
+    let added = 0;
+    for (const m of pending) {
+      let subj = null;
+      if (m.look && !cited(m.look.tag)) {
+        const spec = REFMOD_CONCEPTS[m.concept] || REFMOD_CONCEPTS.identity;
+        subj = spec.subject ? nextSubject() : null;
+        const ctx = { subj, tag: m.look.tag };
+        r.subjectDefs.push({ text: spec.text(ctx), role: null });
+        ensureRet(subj || m.look.tag, spec.marker, spec.note(ctx));
+        ensureTask(spec.task);
+        added++;
+      } else if (m.look) {
+        // The look is already defined: reuse its subject for the voice.
+        const line = r.subjectDefs.find((d) => d.text.includes(m.look.tag));
+        subj = (line?.text.match(/<Subject \d+>/) || [null])[0];
+      }
+      if (m.voice && !cited(m.voice.tag)) {
+        const vc = m.look ? (m.concept === "singing" ? "singing" : "voice") : m.concept;
+        const spec = REFMOD_CONCEPTS[vc] || REFMOD_CONCEPTS.voice;
+        if (spec.speaker && !subj) {
+          // A voice with no look of its own still needs someone to belong to.
+          subj = nextSubject();
+          r.subjectDefs.push({ text: spec.speaker({ subj, tag: m.voice.tag }), role: null });
+          ensureRet(subj, "fully_preserved", `${subj}'s identity is retained.`);
+        }
+        const ctx = { subj: subj || "<Subject 1>", tag: m.voice.tag, sx: nextSpeaker() };
+        r.subjectDefs.push({ text: spec.text(ctx), role: vc === "voice" ? "timbre" : null });
+        ensureRet(m.voice.tag, spec.marker, spec.note(ctx));
+        ensureTask(spec.task);
+        added++;
+      }
+    }
+    this.render();
+    toast(`Drafted ${added} definition line${added === 1 ? "" : "s"} and their retention entries \u2014 read them over`, 5000);
+  }
+
+  /** Lines already exist: resolves to "add", "replace" or null (cancelled). */
+  askOverwrite() {
+    return new Promise((resolve) => {
+      const close = (result) => { window.removeEventListener("keydown", onKey); box.remove(); resolve(result); };
+      const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(null); } };
+      const box = el("div", { class: "mmh3-conceptover", onmousedown: (e) => { if (e.target === box) close(null); } },
+        el("div", { class: "mmh3-conceptbox", role: "dialog", "aria-label": "Definitions already exist" },
+          el("div", { class: "mmh3-concepthead" }, "You already have definitions"),
+          el("div", { class: "mmh3-dim" },
+            "Add missing keeps every line you have and drafts only the RefMods that don't have one yet. " +
+            "Start over clears subject_definitions and retention_analysis and drafts them fresh from the RefMods."),
+          el("div", { class: "mmh3-conceptbtns" },
+            el("button", { class: "mmh3-btn", onclick: () => close(null) }, "Cancel"),
+            el("button", { class: "mmh3-btn danger", onclick: () => close("replace") }, "Start over"),
+            el("button", { class: "mmh3-btn primary", onclick: () => close("add") }, "Add missing"))));
+      window.addEventListener("keydown", onKey);
+      document.body.append(box);
+    });
+  }
+
+  /** A small dialog over the editor: what is each of these RefMods? Resolves
+   *  to { choice: {uid: concept}, remember } or null when cancelled. */
+  askConcepts(mods) {
+    return new Promise((resolve) => {
+      const choice = {};
+      const rows = mods.map((m) => {
+        const options = m.look ? VISUAL_CONCEPTS : AUDIO_CONCEPTS;
+        choice[m.uid] = options[0];
+        return el("label", { class: "mmh3-conceptrow" },
+          el("span", {}, `\u25c8 ${m.name}`, el("small", {}, m.look ? " (look)" : " (voice)")),
+          el("select", { onchange: (e) => { choice[m.uid] = e.target.value; } },
+            options.map((c) => el("option", { value: c }, CONCEPT_LABEL[c] || c))));
+      });
+      const remember = el("input", { type: "checkbox", checked: true });
+      const close = (result) => { window.removeEventListener("keydown", onKey); box.remove(); resolve(result); };
+      const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(null); } };
+      const box = el("div", { class: "mmh3-conceptover", onmousedown: (e) => { if (e.target === box) close(null); } },
+        el("div", { class: "mmh3-conceptbox", role: "dialog", "aria-label": "What are these RefMods?" },
+          el("div", { class: "mmh3-concepthead" }, "What are these RefMods?"),
+          el("div", { class: "mmh3-dim" }, "The library has no concept saved for them, and the wording depends on it."),
+          ...rows,
+          el("label", { class: "mmh3-inline" }, remember, " Save the answers to the library so this isn't asked again"),
+          el("div", { class: "mmh3-conceptbtns" },
+            el("button", { class: "mmh3-btn", onclick: () => close(null) }, "Cancel"),
+            el("button", { class: "mmh3-btn primary", onclick: () => close({ choice, remember: remember.checked }) }, "Draft"))));
+      window.addEventListener("keydown", onKey);
+      document.body.append(box);
+    });
+  }
+
   /* --- hover peek ------------------------------------------------- */
 
   peekFor(card, s) {
@@ -4206,22 +4454,29 @@ class Editor {
                 style: { width: "100%", height: "28px" } }))
           : el("img", { src: s.preview?.url, class: "mmh3-peekmedia" });
       const cites = this.citationCount(s.tag);
+      const r = s.refmod;
       box.append(media,
         el("div", { class: "mmh3-peekmeta" },
+          r ? el("div", { class: "mmh3-peekrefmod" },
+                el("span", {}, `\u25c8 RefMod \u00b7 ${r.name}`),
+                el("span", {}, r.role)) : null,
           el("div", { class: "mmh3-peekrow" },
-            el("span", { class: `mmh3-tagname ${s.cls}` }, s.tag),
+            el("span", { class: `mmh3-tagname ${s.cls}` }, s.range || s.tag),
             el("span", { class: "mmh3-peekcite" + (cites ? "" : " zero") },
               cites ? `cited ${cites}\u00d7` : "not cited")),
           el("div", { class: "mmh3-peeksrc" },
-            s.source + (s.note ? ` \u2022 ${s.note.replace(/[<>]/g, "")}` : "")),
+            r ? [r.weight, r.tokens ? `${r.tokens.toLocaleString("en-US")} tokens` : "",
+                 r.pair ? `${r.pair.role} is ${r.pair.tag}` : "", r.draft ? "draft copy" : ""]
+                  .filter(Boolean).join(" \u2022 ")
+              : s.source + (s.note ? ` \u2022 ${s.note.replace(/[<>]/g, "")}` : "")),
           el("div", { class: "mmh3-peekbtns" },
             el("button", { class: "mmh3-btn", onclick: () => {
               this.insert(s.tag); this.closePeek(); } }, "Insert tag"),
             )));
 
-      const r = card.getBoundingClientRect();
-      box.style.left = `${Math.min(r.left, window.innerWidth - 250)}px`;
-      box.style.top = `${r.bottom + 6}px`;
+      const rect = card.getBoundingClientRect();
+      box.style.left = `${Math.min(rect.left, window.innerWidth - 250)}px`;
+      box.style.top = `${rect.bottom + 6}px`;
       box.addEventListener("mouseenter", () => clearTimeout(this._peekClose));
       box.addEventListener("mouseleave", () => this.closePeek());
       document.body.append(box);
@@ -4337,7 +4592,7 @@ class Editor {
           ? " (This draft has no snapshot of its own, so it follows the node.)"
           : ""));
     }
-    return live.map((s) => {
+    const cards = live.map((s) => {
       const ok = this.usable(s);
       const cites = ok ? this.citationCount(s.tag) : 0;
       const card = el("div", {
@@ -4370,9 +4625,33 @@ class Editor {
           ? el("span", { class: "mmh3-cardnote" },
               "\u266a\u2192V" + (s.note.match(/\d+/) || [""])[0])
           : null);
+      if (s.refmod) {
+        card.classList.add("refmod");
+        card.append(el("span", { class: "mmh3-cardbadge", title: `From the RefMod \u201c${s.refmod.name}\u201d` }, "\u25c8"));
+        if (s.refmod.role === "voice" && s.preview?.type === "img")
+          card.append(el("span", { class: "mmh3-cardvoice" }, "\u266a"));
+      }
       if (ok) this.peekFor(card, s);
       return card;
     });
+    // Only worth sorting into groups when RefMods are in the mix: then each
+    // RefMod's look and voice sit together under its name, and the loader's
+    // media under its own.
+    if (!live.some((s) => s.refmod)) return cards;
+    const keyOf = (s) => (s.refmod ? `r:${s.refmod.uid}:${s.refmod.name}` : `m:${(s.source || "").split(" \u2022 ")[0]}`);
+    const out = [];
+    live.forEach((s, i) => {
+      const key = keyOf(s);
+      const last = out[out.length - 1];
+      if (last && last.key === key) { last.cards.push(cards[i]); return; }
+      out.push({ key, s, cards: [cards[i]] });
+    });
+    return out.map((g) => el("div", { class: "mmh3-cardgroup" + (g.s.refmod ? " refmod" : "") },
+      el("div", { class: "mmh3-cardgroupcards" }, ...g.cards),
+      el("div", { class: "mmh3-cardstrip",
+        title: g.s.refmod ? `RefMod \u201c${g.s.refmod.name}\u201d${g.s.refmod.draft ? " (this draft's copy)" : ""}` : g.s.source },
+        g.s.refmod ? `\u25c8 ${g.s.refmod.name}`
+          : (/^draft/i.test(g.s.source || "") ? "Draft media" : (g.s.slotName || "").startsWith("loader:") ? "Media" : "Connected"))));
   }
 
   toolBar(extraChips = []) {
@@ -5233,7 +5512,11 @@ class Editor {
         el("button", { class: "mmh3-btn",
           onclick: () => addDef(`<Video ${nextTagN("Video")}> is `) }, "+ Video line"),
         el("button", { class: "mmh3-btn",
-          onclick: () => addDef(`<Audio ${nextTagN("Audio")}> is `) }, "+ Audio line")),
+          onclick: () => addDef(`<Audio ${nextTagN("Audio")}> is `) }, "+ Audio line"),
+        el("button", { class: "mmh3-btn", title: "Write a definition and a retention entry for each " +
+            "RefMod in the stack, from what the library knows about it. With lines already here you " +
+            "choose whether to add the missing ones or start over.",
+          onclick: () => this.draftFromRefmods() }, "\u25c8 Draft from RefMods")),
       el("span", { class: "hint" },
         "One line per tracked item. Focus a line, then click media chips above to assign " +
         "references to that subject. Audio lines show role chips underneath \u2014 pick one " +

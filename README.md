@@ -50,7 +50,8 @@ any frame straight out of a video into your picture references.*
 **RefMods.** Save a character, a place, a look or a voice once and use it
 in any prompt after that — no re-uploading, no re-cropping. A RefMod is a
 small file in `models/refmods`; the model reads it the same way it reads a
-reference picture or clip.
+reference picture or clip. New to them? See the
+[RefMods how-to guide](REFMODS.md).
 
 - **Fantastic H3 RefMod Stack** holds the RefMods a prompt uses. Click
   **Browse library…** to pick from what you've saved, set a weight per
@@ -73,7 +74,14 @@ reference picture or clip.
   separate from Live — the same way it already handles media.
 - A ready-made workflow, `MMH3_RefMod_Stack_Example.json`, shows the whole
   chain. Use a **ref2va** checkpoint with it: that's the model that was
-  trained on references.
+  trained on references. However, MiniMax has admitted there are faults
+  with the open-weight ref2va model, so we strongly encourage using a
+  fl2va/ref2va hybrid model that enables reference capabilities with fl2va
+  quality. These are **direct drop-ins** for ref2va workflows, and do not
+  require any special nodes or workflow modifications to use, just select
+  a hybrid model instead of a ref2va model. Testing was done using the
+  "20-49" model from this repo:
+  <https://huggingface.co/smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models>
 
 **Also:**
 
@@ -276,7 +284,7 @@ reference mid-sentence doesn't mean finding the node on the canvas.
 - [Draft mode](#draft-mode)
 - [Reference mode](#reference-mode)
 - [FAQ: wiring reference media](#faq-wiring-reference-media)
-- [RefMods](#refmods)
+- [RefMods](#refmods) (step-by-step: [RefMods how-to guide](REFMODS.md))
 - [Dated output folders](#dated-output-folders)
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
@@ -1158,6 +1166,10 @@ a valid one.
 ---
 
 ## RefMods
+
+> **New to RefMods? Start with the [RefMods how-to guide](REFMODS.md).** It
+> walks through making, saving, editing and using them step by step. This
+> section is the detailed reference.
 
 RefMods are saved reference files for H3: a character's look, a voice, a
 place or a style, compressed once into a small latent and reused without

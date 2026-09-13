@@ -41,8 +41,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 183,
@@ -88,6 +87,9 @@
       "widgets_values": [
         true
       ],
+      "widgets_values_named": {
+        "enable_fp16_accumulation": true
+      },
       "color": "#233",
       "bgcolor": "#355"
     },
@@ -134,6 +136,9 @@
       "widgets_values": [
         "minimax_h3_video_vae_fp16.safetensors"
       ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -181,6 +186,11 @@
         "minimax",
         "default"
       ],
+      "widgets_values_named": {
+        "clip_name": "qwen3vl_32b_minimax_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
+        "type": "minimax",
+        "device": "default"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -227,6 +237,9 @@
       "widgets_values": [
         "minimax_h3_audio_vae_fp32.safetensors"
       ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -275,7 +288,6 @@
           "input_ue_unconnectable": {}
         }
       },
-      "widgets_values": [],
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -318,6 +330,9 @@
       "widgets_values": [
         "audio_vae"
       ],
+      "widgets_values_named": {
+        "Constant": "audio_vae"
+      },
       "color": "#322",
       "bgcolor": "#533"
     },
@@ -359,7 +374,10 @@
       },
       "widgets_values": [
         "media_references"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "media_references"
+      }
     },
     {
       "id": 238,
@@ -399,7 +417,10 @@
       },
       "widgets_values": [
         "prompt"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "prompt"
+      }
     },
     {
       "id": 246,
@@ -440,6 +461,9 @@
       "widgets_values": [
         "height"
       ],
+      "widgets_values_named": {
+        "Constant": "height"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -482,6 +506,9 @@
       "widgets_values": [
         "duration_sec"
       ],
+      "widgets_values_named": {
+        "Constant": "duration_sec"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -524,6 +551,9 @@
       "widgets_values": [
         "clip"
       ],
+      "widgets_values_named": {
+        "Constant": "clip"
+      },
       "color": "#432",
       "bgcolor": "#653"
     },
@@ -571,6 +601,9 @@
       "widgets_values": [
         "ref_positive_conditioning"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_positive_conditioning"
+      },
       "color": "#332922",
       "bgcolor": "#593930"
     },
@@ -618,6 +651,9 @@
       "widgets_values": [
         "ref_latents"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_latents"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -665,6 +701,9 @@
       "widgets_values": [
         "steps"
       ],
+      "widgets_values_named": {
+        "Constant": "steps"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -712,6 +751,9 @@
       "widgets_values": [
         "duration_sec"
       ],
+      "widgets_values_named": {
+        "Constant": "duration_sec"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -739,7 +781,6 @@
           "link": 382
         },
         {
-          "label": "b",
           "name": "values.b",
           "shape": 7,
           "type": "FLOAT,INT,BOOLEAN",
@@ -776,6 +817,9 @@
       "widgets_values": [
         "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17"
       ],
+      "widgets_values_named": {
+        "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17"
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -818,6 +862,9 @@
       "widgets_values": [
         "video_vae"
       ],
+      "widgets_values_named": {
+        "Constant": "video_vae"
+      },
       "color": "#322",
       "bgcolor": "#533"
     },
@@ -866,7 +913,6 @@
           "input_ue_unconnectable": {}
         }
       },
-      "widgets_values": [],
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -914,6 +960,9 @@
       "widgets_values": [
         "ref_guider"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_guider"
+      },
       "color": "#3c7878",
       "bgcolor": "#1c453b"
     },
@@ -956,6 +1005,9 @@
       "widgets_values": [
         "ref_positive_conditioning"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_positive_conditioning"
+      },
       "color": "#332922",
       "bgcolor": "#593930"
     },
@@ -1023,7 +1075,6 @@
           "input_ue_unconnectable": {}
         }
       },
-      "widgets_values": [],
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -1066,6 +1117,9 @@
       "widgets_values": [
         "video_vae"
       ],
+      "widgets_values_named": {
+        "Constant": "video_vae"
+      },
       "color": "#322",
       "bgcolor": "#533"
     },
@@ -1108,6 +1162,9 @@
       "widgets_values": [
         "audio_vae"
       ],
+      "widgets_values_named": {
+        "Constant": "audio_vae"
+      },
       "color": "#322",
       "bgcolor": "#533"
     },
@@ -1153,7 +1210,11 @@
       "widgets_values": [
         "minimaxh3/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
         0.75
-      ]
+      ],
+      "widgets_values_named": {
+        "lora_name": "minimaxh3/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
+        "strength_model": 0.75
+      }
     },
     {
       "id": 265,
@@ -1194,6 +1255,9 @@
       "widgets_values": [
         "reference_model"
       ],
+      "widgets_values_named": {
+        "Constant": "reference_model"
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -1236,6 +1300,9 @@
       "widgets_values": [
         "width"
       ],
+      "widgets_values_named": {
+        "Constant": "width"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -1263,11 +1330,13 @@
         },
         {
           "name": "vae",
+          "shape": 7,
           "type": "VAE",
           "link": 494
         },
         {
           "name": "audio_vae",
+          "shape": 7,
           "type": "VAE",
           "link": 495
         },
@@ -1279,56 +1348,48 @@
           "link": 468
         },
         {
-          "label": "ref_image_1",
           "name": "ref_images.ref_image_1",
           "shape": 7,
           "type": "IMAGE",
           "link": 469
         },
         {
-          "label": "ref_image_2",
           "name": "ref_images.ref_image_2",
           "shape": 7,
           "type": "IMAGE",
           "link": 470
         },
         {
-          "label": "ref_image_3",
           "name": "ref_images.ref_image_3",
           "shape": 7,
           "type": "IMAGE",
           "link": 471
         },
         {
-          "label": "ref_image_4",
           "name": "ref_images.ref_image_4",
           "shape": 7,
           "type": "IMAGE",
           "link": 472
         },
         {
-          "label": "ref_image_5",
           "name": "ref_images.ref_image_5",
           "shape": 7,
           "type": "IMAGE",
           "link": 473
         },
         {
-          "label": "ref_image_6",
           "name": "ref_images.ref_image_6",
           "shape": 7,
           "type": "IMAGE",
           "link": 474
         },
         {
-          "label": "ref_image_7",
           "name": "ref_images.ref_image_7",
           "shape": 7,
           "type": "IMAGE",
           "link": 475
         },
         {
-          "label": "ref_image_8",
           "name": "ref_images.ref_image_8",
           "shape": 7,
           "type": "IMAGE",
@@ -1342,14 +1403,12 @@
           "link": 477
         },
         {
-          "label": "ref_video_1",
           "name": "ref_videos.ref_video_1",
           "shape": 7,
           "type": "IMAGE",
           "link": 478
         },
         {
-          "label": "ref_video_2",
           "name": "ref_videos.ref_video_2",
           "shape": 7,
           "type": "IMAGE",
@@ -1363,14 +1422,12 @@
           "link": 480
         },
         {
-          "label": "ref_video_audio_1",
           "name": "ref_video_audios.ref_video_audio_1",
           "shape": 7,
           "type": "AUDIO",
           "link": 481
         },
         {
-          "label": "ref_video_audio_2",
           "name": "ref_video_audios.ref_video_audio_2",
           "shape": 7,
           "type": "AUDIO",
@@ -1384,14 +1441,12 @@
           "link": 483
         },
         {
-          "label": "ref_audio_1",
           "name": "ref_audios.ref_audio_1",
           "shape": 7,
           "type": "AUDIO",
           "link": 484
         },
         {
-          "label": "ref_audio_2",
           "name": "ref_audios.ref_audio_2",
           "shape": 7,
           "type": "AUDIO",
@@ -1466,6 +1521,13 @@
         124,
         "max"
       ],
+      "widgets_values_named": {
+        "prompt": "",
+        "width": 1344,
+        "height": 768,
+        "length": 124,
+        "ref_image_size": "max"
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -1506,8 +1568,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 276,
@@ -1553,6 +1614,9 @@
       "widgets_values": [
         true
       ],
+      "widgets_values_named": {
+        "enable_fp16_accumulation": true
+      },
       "color": "#233",
       "bgcolor": "#355"
     },
@@ -1598,7 +1662,11 @@
       "widgets_values": [
         "minimaxh3/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
         0.75
-      ]
+      ],
+      "widgets_values_named": {
+        "lora_name": "minimaxh3/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
+        "strength_model": 0.75
+      }
     },
     {
       "id": 279,
@@ -1645,7 +1713,6 @@
           "input_ue_unconnectable": {}
         }
       },
-      "widgets_values": [],
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -1688,6 +1755,9 @@
       "widgets_values": [
         "steps"
       ],
+      "widgets_values_named": {
+        "Constant": "steps"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -1729,7 +1799,10 @@
       },
       "widgets_values": [
         "media_references"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "media_references"
+      }
     },
     {
       "id": 300,
@@ -1768,6 +1841,9 @@
       "widgets_values": [
         "audio_vae"
       ],
+      "widgets_values_named": {
+        "Constant": "audio_vae"
+      },
       "color": "#322",
       "bgcolor": "#533"
     },
@@ -1779,7 +1855,7 @@
         7617.939943609958
       ],
       "size": [
-        240.91666259765626,
+        244.98332824707032,
         366
       ],
       "flags": {
@@ -1897,8 +1973,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 294,
@@ -1938,7 +2013,10 @@
       },
       "widgets_values": [
         "prompt"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "prompt"
+      }
     },
     {
       "id": 296,
@@ -1979,6 +2057,9 @@
       "widgets_values": [
         "width"
       ],
+      "widgets_values_named": {
+        "Constant": "width"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -2021,6 +2102,9 @@
       "widgets_values": [
         "height"
       ],
+      "widgets_values_named": {
+        "Constant": "height"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -2063,6 +2147,9 @@
       "widgets_values": [
         "duration_sec"
       ],
+      "widgets_values_named": {
+        "Constant": "duration_sec"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -2110,6 +2197,9 @@
       "widgets_values": [
         "f2v_latents"
       ],
+      "widgets_values_named": {
+        "Constant": "f2v_latents"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -2157,6 +2247,9 @@
       "widgets_values": [
         "f2v_positive_conditioning"
       ],
+      "widgets_values_named": {
+        "Constant": "f2v_positive_conditioning"
+      },
       "color": "#332922",
       "bgcolor": "#593930"
     },
@@ -2204,6 +2297,9 @@
       "widgets_values": [
         "f2v_sigmas"
       ],
+      "widgets_values_named": {
+        "Constant": "f2v_sigmas"
+      },
       "color": "#485248",
       "bgcolor": "#272e27"
     },
@@ -2251,6 +2347,9 @@
       "widgets_values": [
         "f2v_guider"
       ],
+      "widgets_values_named": {
+        "Constant": "f2v_guider"
+      },
       "color": "#3c7878",
       "bgcolor": "#1c453b"
     },
@@ -2293,6 +2392,9 @@
       "widgets_values": [
         "fl2_sampler"
       ],
+      "widgets_values_named": {
+        "Constant": "fl2_sampler"
+      },
       "color": "#614a4a",
       "bgcolor": "#3b2c2c"
     },
@@ -2335,6 +2437,9 @@
       "widgets_values": [
         "f2v_latents"
       ],
+      "widgets_values_named": {
+        "Constant": "f2v_latents"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -2377,6 +2482,9 @@
       "widgets_values": [
         "f2v_guider"
       ],
+      "widgets_values_named": {
+        "Constant": "f2v_guider"
+      },
       "color": "#3c7878",
       "bgcolor": "#1c453b"
     },
@@ -2419,6 +2527,9 @@
       "widgets_values": [
         "ref_sampler"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_sampler"
+      },
       "color": "#614a4a",
       "bgcolor": "#3b2c2c"
     },
@@ -2461,6 +2572,9 @@
       "widgets_values": [
         "ref_sigmas"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_sigmas"
+      },
       "color": "#485248",
       "bgcolor": "#272e27"
     },
@@ -2531,8 +2645,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 267,
@@ -2601,8 +2714,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 255,
@@ -2671,8 +2783,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 248,
@@ -2741,8 +2852,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 306,
@@ -2783,6 +2893,9 @@
       "widgets_values": [
         "f2v_sigmas"
       ],
+      "widgets_values_named": {
+        "Constant": "f2v_sigmas"
+      },
       "color": "#485248",
       "bgcolor": "#272e27"
     },
@@ -2831,7 +2944,6 @@
           "input_ue_unconnectable": {}
         }
       },
-      "widgets_values": [],
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -2874,6 +2986,9 @@
       "widgets_values": [
         "ref_guider"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_guider"
+      },
       "color": "#3c7878",
       "bgcolor": "#1c453b"
     },
@@ -2921,6 +3036,9 @@
       "widgets_values": [
         "ref_sampler"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_sampler"
+      },
       "color": "#614a4a",
       "bgcolor": "#3b2c2c"
     },
@@ -2963,6 +3081,9 @@
       "widgets_values": [
         "f2v_positive_conditioning"
       ],
+      "widgets_values_named": {
+        "Constant": "f2v_positive_conditioning"
+      },
       "color": "#332922",
       "bgcolor": "#593930"
     },
@@ -3010,6 +3131,9 @@
       "widgets_values": [
         "fl2_sampler"
       ],
+      "widgets_values_named": {
+        "Constant": "fl2_sampler"
+      },
       "color": "#614a4a",
       "bgcolor": "#3b2c2c"
     },
@@ -3051,7 +3175,10 @@
       },
       "widgets_values": [
         "ref_filename"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "ref_filename"
+      }
     },
     {
       "id": 314,
@@ -3091,7 +3218,10 @@
       },
       "widgets_values": [
         "f2v_filename"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "f2v_filename"
+      }
     },
     {
       "id": 240,
@@ -3137,6 +3267,9 @@
       "widgets_values": [
         "width"
       ],
+      "widgets_values_named": {
+        "Constant": "width"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -3184,6 +3317,9 @@
       "widgets_values": [
         "height"
       ],
+      "widgets_values_named": {
+        "Constant": "height"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -3214,6 +3350,9 @@
       "widgets_values": [
         "## Model Links\n[🤗 Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3)\n\n**vae**\n\n- [minimax_h3_video_vae_fp16.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors)\n- [minimax_h3_audio_vae_fp32.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors)\n\n**diffusion_models**\n\n- [minimax_h3_ref2va_pruned_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors)\n\n**text_encoders**\n\n- [qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors)\n\n**turbo_lora**\n\n- [minimax_h3_ref2va_pruned_int8_convrot.safetensors](https://huggingface.co/Kijai/MiniMax-H3_comfy/tree/main/loras)\n\n\n## Model Storage Location\n\n```\n📂 ComfyUI/\n├── 📂 models/\n│   ├── 📂 vae/\n│   │   ├── minimax_h3_video_vae_fp16.safetensors\n│   │   └── minimax_h3_audio_vae_fp32.safetensors\n│   ├── 📂 diffusion_models/\n│   │   └── minimax_h3_ref2va_pruned_int8_convrot.safetensors\n│   │   └── minimax_h3_fl2va_pruned_int8_convrot.safetensors\n│   └── 📂 text_encoders/\n│       └── qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors\n│   ├── 📂 loras/\n│   │   └── minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_resized_avg_rank_21_bf16.safetensors\n```\n\n## Report Issue\n\nNote: Please update ComfyUI first ([guide](https://docs.comfy.org/installation/update_comfyui)) and prepare required models. Desktop/Cloud updates follow stable releases, so some nightly-supported models may not be available yet.\n\n- Cannot run / runtime errors: [ComfyUI/issues](https://github.com/comfyanonymous/ComfyUI/issues)\n- UI / frontend issues: [ComfyUI_frontend/issues](https://github.com/Comfy-Org/ComfyUI_frontend/issues)\n- Workflow issues: [workflow_templates/issues](https://github.com/Comfy-Org/workflow_templates/issues)\n"
       ],
+      "widgets_values_named": {
+        "text": "## Model Links\n[🤗 Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3)\n\n**vae**\n\n- [minimax_h3_video_vae_fp16.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors)\n- [minimax_h3_audio_vae_fp32.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors)\n\n**diffusion_models**\n\n- [minimax_h3_ref2va_pruned_int8_convrot.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors)\n\n**text_encoders**\n\n- [qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors](https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors)\n\n**turbo_lora**\n\n- [minimax_h3_ref2va_pruned_int8_convrot.safetensors](https://huggingface.co/Kijai/MiniMax-H3_comfy/tree/main/loras)\n\n\n## Model Storage Location\n\n```\n📂 ComfyUI/\n├── 📂 models/\n│   ├── 📂 vae/\n│   │   ├── minimax_h3_video_vae_fp16.safetensors\n│   │   └── minimax_h3_audio_vae_fp32.safetensors\n│   ├── 📂 diffusion_models/\n│   │   └── minimax_h3_ref2va_pruned_int8_convrot.safetensors\n│   │   └── minimax_h3_fl2va_pruned_int8_convrot.safetensors\n│   └── 📂 text_encoders/\n│       └── qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors\n│   ├── 📂 loras/\n│   │   └── minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_resized_avg_rank_21_bf16.safetensors\n```\n\n## Report Issue\n\nNote: Please update ComfyUI first ([guide](https://docs.comfy.org/installation/update_comfyui)) and prepare required models. Desktop/Cloud updates follow stable releases, so some nightly-supported models may not be available yet.\n\n- Cannot run / runtime errors: [ComfyUI/issues](https://github.com/comfyanonymous/ComfyUI/issues)\n- UI / frontend issues: [ComfyUI_frontend/issues](https://github.com/Comfy-Org/ComfyUI_frontend/issues)\n- Workflow issues: [workflow_templates/issues](https://github.com/Comfy-Org/workflow_templates/issues)\n"
+      },
       "color": "#432",
       "bgcolor": "#653"
     },
@@ -3284,8 +3423,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 254,
@@ -3323,7 +3461,11 @@
       "widgets_values": [
         8,
         "fixed"
-      ]
+      ],
+      "widgets_values_named": {
+        "value": 8,
+        "fixed": "fixed"
+      }
     },
     {
       "id": 313,
@@ -3368,7 +3510,10 @@
       },
       "widgets_values": [
         "ref_filename"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "ref_filename"
+      }
     },
     {
       "id": 312,
@@ -3413,7 +3558,10 @@
       },
       "widgets_values": [
         "f2v_filename"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "f2v_filename"
+      }
     },
     {
       "id": 233,
@@ -3429,7 +3577,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 75,
+      "order": 74,
       "mode": 0,
       "inputs": [
         {
@@ -3459,6 +3607,9 @@
       "widgets_values": [
         "fl2va_model"
       ],
+      "widgets_values_named": {
+        "Constant": "fl2va_model"
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -3506,6 +3657,9 @@
       "widgets_values": [
         "audio_vae"
       ],
+      "widgets_values_named": {
+        "Constant": "audio_vae"
+      },
       "color": "#322",
       "bgcolor": "#533"
     },
@@ -3553,6 +3707,9 @@
       "widgets_values": [
         "video_vae"
       ],
+      "widgets_values_named": {
+        "Constant": "video_vae"
+      },
       "color": "#322",
       "bgcolor": "#533"
     },
@@ -3600,6 +3757,9 @@
       "widgets_values": [
         "clip"
       ],
+      "widgets_values_named": {
+        "Constant": "clip"
+      },
       "color": "#432",
       "bgcolor": "#653"
     },
@@ -3641,7 +3801,14 @@
         "YYYY_MM_DD",
         "vid",
         null
-      ]
+      ],
+      "widgets_values_named": {
+        "folder": "",
+        "subfolder": "MiniMaxH3/Ref2V",
+        "date_folder": "YYYY_MM_DD",
+        "filename": "vid",
+        "📁 Browse…": null
+      }
     },
     {
       "id": 323,
@@ -3681,7 +3848,14 @@
         "YYYY-MM-DD",
         "vid",
         null
-      ]
+      ],
+      "widgets_values_named": {
+        "folder": "",
+        "subfolder": "MiniMaxH3/Fl2V",
+        "date_folder": "YYYY-MM-DD",
+        "filename": "vid",
+        "📁 Browse…": null
+      }
     },
     {
       "id": 186,
@@ -3730,6 +3904,10 @@
         443779154690192,
         "randomize"
       ],
+      "widgets_values_named": {
+        "noise_seed": 443779154690192,
+        "control_after_generate": "randomize"
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -3772,6 +3950,9 @@
       "widgets_values": [
         "ref_latents"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_latents"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -3802,6 +3983,9 @@
       "widgets_values": [
         "| megapixels | Aspect | Output (multiple=32) |\n|---|---|---|\n| 0.2 | 16:9 | 608 x 352 |\n| 0.3 | 16:9 | 736 x 416 |\n| 0.4 | 16:9 | 864 x 480 |\n| 0.5 | 16:9 | 960 x 544 |\n| 0.6 | 16:9 | 1056 x 608 |\n| 0.7 | 16:9 | 1152 x 640 |\n| 0.8 | 16:9 | 1216 x 672 |\n| 0.9 | 16:9 | 1280 x 736 |\n| 0.98 | 16:9 | 1344 x 768 |\n| 1.0 | 16:9 | 1376 x 768 |\n| 1.2 | 16:9 | 1504 x 832 |\n| 1.5 | 16:9 | 1664 x 928 |\n| 1.8 | 16:9 | 1824 x 1024 |\n| 2.0 | 16:9 | 1920 x 1088 |\n"
       ],
+      "widgets_values_named": {
+        "text": "| megapixels | Aspect | Output (multiple=32) |\n|---|---|---|\n| 0.2 | 16:9 | 608 x 352 |\n| 0.3 | 16:9 | 736 x 416 |\n| 0.4 | 16:9 | 864 x 480 |\n| 0.5 | 16:9 | 960 x 544 |\n| 0.6 | 16:9 | 1056 x 608 |\n| 0.7 | 16:9 | 1152 x 640 |\n| 0.8 | 16:9 | 1216 x 672 |\n| 0.9 | 16:9 | 1280 x 736 |\n| 0.98 | 16:9 | 1344 x 768 |\n| 1.0 | 16:9 | 1376 x 768 |\n| 1.2 | 16:9 | 1504 x 832 |\n| 1.5 | 16:9 | 1664 x 928 |\n| 1.8 | 16:9 | 1824 x 1024 |\n| 2.0 | 16:9 | 1920 x 1088 |\n"
+      },
       "color": "#432",
       "bgcolor": "#653"
     },
@@ -3844,6 +4028,9 @@
       "widgets_values": [
         "fl2va_model"
       ],
+      "widgets_values_named": {
+        "Constant": "fl2va_model"
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -3909,7 +4096,14 @@
         },
         {},
         ""
-      ]
+      ],
+      "widgets_values_named": {
+        "divider": {},
+        "PowerLoraLoaderHeaderWidget": {
+          "type": "PowerLoraLoaderHeaderWidget"
+        },
+        "➕ Add Lora": ""
+      }
     },
     {
       "id": 242,
@@ -3955,6 +4149,9 @@
       "widgets_values": [
         "seed"
       ],
+      "widgets_values_named": {
+        "Constant": "seed"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -4049,6 +4246,31 @@
           }
         }
       },
+      "widgets_values_named": {
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "Minimax_H3/Minimax_H3",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 24,
+        "save_metadata": true,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": true,
+        "videopreview": {
+          "hidden": false,
+          "paused": false,
+          "params": {
+            "filename": "vid_00010-audio.mp4",
+            "subfolder": "MiniMaxH3/Fl2V/2026-08-08",
+            "type": "output",
+            "format": "video/h264-mp4",
+            "frame_rate": 24,
+            "workflow": "vid_00010.png",
+            "fullpath": "/home/ace/ComfyUI2/output/MiniMaxH3/Fl2V/2026-08-08/vid_00010-audio.mp4"
+          }
+        }
+      },
       "color": "#4a4a4e",
       "bgcolor": "#2a2a2a"
     },
@@ -4066,7 +4288,7 @@
       "flags": {
         "collapsed": true
       },
-      "order": 74,
+      "order": 75,
       "mode": 0,
       "inputs": [
         {
@@ -4096,6 +4318,9 @@
       "widgets_values": [
         "reference_model"
       ],
+      "widgets_values_named": {
+        "Constant": "reference_model"
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -4138,6 +4363,9 @@
       "widgets_values": [
         "steps"
       ],
+      "widgets_values_named": {
+        "Constant": "steps"
+      },
       "color": "#1b4669",
       "bgcolor": "#29699c"
     },
@@ -4185,6 +4413,9 @@
       "widgets_values": [
         "ref_sigmas"
       ],
+      "widgets_values_named": {
+        "Constant": "ref_sigmas"
+      },
       "color": "#485248",
       "bgcolor": "#272e27"
     },
@@ -4227,6 +4458,9 @@
       "widgets_values": [
         "clip"
       ],
+      "widgets_values_named": {
+        "Constant": "clip"
+      },
       "color": "#432",
       "bgcolor": "#653"
     },
@@ -4269,6 +4503,9 @@
       "widgets_values": [
         "video_vae"
       ],
+      "widgets_values_named": {
+        "Constant": "video_vae"
+      },
       "color": "#322",
       "bgcolor": "#533"
     },
@@ -4373,7 +4610,13 @@
         1344,
         768,
         124
-      ]
+      ],
+      "widgets_values_named": {
+        "prompt": "",
+        "width": 1344,
+        "height": 768,
+        "length": 124
+      }
     },
     {
       "id": 226,
@@ -4418,7 +4661,10 @@
       },
       "widgets_values": [
         "media_references"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "media_references"
+      }
     },
     {
       "id": 237,
@@ -4463,7 +4709,10 @@
       },
       "widgets_values": [
         "prompt"
-      ]
+      ],
+      "widgets_values_named": {
+        "Constant": "prompt"
+      }
     },
     {
       "id": 115,
@@ -4511,6 +4760,11 @@
         0.8,
         32
       ],
+      "widgets_values_named": {
+        "aspect_ratio": "16:9 (Widescreen)",
+        "megapixels": 0.8,
+        "multiple": 32
+      },
       "color": "#432",
       "bgcolor": "#653"
     },
@@ -4522,7 +4776,7 @@
         5620.844174194782
       ],
       "size": [
-        240.91666259765626,
+        244.98332824707032,
         366
       ],
       "flags": {
@@ -4672,8 +4926,7 @@
           "input_ue_unconnectable": {},
           "version": "7.6"
         }
-      },
-      "widgets_values": []
+      }
     },
     {
       "id": 199,
@@ -4683,8 +4936,8 @@
         6227.17884170115
       ],
       "size": [
-        660,
-        562
+        726,
+        610
       ],
       "flags": {},
       "order": 43,
@@ -4712,7 +4965,13 @@
         null,
         null,
         ""
-      ]
+      ],
+      "widgets_values_named": {
+        "media_state": "[]",
+        "Open loader…": null,
+        "+ Native-output splitter": null,
+        "mml_panel": ""
+      }
     },
     {
       "id": 198,
@@ -4723,7 +4982,7 @@
       ],
       "size": [
         330,
-        516
+        556
       ],
       "flags": {},
       "order": 68,
@@ -4734,6 +4993,12 @@
           "shape": 7,
           "type": "H3_REFS",
           "link": 388
+        },
+        {
+          "name": "mods",
+          "shape": 7,
+          "type": "H3_REF_MODS",
+          "link": null
         },
         {
           "name": "picture_1",
@@ -4948,6 +5213,11 @@
           "links": [
             602
           ]
+        },
+        {
+          "name": "mods",
+          "type": "H3_REF_MODS",
+          "links": null
         }
       ],
       "properties": {
@@ -4963,8 +5233,17 @@
         "{\"version\":1,\"mode\":\"T2VA\",\"duration\":5,\"p2Shot\":1,\"lastShot\":1,\"imd\":\"live-action cinematic of a dragon landing on a castle, it then roars and breathes fire.\",\"soundscape\":\"outdoor noise on a sunny day, dragon wings flapping, the crackle of fire\",\"music\":\"N/A\",\"ref\":{\"subjectDefs\":[],\"summaryTypes\":[\"reference generation\"],\"summaryText\":\"\",\"retention\":[],\"styleLine\":\"\",\"detail\":\"\",\"soundscape\":\"\",\"music\":\"N/A\"}}",
         "always",
         null,
+        "",
         ""
-      ]
+      ],
+      "widgets_values_named": {
+        "prompt_text": "integrated_multimodal_description: live-action cinematic of a dragon landing on a castle, it then roars and breathes fire.\n\noverall_soundscape: outdoor noise on a sunny day, dragon wings flapping, the crackle of fire\n\nnon_diegetic_music: N/A",
+        "builder_state": "{\"version\":1,\"mode\":\"T2VA\",\"duration\":5,\"p2Shot\":1,\"lastShot\":1,\"imd\":\"live-action cinematic of a dragon landing on a castle, it then roars and breathes fire.\",\"soundscape\":\"outdoor noise on a sunny day, dragon wings flapping, the crackle of fire\",\"music\":\"N/A\",\"ref\":{\"subjectDefs\":[],\"summaryTypes\":[\"reference generation\"],\"summaryText\":\"\",\"retention\":[],\"styleLine\":\"\",\"detail\":\"\",\"soundscape\":\"\",\"music\":\"N/A\"}}",
+        "Edit prompt…": "always",
+        "+ Media loader": null,
+        "+ RefMods": "",
+        "mmh3_summary": ""
+      }
     },
     {
       "id": 195,
@@ -5002,6 +5281,9 @@
       "widgets_values": [
         5
       ],
+      "widgets_values_named": {
+        "value": 5
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -5067,7 +5349,14 @@
         },
         {},
         ""
-      ]
+      ],
+      "widgets_values_named": {
+        "divider": {},
+        "PowerLoraLoaderHeaderWidget": {
+          "type": "PowerLoraLoaderHeaderWidget"
+        },
+        "➕ Add Lora": ""
+      }
     },
     {
       "id": 196,
@@ -5112,6 +5401,11 @@
         1.5,
         "ULTRA"
       ],
+      "widgets_values_named": {
+        "resize_type": "scale by multiplier",
+        "resize_type.scale": 1.5,
+        "quality": "ULTRA"
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -5150,6 +5444,9 @@
       "widgets_values": [
         "sa_solver"
       ],
+      "widgets_values_named": {
+        "sampler_name": "sa_solver"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -5206,6 +5503,11 @@
         6,
         1
       ],
+      "widgets_values_named": {
+        "scheduler": "beta",
+        "steps": 6,
+        "denoise": 1
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -5244,6 +5546,9 @@
       "widgets_values": [
         "sa_solver"
       ],
+      "widgets_values_named": {
+        "sampler_name": "sa_solver"
+      },
       "color": "#323",
       "bgcolor": "#535"
     },
@@ -5300,6 +5605,11 @@
         6,
         1
       ],
+      "widgets_values_named": {
+        "scheduler": "beta",
+        "steps": 6,
+        "denoise": 1
+      },
       "color": "#223",
       "bgcolor": "#335"
     },
@@ -5344,7 +5654,13 @@
         "",
         "",
         "okay"
-      ]
+      ],
+      "widgets_values_named": {
+        "seed": 772927755096574,
+        "🎲 Randomize Each Time": "",
+        "🎲 New Fixed Random": "",
+        "USE_LAST_SEED": "okay"
+      }
     },
     {
       "id": 281,
@@ -5388,7 +5704,11 @@
       "widgets_values": [
         12,
         6
-      ]
+      ],
+      "widgets_values_named": {
+        "shift_video": 12,
+        "shift_audio": 6
+      }
     },
     {
       "id": 211,
@@ -5432,47 +5752,11 @@
       "widgets_values": [
         12,
         6
-      ]
-    },
-    {
-      "id": 203,
-      "type": "UNETLoader",
-      "pos": [
-        -2254.859064776836,
-        6272.325520073049
       ],
-      "size": [
-        513.7433377541012,
-        148.21928829157696
-      ],
-      "flags": {},
-      "order": 48,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            491
-          ]
-        }
-      ],
-      "title": "Load Reference Model",
-      "properties": {
-        "Node name for S&R": "UNETLoader",
-        "ue_properties": {
-          "widget_ue_connectable": {},
-          "input_ue_unconnectable": {},
-          "version": "7.6"
-        }
-      },
-      "widgets_values": [
-        "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-        "default"
-      ],
-      "color": "#233",
-      "bgcolor": "#355"
+      "widgets_values_named": {
+        "shift_video": 12,
+        "shift_audio": 6
+      }
     },
     {
       "id": 232,
@@ -5486,7 +5770,7 @@
         148.21928829157696
       ],
       "flags": {},
-      "order": 49,
+      "order": 48,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -5511,6 +5795,10 @@
         "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
         "default"
       ],
+      "widgets_values_named": {
+        "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "weight_dtype": "default"
+      },
       "color": "#233",
       "bgcolor": "#355"
     },
@@ -5526,7 +5814,7 @@
         178
       ],
       "flags": {},
-      "order": 50,
+      "order": 49,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -5553,6 +5841,50 @@
       },
       "color": "#232",
       "bgcolor": "#353"
+    },
+    {
+      "id": 203,
+      "type": "UNETLoader",
+      "pos": [
+        -2254.859064776836,
+        6272.325520073049
+      ],
+      "size": [
+        513.7433377541012,
+        148.21928829157696
+      ],
+      "flags": {},
+      "order": 50,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            491
+          ]
+        }
+      ],
+      "title": "Load Reference Model",
+      "properties": {
+        "Node name for S&R": "UNETLoader",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.6"
+        }
+      },
+      "widgets_values": [
+        "minimax_h3_hybrid_fl2va_ref2va_b20-49.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "minimax_h3_hybrid_fl2va_ref2va_b20-49.safetensors",
+        "weight_dtype": "default"
+      },
+      "color": "#233",
+      "bgcolor": "#355"
     }
   ],
   "links": [
@@ -6567,8 +6899,8 @@
   ],
   "config": {},
   "extra": {
-    "frontendVersion": "1.48.7",
-    "VHS_latentpreview": true,
+    "frontendVersion": "1.51.10",
+    "VHS_latentpreview": false,
     "VHS_latentpreviewrate": 0,
     "VHS_MetadataImage": true,
     "VHS_KeepIntermediate": true,
@@ -6576,10 +6908,10 @@
     "links_added_by_ue": [],
     "k2cf_state_id": "k2cf_1785789724406_cozxl5iajrh",
     "ds": {
-      "scale": 0.5969962884061589,
+      "scale": 0.4485321475628543,
       "offset": [
-        1529.8457026092265,
-        -5417.927219809753
+        2189.0997044234327,
+        -4946.696133776211
       ]
     }
   },

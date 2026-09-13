@@ -1395,6 +1395,37 @@ export function openLibrary(panel, opts = {}) {
   let editing = null;      // { name, it, visual, audio, decoded, decodeError, copy, copyName }
   const isStored = (x) => x.stored != null || x.storedVoice;
 
+  /** Stored frame indices that were encoded together from one clip, as runs.
+   *  A saved file lists one "frames x height x width" entry per source in
+   *  order; an entry with more than one frame was a clip. When the entries
+   *  don't add up to the file's frames (an older or edited file), a file
+   *  whose source was a video is treated as one clip. */
+  function clipRuns(visual) {
+    if (!visual || !(visual.t > 1)) return [];
+    const counts = String(visual.source_shape || "").split("+")
+      .map((e) => parseInt(e.trim().split("x")[0], 10)).filter((n) => n > 0);
+    if (counts.length && counts.reduce((a, b) => a + b, 0) === visual.t) {
+      const runs = []; let at = 0;
+      for (const n of counts) {
+        if (n > 1) runs.push(Array.from({ length: n }, (_, k) => at + k));
+        at += n;
+      }
+      return runs;
+    }
+    return visual.source === "video" ? [Array.from({ length: visual.t }, (_, k) => k)] : [];
+  }
+
+  /** True when the frames of a clip no longer sit together, whole and in
+   *  their original order, in what Save would write. */
+  function clipBroken() {
+    if (!editing?.clipRuns?.length) return false;
+    const order = editPlan().order;
+    return editing.clipRuns.some((run) => {
+      const at = order.indexOf(run[0]);
+      return at < 0 || run.some((idx, k) => order[at + k] !== idx);
+    });
+  }
+
   function startEdit(it) {
     if (!it.visual && !it.audio) return;
     if (editing) cancelEdit(false);
@@ -1405,9 +1436,11 @@ export function openLibrary(panel, opts = {}) {
     const first = String(it.visual?.source_shape || "").split("+")[0].trim().split("x");
     if (it.visual && it.visual.mode !== "encode" && first.length === 3) { h = (+first[1] || 0) * 16; w = (+first[2] || 0) * 16; }
     editing.px = [Math.max(16, w), Math.max(16, h)];
+    editing.clipRuns = clipRuns(it.visual);
+    const inClip = new Set(editing.clipRuns.flat());
     const stored = [];
     for (let i = 0; i < (it.visual?.t || 0); i++) {
-      stored.push({ stored: i, name: `Frame ${i + 1}`, origin: "stored", use: true,
+      stored.push({ stored: i, name: `Frame ${i + 1}`, origin: "stored", use: true, clip: inClip.has(i),
         rec: { kind: "picture", file: "" }, dim: { w: editing.px[0], h: editing.px[1], turned: true } });
     }
     if (it.audio) stored.push({ storedVoice: true, name: "Voice", origin: "stored", use: true, voice: true,
@@ -1743,6 +1776,16 @@ export function openLibrary(panel, opts = {}) {
           (fullMode() ? "edges trimmed" : "squeezed") + " to fit). Frames you keep are copied as they are, never re-encoded." +
           (editing.audio ? " Adding an audio file, or ticking a clip's soundtrack, replaces the voice; untick the stored voice to remove it."
                          : " Add an audio file, or tick a clip's soundtrack, to give it a voice.")),
+        editing.clipRuns.length
+          ? el("div", { class: "mmr-srchint" + (clipBroken() ? " warn" : "") },
+              clipBroken()
+                ? "Some frames from a video clip have been removed, reordered or split up. The frames " +
+                  "you keep are still copied exactly, but they no longer play as the motion they were " +
+                  "made from, which can make results drift. To change a clip, re-trim it and create " +
+                  "the RefMod again."
+                : "Frames marked \u201cpart of a clip\u201d were encoded together from a video. Keep them " +
+                  "together and in order; removing or reordering them can break up the motion.")
+          : null,
         !editing.decoded && !editing.decodeError ? el("div", { class: "mmr-srchint" }, "Decoding the stored frames for their thumbnails…") : null);
       return;
     }
@@ -1877,7 +1920,7 @@ export function openLibrary(panel, opts = {}) {
     const bits = [];
     const d = isStored(x) ? null : effDims(x);
     if (d) bits.push(`${Math.round(d[0])}×${Math.round(d[1])}`);
-    if (x.stored != null) bits.push("kept as stored");
+    if (x.stored != null) bits.push(x.clip ? "kept as stored \u00b7 part of a clip" : "kept as stored");
     if (x.dim?.dur || x.rec.duration) bits.push(`${Number(x.dim?.dur || x.rec.duration).toFixed(1)} s`);
     if (x.rec.trim && (x.rec.trim.start || x.rec.trim.end)) bits.push(`trim ${Number(x.rec.trim.start || 0).toFixed(1)}–${x.rec.trim.end != null ? Number(x.rec.trim.end).toFixed(1) : "end"} s`);
     if (x.rec.crop) bits.push("cropped");

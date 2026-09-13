@@ -1,5 +1,5 @@
 {
-  "id": "00000000-0000-0000-0000-000000000000",
+  "id": "5768599c-5082-47e5-9942-79879b579626",
   "revision": 0,
   "last_node_id": 22,
   "last_link_id": 27,
@@ -21,64 +21,21 @@
       "inputs": [],
       "outputs": [],
       "title": "RefMod Stack example",
-      "properties": {},
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
+      },
       "widgets_values": [
         "## RefMod Stack + Media Loader → Text Encode → Ref2VA\n\n1. Click **Browse library…** on the RefMod Stack and add a saved RefMod (a character, place, voice…), or make one with **Create…**. RefMods live in `models/refmods`.\n2. Drop pictures, clips or audio on the **Media Loader** for one-off references that aren't saved as RefMods.\n3. Both reach **Fantastic H3 RefMod Text Encode** through the Prompt Builder: the loader's bundle on *references* → *references*, the stack on *mods* → *mods* (in a new workflow, **+ Media loader** and **+ RefMods** on the builder wire this up). Open **Edit prompt…** — every reference appears as a chip, the loader's media first and the RefMods after it, numbered the way Text Encode will label them; click one to insert it. Text Encode's *reference_map* shows the same map.\n4. Queue. Text Encode presents everything to H3's own encoder so the prompt can name it, its conditioning already carries the references (do not Apply the same bundle again), and its *latent* is the empty AV latent for the sampler — no separate Reference to Video or Empty Latent node.\n\nWeights: up to 1 is strength; above 1 adds copies (2.7 = two full + one at 0.7). Every copy gets its own label; citing the first is enough.\n\nModels: [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3) — a **ref2va** diffusion model (RefMods and references are what it was trained on), the minimax CLIP, the video VAE and the audio VAE. Swap the filenames below for the variants you have."
       ],
+      "widgets_values_named": {
+        "text": "## RefMod Stack + Media Loader → Text Encode → Ref2VA\n\n1. Click **Browse library…** on the RefMod Stack and add a saved RefMod (a character, place, voice…), or make one with **Create…**. RefMods live in `models/refmods`.\n2. Drop pictures, clips or audio on the **Media Loader** for one-off references that aren't saved as RefMods.\n3. Both reach **Fantastic H3 RefMod Text Encode** through the Prompt Builder: the loader's bundle on *references* → *references*, the stack on *mods* → *mods* (in a new workflow, **+ Media loader** and **+ RefMods** on the builder wire this up). Open **Edit prompt…** — every reference appears as a chip, the loader's media first and the RefMods after it, numbered the way Text Encode will label them; click one to insert it. Text Encode's *reference_map* shows the same map.\n4. Queue. Text Encode presents everything to H3's own encoder so the prompt can name it, its conditioning already carries the references (do not Apply the same bundle again), and its *latent* is the empty AV latent for the sampler — no separate Reference to Video or Empty Latent node.\n\nWeights: up to 1 is strength; above 1 adds copies (2.7 = two full + one at 0.7). Every copy gets its own label; citing the first is enough.\n\nModels: [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3) — a **ref2va** diffusion model (RefMods and references are what it was trained on), the minimax CLIP, the video VAE and the audio VAE. Swap the filenames below for the variants you have."
+      },
       "color": "#432",
       "bgcolor": "#653"
-    },
-    {
-      "id": 2,
-      "type": "UNETLoader",
-      "pos": [
-        -40,
-        0
-      ],
-      "size": [
-        270,
-        82
-      ],
-      "flags": {},
-      "order": 1,
-      "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "unet_name",
-          "name": "unet_name",
-          "type": "COMBO",
-          "widget": {
-            "name": "unet_name"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "weight_dtype",
-          "name": "weight_dtype",
-          "type": "COMBO",
-          "widget": {
-            "name": "weight_dtype"
-          },
-          "link": null
-        }
-      ],
-      "outputs": [
-        {
-          "localized_name": "MODEL",
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            1
-          ]
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "UNETLoader"
-      },
-      "widgets_values": [
-        "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-        "default"
-      ]
     },
     {
       "id": 3,
@@ -92,37 +49,17 @@
         82
       ],
       "flags": {},
-      "order": 2,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "model",
           "name": "model",
           "type": "MODEL",
           "link": 1
-        },
-        {
-          "localized_name": "shift_video",
-          "name": "shift_video",
-          "type": "FLOAT",
-          "widget": {
-            "name": "shift_video"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "shift_audio",
-          "name": "shift_audio",
-          "type": "FLOAT",
-          "widget": {
-            "name": "shift_audio"
-          },
-          "link": null
         }
       ],
       "outputs": [
         {
-          "localized_name": "MODEL",
           "name": "MODEL",
           "type": "MODEL",
           "links": [
@@ -132,12 +69,24 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxH3SigmaShift"
+        "Node name for S&R": "MiniMaxH3SigmaShift",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "shift_video": true,
+            "shift_audio": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         12,
         6
-      ]
+      ],
+      "widgets_values_named": {
+        "shift_video": 12,
+        "shift_audio": 6
+      }
     },
     {
       "id": 4,
@@ -151,41 +100,11 @@
         106
       ],
       "flags": {},
-      "order": 3,
+      "order": 1,
       "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "clip_name",
-          "name": "clip_name",
-          "type": "COMBO",
-          "widget": {
-            "name": "clip_name"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "type",
-          "name": "type",
-          "type": "COMBO",
-          "widget": {
-            "name": "type"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "device",
-          "name": "device",
-          "shape": 7,
-          "type": "COMBO",
-          "widget": {
-            "name": "device"
-          },
-          "link": null
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "localized_name": "CLIP",
           "name": "CLIP",
           "type": "CLIP",
           "links": [
@@ -194,13 +113,27 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "CLIPLoader"
+        "Node name for S&R": "CLIPLoader",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "clip_name": true,
+            "type": true,
+            "device": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         "qwen3vl_32b_minimax_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
         "minimax",
         "default"
-      ]
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen3vl_32b_minimax_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
+        "type": "minimax",
+        "device": "default"
+      }
     },
     {
       "id": 5,
@@ -214,22 +147,11 @@
         58
       ],
       "flags": {},
-      "order": 4,
+      "order": 2,
       "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "vae_name",
-          "name": "vae_name",
-          "type": "COMBO",
-          "widget": {
-            "name": "vae_name"
-          },
-          "link": null
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "localized_name": "VAE",
           "name": "VAE",
           "type": "VAE",
           "links": [
@@ -239,11 +161,21 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAELoader"
+        "Node name for S&R": "VAELoader",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "vae_name": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         "minimax_h3_video_vae_fp16.safetensors"
-      ]
+      ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+      }
     },
     {
       "id": 6,
@@ -257,22 +189,11 @@
         58
       ],
       "flags": {},
-      "order": 5,
+      "order": 3,
       "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "vae_name",
-          "name": "vae_name",
-          "type": "COMBO",
-          "widget": {
-            "name": "vae_name"
-          },
-          "link": null
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "localized_name": "VAE",
           "name": "VAE",
           "type": "VAE",
           "links": [
@@ -282,11 +203,21 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAELoader"
+        "Node name for S&R": "VAELoader",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "vae_name": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         "minimax_h3_audio_vae_fp32.safetensors"
-      ]
+      ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+      }
     },
     {
       "id": 7,
@@ -300,29 +231,18 @@
         488
       ],
       "flags": {},
-      "order": 6,
+      "order": 4,
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "mods",
           "name": "mods",
           "shape": 7,
           "type": "H3_REF_MODS",
-          "link": null
-        },
-        {
-          "localized_name": "stack_state",
-          "name": "stack_state",
-          "type": "STRING",
-          "widget": {
-            "name": "stack_state"
-          },
           "link": null
         }
       ],
       "outputs": [
         {
-          "localized_name": "mods",
           "name": "mods",
           "type": "H3_REF_MODS",
           "links": [
@@ -330,7 +250,6 @@
           ]
         },
         {
-          "localized_name": "labels",
           "name": "labels",
           "type": "STRING",
           "links": [
@@ -339,12 +258,23 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxH3RefModStack"
+        "Node name for S&R": "MiniMaxH3RefModStack",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "stack_state": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         "{}",
         ""
-      ]
+      ],
+      "widgets_values_named": {
+        "stack_state": "{}",
+        "mmr_panel": ""
+      }
     },
     {
       "id": 8,
@@ -355,174 +285,135 @@
       ],
       "size": [
         330,
-        462
+        556
       ],
       "flags": {},
-      "order": 7,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "references",
           "name": "references",
           "shape": 7,
           "type": "H3_REFS",
           "link": 24
         },
         {
-          "localized_name": "mods",
           "name": "mods",
           "shape": 7,
           "type": "H3_REF_MODS",
           "link": 23
         },
         {
-          "localized_name": "picture_1",
           "name": "picture_1",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "picture_2",
           "name": "picture_2",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "picture_3",
           "name": "picture_3",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "picture_4",
           "name": "picture_4",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "picture_5",
           "name": "picture_5",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "picture_6",
           "name": "picture_6",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "picture_7",
           "name": "picture_7",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "picture_8",
           "name": "picture_8",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "picture_9",
           "name": "picture_9",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "video_1",
           "name": "video_1",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "video_2",
           "name": "video_2",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "video_3",
           "name": "video_3",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "localized_name": "video_audio_1",
           "name": "video_audio_1",
           "shape": 7,
           "type": "AUDIO",
           "link": null
         },
         {
-          "localized_name": "video_audio_2",
           "name": "video_audio_2",
           "shape": 7,
           "type": "AUDIO",
           "link": null
         },
         {
-          "localized_name": "video_audio_3",
           "name": "video_audio_3",
           "shape": 7,
           "type": "AUDIO",
           "link": null
         },
         {
-          "localized_name": "audio_1",
           "name": "audio_1",
           "shape": 7,
           "type": "AUDIO",
           "link": null
         },
         {
-          "localized_name": "audio_2",
           "name": "audio_2",
           "shape": 7,
           "type": "AUDIO",
           "link": null
         },
         {
-          "localized_name": "audio_3",
           "name": "audio_3",
           "shape": 7,
           "type": "AUDIO",
-          "link": null
-        },
-        {
-          "localized_name": "prompt_text",
-          "name": "prompt_text",
-          "type": "STRING",
-          "widget": {
-            "name": "prompt_text"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "builder_state",
-          "name": "builder_state",
-          "type": "STRING",
-          "widget": {
-            "name": "builder_state"
-          },
           "link": null
         }
       ],
       "outputs": [
         {
-          "localized_name": "prompt",
           "name": "prompt",
           "type": "STRING",
           "links": [
@@ -530,115 +421,96 @@
           ]
         },
         {
-          "localized_name": "picture_1",
           "name": "picture_1",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "picture_2",
           "name": "picture_2",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "picture_3",
           "name": "picture_3",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "picture_4",
           "name": "picture_4",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "picture_5",
           "name": "picture_5",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "picture_6",
           "name": "picture_6",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "picture_7",
           "name": "picture_7",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "picture_8",
           "name": "picture_8",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "picture_9",
           "name": "picture_9",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "video_1",
           "name": "video_1",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "video_2",
           "name": "video_2",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "video_3",
           "name": "video_3",
           "type": "IMAGE",
           "links": null
         },
         {
-          "localized_name": "video_audio_1",
           "name": "video_audio_1",
           "type": "AUDIO",
           "links": null
         },
         {
-          "localized_name": "video_audio_2",
           "name": "video_audio_2",
           "type": "AUDIO",
           "links": null
         },
         {
-          "localized_name": "video_audio_3",
           "name": "video_audio_3",
           "type": "AUDIO",
           "links": null
         },
         {
-          "localized_name": "audio_1",
           "name": "audio_1",
           "type": "AUDIO",
           "links": null
         },
         {
-          "localized_name": "audio_2",
           "name": "audio_2",
           "type": "AUDIO",
           "links": null
         },
         {
-          "localized_name": "audio_3",
           "name": "audio_3",
           "type": "AUDIO",
           "links": null
         },
         {
-          "localized_name": "references",
           "name": "references",
           "type": "H3_REFS",
           "links": [
@@ -646,7 +518,6 @@
           ]
         },
         {
-          "localized_name": "mods",
           "name": "mods",
           "type": "H3_REF_MODS",
           "links": [
@@ -655,15 +526,32 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxH3PromptBuilder"
+        "Node name for S&R": "MiniMaxH3PromptBuilder",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "prompt_text": true,
+            "builder_state": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         "",
         "{}",
         null,
         null,
+        "",
         ""
-      ]
+      ],
+      "widgets_values_named": {
+        "prompt_text": "",
+        "builder_state": "{}",
+        "Edit prompt…": null,
+        "+ Media loader": null,
+        "+ RefMods": "",
+        "mmh3_summary": ""
+      }
     },
     {
       "id": 9,
@@ -677,110 +565,49 @@
         330
       ],
       "flags": {},
-      "order": 8,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "clip",
           "name": "clip",
           "type": "CLIP",
           "link": 4
         },
         {
-          "localized_name": "mods",
           "name": "mods",
           "shape": 7,
           "type": "H3_REF_MODS",
           "link": 6
         },
         {
-          "localized_name": "references",
           "name": "references",
           "shape": 7,
           "type": "H3_REFS",
           "link": 25
         },
         {
-          "localized_name": "vae",
           "name": "vae",
           "shape": 7,
           "type": "VAE",
           "link": 5
         },
         {
-          "localized_name": "audio_vae",
           "name": "audio_vae",
           "shape": 7,
           "type": "VAE",
           "link": 26
         },
         {
-          "localized_name": "prompt",
           "name": "prompt",
           "type": "STRING",
           "widget": {
             "name": "prompt"
           },
           "link": 7
-        },
-        {
-          "localized_name": "width",
-          "name": "width",
-          "type": "INT",
-          "widget": {
-            "name": "width"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "height",
-          "name": "height",
-          "type": "INT",
-          "widget": {
-            "name": "height"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "length",
-          "name": "length",
-          "type": "INT",
-          "widget": {
-            "name": "length"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "ref_image_size",
-          "name": "ref_image_size",
-          "type": "COMBO",
-          "widget": {
-            "name": "ref_image_size"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "reference_fps",
-          "name": "reference_fps",
-          "type": "FLOAT",
-          "widget": {
-            "name": "reference_fps"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "max_total_tokens",
-          "name": "max_total_tokens",
-          "type": "INT",
-          "widget": {
-            "name": "max_total_tokens"
-          },
-          "link": null
         }
       ],
       "outputs": [
         {
-          "localized_name": "conditioning",
           "name": "conditioning",
           "type": "CONDITIONING",
           "links": [
@@ -788,7 +615,6 @@
           ]
         },
         {
-          "localized_name": "reference_map",
           "name": "reference_map",
           "type": "STRING",
           "links": [
@@ -796,7 +622,6 @@
           ]
         },
         {
-          "localized_name": "latent",
           "name": "latent",
           "type": "LATENT",
           "links": [
@@ -805,7 +630,20 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxH3FantasticRefModTextEncode"
+        "Node name for S&R": "MiniMaxH3FantasticRefModTextEncode",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "prompt": true,
+            "width": true,
+            "height": true,
+            "length": true,
+            "ref_image_size": true,
+            "reference_fps": true,
+            "max_total_tokens": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         "",
@@ -815,7 +653,16 @@
         "match",
         24,
         0
-      ]
+      ],
+      "widgets_values_named": {
+        "prompt": "",
+        "width": 1344,
+        "height": 768,
+        "length": 124,
+        "ref_image_size": "match",
+        "reference_fps": 24,
+        "max_total_tokens": 0
+      }
     },
     {
       "id": 10,
@@ -833,7 +680,6 @@
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "source",
           "name": "source",
           "type": "*",
           "link": 8
@@ -841,7 +687,6 @@
       ],
       "outputs": [
         {
-          "localized_name": "STRING",
           "name": "STRING",
           "type": "STRING",
           "links": null
@@ -849,9 +694,15 @@
       ],
       "title": "Stack labels",
       "properties": {
-        "Node name for S&R": "PreviewAny"
+        "Node name for S&R": "PreviewAny",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
-      "widgets_values": []
+      "widgets_values": [],
+      "widgets_values_named": {}
     },
     {
       "id": 11,
@@ -865,11 +716,10 @@
         122
       ],
       "flags": {},
-      "order": 10,
+      "order": 15,
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "source",
           "name": "source",
           "type": "*",
           "link": 9
@@ -877,7 +727,6 @@
       ],
       "outputs": [
         {
-          "localized_name": "STRING",
           "name": "STRING",
           "type": "STRING",
           "links": null
@@ -885,9 +734,15 @@
       ],
       "title": "reference_map",
       "properties": {
-        "Node name for S&R": "PreviewAny"
+        "Node name for S&R": "PreviewAny",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
-      "widgets_values": []
+      "widgets_values": [],
+      "widgets_values_named": {}
     },
     {
       "id": 13,
@@ -901,17 +756,15 @@
         46
       ],
       "flags": {},
-      "order": 12,
+      "order": 14,
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "model",
           "name": "model",
           "type": "MODEL",
           "link": 2
         },
         {
-          "localized_name": "conditioning",
           "name": "conditioning",
           "type": "CONDITIONING",
           "link": 10
@@ -919,7 +772,6 @@
       ],
       "outputs": [
         {
-          "localized_name": "GUIDER",
           "name": "GUIDER",
           "type": "GUIDER",
           "links": [
@@ -928,7 +780,12 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "BasicGuider"
+        "Node name for S&R": "BasicGuider",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       }
     },
     {
@@ -943,22 +800,11 @@
         58
       ],
       "flags": {},
-      "order": 13,
+      "order": 5,
       "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "sampler_name",
-          "name": "sampler_name",
-          "type": "COMBO",
-          "widget": {
-            "name": "sampler_name"
-          },
-          "link": null
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "localized_name": "SAMPLER",
           "name": "SAMPLER",
           "type": "SAMPLER",
           "links": [
@@ -967,11 +813,21 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "KSamplerSelect"
+        "Node name for S&R": "KSamplerSelect",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "sampler_name": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         "sa_solver"
-      ]
+      ],
+      "widgets_values_named": {
+        "sampler_name": "sa_solver"
+      }
     },
     {
       "id": 15,
@@ -985,46 +841,17 @@
         106
       ],
       "flags": {},
-      "order": 14,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "model",
           "name": "model",
           "type": "MODEL",
           "link": 3
-        },
-        {
-          "localized_name": "scheduler",
-          "name": "scheduler",
-          "type": "COMBO",
-          "widget": {
-            "name": "scheduler"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "steps",
-          "name": "steps",
-          "type": "INT",
-          "widget": {
-            "name": "steps"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "denoise",
-          "name": "denoise",
-          "type": "FLOAT",
-          "widget": {
-            "name": "denoise"
-          },
-          "link": null
         }
       ],
       "outputs": [
         {
-          "localized_name": "SIGMAS",
           "name": "SIGMAS",
           "type": "SIGMAS",
           "links": [
@@ -1033,13 +860,27 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "BasicScheduler"
+        "Node name for S&R": "BasicScheduler",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "scheduler": true,
+            "steps": true,
+            "denoise": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         "beta",
         6,
         1
-      ]
+      ],
+      "widgets_values_named": {
+        "scheduler": "beta",
+        "steps": 6,
+        "denoise": 1
+      }
     },
     {
       "id": 16,
@@ -1053,22 +894,11 @@
         82
       ],
       "flags": {},
-      "order": 15,
+      "order": 6,
       "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "noise_seed",
-          "name": "noise_seed",
-          "type": "INT",
-          "widget": {
-            "name": "noise_seed"
-          },
-          "link": null
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "localized_name": "NOISE",
           "name": "NOISE",
           "type": "NOISE",
           "links": [
@@ -1077,12 +907,23 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "RandomNoise"
+        "Node name for S&R": "RandomNoise",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "noise_seed": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         0,
         "randomize"
-      ]
+      ],
+      "widgets_values_named": {
+        "noise_seed": 0,
+        "control_after_generate": "randomize"
+      }
     },
     {
       "id": 17,
@@ -1092,7 +933,7 @@
         200
       ],
       "size": [
-        212,
+        212.38333740234376,
         106
       ],
       "flags": {},
@@ -1100,31 +941,26 @@
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "noise",
           "name": "noise",
           "type": "NOISE",
           "link": 11
         },
         {
-          "localized_name": "guider",
           "name": "guider",
           "type": "GUIDER",
           "link": 12
         },
         {
-          "localized_name": "sampler",
           "name": "sampler",
           "type": "SAMPLER",
           "link": 13
         },
         {
-          "localized_name": "sigmas",
           "name": "sigmas",
           "type": "SIGMAS",
           "link": 14
         },
         {
-          "localized_name": "latent_image",
           "name": "latent_image",
           "type": "LATENT",
           "link": 27
@@ -1132,7 +968,6 @@
       ],
       "outputs": [
         {
-          "localized_name": "output",
           "name": "output",
           "type": "LATENT",
           "links": [
@@ -1141,14 +976,18 @@
           ]
         },
         {
-          "localized_name": "denoised_output",
           "name": "denoised_output",
           "type": "LATENT",
           "links": null
         }
       ],
       "properties": {
-        "Node name for S&R": "SamplerCustomAdvanced"
+        "Node name for S&R": "SamplerCustomAdvanced",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       }
     },
     {
@@ -1167,13 +1006,11 @@
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "samples",
           "name": "samples",
           "type": "LATENT",
           "link": 16
         },
         {
-          "localized_name": "vae",
           "name": "vae",
           "type": "VAE",
           "link": 17
@@ -1181,7 +1018,6 @@
       ],
       "outputs": [
         {
-          "localized_name": "IMAGE",
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
@@ -1190,7 +1026,12 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAEDecode"
+        "Node name for S&R": "VAEDecode",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       }
     },
     {
@@ -1201,7 +1042,7 @@
         320
       ],
       "size": [
-        164,
+        164.2499984741211,
         46
       ],
       "flags": {},
@@ -1209,13 +1050,11 @@
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "samples",
           "name": "samples",
           "type": "LATENT",
           "link": 18
         },
         {
-          "localized_name": "vae",
           "name": "vae",
           "type": "VAE",
           "link": 19
@@ -1223,7 +1062,6 @@
       ],
       "outputs": [
         {
-          "localized_name": "AUDIO",
           "name": "AUDIO",
           "type": "AUDIO",
           "links": [
@@ -1232,7 +1070,12 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "VAEDecodeAudio"
+        "Node name for S&R": "VAEDecodeAudio",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       }
     },
     {
@@ -1251,51 +1094,19 @@
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "images",
           "name": "images",
           "type": "IMAGE",
           "link": 20
         },
         {
-          "localized_name": "audio",
           "name": "audio",
           "shape": 7,
           "type": "AUDIO",
           "link": 21
-        },
-        {
-          "localized_name": "fps",
-          "name": "fps",
-          "type": "FLOAT",
-          "widget": {
-            "name": "fps"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "bit_depth",
-          "name": "bit_depth",
-          "shape": 7,
-          "type": "COMBO",
-          "widget": {
-            "name": "bit_depth"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "color_space",
-          "name": "color_space",
-          "shape": 7,
-          "type": "COMBO",
-          "widget": {
-            "name": "color_space"
-          },
-          "link": null
         }
       ],
       "outputs": [
         {
-          "localized_name": "VIDEO",
           "name": "VIDEO",
           "type": "VIDEO",
           "links": [
@@ -1304,13 +1115,27 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "CreateVideo"
+        "Node name for S&R": "CreateVideo",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "fps": true,
+            "bit_depth": true,
+            "color_space": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
         24,
         "auto",
         "sRGB"
-      ]
+      ],
+      "widgets_values_named": {
+        "fps": 24,
+        "bit_depth": "auto",
+        "color_space": "sRGB"
+      }
     },
     {
       "id": 21,
@@ -1328,64 +1153,43 @@
       "mode": 0,
       "inputs": [
         {
-          "localized_name": "video",
           "name": "video",
           "type": "VIDEO",
           "link": 22
-        },
-        {
-          "localized_name": "filename_prefix",
-          "name": "filename_prefix",
-          "type": "STRING",
-          "widget": {
-            "name": "filename_prefix"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "codec",
-          "name": "format.codec",
-          "type": "COMFY_DYNAMICCOMBO_V3",
-          "widget": {
-            "name": "format.codec"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "format",
-          "name": "format",
-          "type": "COMFY_DYNAMICCOMBO_V3",
-          "widget": {
-            "name": "format"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "codec",
-          "name": "codec",
-          "shape": 7,
-          "type": "COMFY_DYNAMICCOMBO_V3",
-          "widget": {
-            "name": "codec"
-          },
-          "link": null
         }
       ],
       "outputs": [
         {
-          "localized_name": "video",
           "name": "video",
           "type": "VIDEO",
           "links": null
         }
       ],
-      "properties": {},
+      "properties": {
+        "Node name for S&R": "SaveVideo",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "filename_prefix": true,
+            "format.codec": true,
+            "format": true,
+            "codec": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
+      },
       "widgets_values": [
         "video/MiniMaxH3/RefMod",
         "auto",
         "auto",
         "auto"
-      ]
+      ],
+      "widgets_values_named": {
+        "filename_prefix": "video/MiniMaxH3/RefMod",
+        "format": "auto",
+        "format.codec": "auto",
+        "codec": "auto"
+      }
     },
     {
       "id": 22,
@@ -1395,26 +1199,15 @@
         1500
       ],
       "size": [
-        660,
-        476
+        726,
+        610
       ],
       "flags": {},
-      "order": 3,
+      "order": 7,
       "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "media_state",
-          "name": "media_state",
-          "type": "STRING",
-          "widget": {
-            "name": "media_state"
-          },
-          "link": null
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "localized_name": "references",
           "name": "references",
           "type": "H3_REFS",
           "links": [
@@ -1423,11 +1216,71 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "MiniMaxH3MediaLoader"
+        "Node name for S&R": "MiniMaxH3MediaLoader",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "media_state": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
       },
       "widgets_values": [
-        "[]"
-      ]
+        "[]",
+        null,
+        null,
+        ""
+      ],
+      "widgets_values_named": {
+        "media_state": "[]",
+        "Open loader…": null,
+        "+ Native-output splitter": null,
+        "mml_panel": ""
+      }
+    },
+    {
+      "id": 2,
+      "type": "UNETLoader",
+      "pos": [
+        -40,
+        0
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader",
+        "ue_properties": {
+          "widget_ue_connectable": {
+            "unet_name": true,
+            "weight_dtype": true
+          },
+          "version": "7.6",
+          "input_ue_unconnectable": {}
+        }
+      },
+      "widgets_values": [
+        "minimax_h3_hybrid_fl2va_ref2va_b20-49.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "minimax_h3_hybrid_fl2va_ref2va_b20-49.safetensors",
+        "weight_dtype": "default"
+      }
     }
   ],
   "links": [
@@ -1468,7 +1321,7 @@
       5,
       0,
       9,
-      2,
+      3,
       "VAE"
     ],
     [
@@ -1484,7 +1337,7 @@
       8,
       0,
       9,
-      3,
+      5,
       "STRING"
     ],
     [
@@ -1644,12 +1497,18 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.8,
+      "scale": 0.8800000000000001,
       "offset": [
-        120,
-        460
+        363.33295819336695,
+        571.6250752867098
       ]
-    }
+    },
+    "ue_links": [],
+    "frontendVersion": "1.51.10",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
   },
   "version": 0.4
 }
