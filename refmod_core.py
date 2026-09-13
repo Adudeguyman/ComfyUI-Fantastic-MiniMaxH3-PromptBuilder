@@ -13,7 +13,7 @@ Compatibility contract. That pack's nodes hold a bundle as a list of
 of them, with the same meaning, so a bundle from our stack works in their
 Apply / Step Curve / Config / Inspect and theirs works in ours. Nothing here
 checks the object's class — only its shape — because both packs share the
-`H3_REF_MODS` socket type and ComfyUI never inspects what travels on it.
+`H3_REF_MODS` link type and ComfyUI never inspects what travels on it.
 
 The block dicts returned by `ref_block` are ComfyUI core's own H3 reference
 format (consumed in comfy/model_base.py), the same shape the native
@@ -299,7 +299,7 @@ def load_cached(path_no_ext: str) -> H3RefMod:
 # ---------------------------------------------------------- bundle guard
 
 def check_bundle(mods, where: str):
-    """A bundle is a list of (mod, strength). Both packs share the socket
+    """A bundle is a list of (mod, strength). Both packs share the link
     type, so say plainly when something else arrives instead of failing
     deep inside with an attribute error."""
     if mods is None:

@@ -12,6 +12,11 @@ jobs:
   publish-node:
     name: Publish Custom Node to registry
     runs-on: ubuntu-latest
+    # The publish action never passes a changelog on its own; set this
+    # before the version-bump push, since registry versions are immutable.
+    env:
+      COMFY_NODE_CHANGELOG: |
+        RefMods: a stack node with a library browser, hybrid weights and live labels; RefMod Text Encode (stands in for Reference to Video, takes Media Loader media and RefMods together) and Apply; Create, Edit (frames, voice, save as copy) and Inspect nodes run through the queue. Prompt Builder gains mods input/output, + RefMods, draft-mode RefMods and pink delivery tags. Origin checks no longer use a URL library.
     steps:
       - name: Check out code
         uses: actions/checkout@v4

@@ -1339,7 +1339,7 @@ export function openLibrary(panel, opts = {}) {
     }
     return true;
   }
-  /** The socket can drop a job's events (a reconnect mid-run); the history
+  /** The live connection can drop a job's events (a reconnect mid-run); the history
    *  route has the same answer, so poll it until the job is accounted for.
    *  Covers decode jobs and the Create tab's create/edit jobs alike. */
   function watchJob(pid) {

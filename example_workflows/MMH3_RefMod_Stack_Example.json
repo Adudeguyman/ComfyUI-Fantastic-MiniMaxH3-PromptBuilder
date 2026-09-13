@@ -1,19 +1,19 @@
 {
   "id": "00000000-0000-0000-0000-000000000000",
   "revision": 0,
-  "last_node_id": 21,
-  "last_link_id": 23,
+  "last_node_id": 22,
+  "last_link_id": 27,
   "nodes": [
     {
       "id": 1,
       "type": "MarkdownNote",
       "pos": [
         -40,
-        -420
+        -480
       ],
       "size": [
         620,
-        360
+        420
       ],
       "flags": {},
       "order": 0,
@@ -23,7 +23,7 @@
       "title": "RefMod Stack example",
       "properties": {},
       "widgets_values": [
-        "## RefMod Stack → Text Encode → Ref2VA\n\n1. Click **Browse library…** on the RefMod Stack and add a saved RefMod (a character, place, voice…), or make one with **Create…**. RefMods live in `models/refmods`.\n2. The stack plugs into the Prompt Builder's *mods* input, and the builder passes it on through its *mods* output to Text Encode (in a new workflow, **+ RefMods** on the builder wires this up). Open **Edit prompt…** on the Prompt Builder. The stack's labels appear as chips — `<Picture 1>`, `<Video 1>`, `<Audio 1>` — click one to insert it. The stack's *labels* output and Text Encode's *reference_map* show the same map.\n3. Queue. **Fantastic H3 RefMod Text Encode** presents the references to H3's own encoder, so the prompt can name them; its conditioning already carries the references — do not Apply the same bundle again.\n\nWeights: up to 1 is strength; above 1 adds copies (2.7 = two full + one at 0.7). Every copy gets its own label; citing the first is enough.\n\nModels: [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3) — ref2va diffusion model, the minimax CLIP, the video VAE and the audio VAE. Swap the filenames below for the variants you have."
+        "## RefMod Stack + Media Loader → Text Encode → Ref2VA\n\n1. Click **Browse library…** on the RefMod Stack and add a saved RefMod (a character, place, voice…), or make one with **Create…**. RefMods live in `models/refmods`.\n2. Drop pictures, clips or audio on the **Media Loader** for one-off references that aren't saved as RefMods.\n3. Both reach **Fantastic H3 RefMod Text Encode** through the Prompt Builder: the loader's bundle on *references* → *references*, the stack on *mods* → *mods* (in a new workflow, **+ Media loader** and **+ RefMods** on the builder wire this up). Open **Edit prompt…** — every reference appears as a chip, the loader's media first and the RefMods after it, numbered the way Text Encode will label them; click one to insert it. Text Encode's *reference_map* shows the same map.\n4. Queue. Text Encode presents everything to H3's own encoder so the prompt can name it, its conditioning already carries the references (do not Apply the same bundle again), and its *latent* is the empty AV latent for the sampler — no separate Reference to Video or Empty Latent node.\n\nWeights: up to 1 is strength; above 1 adds copies (2.7 = two full + one at 0.7). Every copy gets its own label; citing the first is enough.\n\nModels: [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3) — a **ref2va** diffusion model (RefMods and references are what it was trained on), the minimax CLIP, the video VAE and the audio VAE. Swap the filenames below for the variants you have."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -276,7 +276,8 @@
           "name": "VAE",
           "type": "VAE",
           "links": [
-            19
+            19,
+            26
           ]
         }
       ],
@@ -365,7 +366,7 @@
           "name": "references",
           "shape": 7,
           "type": "H3_REFS",
-          "link": null
+          "link": 24
         },
         {
           "localized_name": "mods",
@@ -640,7 +641,9 @@
           "localized_name": "references",
           "name": "references",
           "type": "H3_REFS",
-          "links": null
+          "links": [
+            25
+          ]
         },
         {
           "localized_name": "mods",
@@ -667,11 +670,11 @@
       "type": "MiniMaxH3FantasticRefModTextEncode",
       "pos": [
         620,
-        480
+        280
       ],
       "size": [
         400,
-        200
+        330
       ],
       "flags": {},
       "order": 8,
@@ -686,8 +689,16 @@
         {
           "localized_name": "mods",
           "name": "mods",
+          "shape": 7,
           "type": "H3_REF_MODS",
           "link": 6
+        },
+        {
+          "localized_name": "references",
+          "name": "references",
+          "shape": 7,
+          "type": "H3_REFS",
+          "link": 25
         },
         {
           "localized_name": "vae",
@@ -697,6 +708,13 @@
           "link": 5
         },
         {
+          "localized_name": "audio_vae",
+          "name": "audio_vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": 26
+        },
+        {
           "localized_name": "prompt",
           "name": "prompt",
           "type": "STRING",
@@ -704,6 +722,42 @@
             "name": "prompt"
           },
           "link": 7
+        },
+        {
+          "localized_name": "width",
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "height",
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "length",
+          "name": "length",
+          "type": "INT",
+          "widget": {
+            "name": "length"
+          },
+          "link": null
+        },
+        {
+          "localized_name": "ref_image_size",
+          "name": "ref_image_size",
+          "type": "COMBO",
+          "widget": {
+            "name": "ref_image_size"
+          },
+          "link": null
         },
         {
           "localized_name": "reference_fps",
@@ -740,6 +794,14 @@
           "links": [
             9
           ]
+        },
+        {
+          "localized_name": "latent",
+          "name": "latent",
+          "type": "LATENT",
+          "links": [
+            27
+          ]
         }
       ],
       "properties": {
@@ -747,6 +809,10 @@
       },
       "widgets_values": [
         "",
+        1344,
+        768,
+        124,
+        "match",
         24,
         0
       ]
@@ -756,7 +822,7 @@
       "type": "PreviewAny",
       "pos": [
         620,
-        760
+        660
       ],
       "size": [
         210,
@@ -792,7 +858,7 @@
       "type": "PreviewAny",
       "pos": [
         620,
-        900
+        800
       ],
       "size": [
         210,
@@ -822,68 +888,6 @@
         "Node name for S&R": "PreviewAny"
       },
       "widgets_values": []
-    },
-    {
-      "id": 12,
-      "type": "EmptyMiniMaxH3LatentAV",
-      "pos": [
-        620,
-        280
-      ],
-      "size": [
-        292,
-        106
-      ],
-      "flags": {},
-      "order": 11,
-      "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "width",
-          "name": "width",
-          "type": "INT",
-          "widget": {
-            "name": "width"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "height",
-          "name": "height",
-          "type": "INT",
-          "widget": {
-            "name": "height"
-          },
-          "link": null
-        },
-        {
-          "localized_name": "length",
-          "name": "length",
-          "type": "INT",
-          "widget": {
-            "name": "length"
-          },
-          "link": null
-        }
-      ],
-      "outputs": [
-        {
-          "localized_name": "LATENT",
-          "name": "LATENT",
-          "type": "LATENT",
-          "links": [
-            15
-          ]
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "EmptyMiniMaxH3LatentAV"
-      },
-      "widgets_values": [
-        1344,
-        768,
-        124
-      ]
     },
     {
       "id": 13,
@@ -1123,7 +1127,7 @@
           "localized_name": "latent_image",
           "name": "latent_image",
           "type": "LATENT",
-          "link": 15
+          "link": 27
         }
       ],
       "outputs": [
@@ -1382,6 +1386,48 @@
         "auto",
         "auto"
       ]
+    },
+    {
+      "id": 22,
+      "type": "MiniMaxH3MediaLoader",
+      "pos": [
+        -40,
+        1500
+      ],
+      "size": [
+        660,
+        476
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "media_state",
+          "name": "media_state",
+          "type": "STRING",
+          "widget": {
+            "name": "media_state"
+          },
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "references",
+          "name": "references",
+          "type": "H3_REFS",
+          "links": [
+            24
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3MediaLoader"
+      },
+      "widgets_values": [
+        "[]"
+      ]
     }
   ],
   "links": [
@@ -1498,14 +1544,6 @@
       "SIGMAS"
     ],
     [
-      15,
-      12,
-      0,
-      17,
-      4,
-      "LATENT"
-    ],
-    [
       16,
       17,
       0,
@@ -1568,6 +1606,38 @@
       8,
       1,
       "H3_REF_MODS"
+    ],
+    [
+      24,
+      22,
+      0,
+      8,
+      0,
+      "H3_REFS"
+    ],
+    [
+      25,
+      8,
+      19,
+      9,
+      2,
+      "H3_REFS"
+    ],
+    [
+      26,
+      6,
+      0,
+      9,
+      4,
+      "VAE"
+    ],
+    [
+      27,
+      9,
+      2,
+      17,
+      4,
+      "LATENT"
     ]
   ],
   "groups": [],

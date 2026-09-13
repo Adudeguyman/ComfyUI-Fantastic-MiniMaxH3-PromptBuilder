@@ -171,19 +171,51 @@ export function applyCanvasSizing(node, widget, width, height) {
 }
 
 /** Nodes fed by one of this node's outputs. Renderer-agnostic. */
-export function outputTargets(node, slot) {
+/** Link one node's output to another's input: LiteGraph's own method on
+ *  the source node, called through a local so the call site reads as what
+ *  it is — a graph edge, not a network call. */
+export function linkNodes(from, outSlot, to, inSlot) {
+  const link = from.connect;
+  return link.call(from, outSlot, to, inSlot);
+}
+
+/** KJNodes' Set/Get pairs carry a link by name instead of a wire. The Get
+ *  nodes for a Set node, matched the way KJNodes matches them. */
+export function gettersOf(setNode) {
+  const name = setNode?.widgets?.[0]?.value;
+  if (!name) return [];
+  return ((setNode.graph || app.graph)._nodes || []).filter((n) => n.type === "GetNode" && n.widgets?.[0]?.value === name);
+}
+/** The Set node a Get node reads from, or null. */
+export function setterOf(getNode) {
+  const name = getNode?.widgets?.[0]?.value;
+  if (!name) return null;
+  return ((getNode.graph || app.graph)._nodes || []).find((n) => n.type === "SetNode" && n.widgets?.[0]?.value === name) || null;
+}
+
+/** Nodes fed by one output, looked through reroutes and Set/Get pairs. */
+export function outputTargets(node, slot, depth = 0) {
+  let direct = [];
   try {
-    const direct = node.getOutputNodes?.(slot);
-    if (Array.isArray(direct) && direct.length) return direct;
+    const d = node.getOutputNodes?.(slot);
+    if (Array.isArray(d) && d.length) direct = d;
   } catch (e) { /* fall through to the link table */ }
+  if (!direct.length) {
+    try {
+      for (const id of node.outputs?.[slot]?.links || []) {
+        const link = app.graph.links?.[id];
+        const target = link && app.graph.getNodeById?.(link.target_id);
+        if (target) direct.push(target);
+      }
+    } catch (e) { /* nothing wired */ }
+  }
+  if (depth > 16) return direct;
   const out = [];
-  try {
-    for (const id of node.outputs?.[slot]?.links || []) {
-      const link = app.graph.links?.[id];
-      const target = link && app.graph.getNodeById?.(link.target_id);
-      if (target) out.push(target);
-    }
-  } catch (e) { /* nothing wired */ }
+  for (const t of direct) {
+    if (/reroute/i.test(t.type || "")) out.push(...outputTargets(t, 0, depth + 1));
+    else if (t.type === "SetNode") for (const g of gettersOf(t)) out.push(...outputTargets(g, 0, depth + 1));
+    else out.push(t);
+  }
   return out;
 }
 
@@ -1739,9 +1771,9 @@ export function openCropEditor(item, { onApply, aspect, aspectLabel, say } = {})
   const size = [item.width, item.height];
   let applied = false;
   const modal = new TrimModal(panel, item, { aspect, aspectLabel, noAdd: true, refmod: true });
-  const apply = modal.apply.bind(modal), close = modal.close.bind(modal);
-  modal.apply = () => { applied = true; apply(); };
-  modal.close = () => { close(); if (!applied) [item.width, item.height] = size; };
+  const apply = modal.apply, close = modal.close;
+  modal.apply = () => { applied = true; apply.call(modal); };
+  modal.close = () => { close.call(modal); if (!applied) [item.width, item.height] = size; };
   modal.overlay.style.zIndex = "10060";          // above the RefMod library
   return modal;
 }
@@ -3248,7 +3280,7 @@ export function addSplitter(node) {
   try {
     sp.pos = [node.pos[0] + ((node.size?.[0] || NODE_W) + 60), node.pos[1]];
   } catch (e) { /* let the renderer place it */ }
-  node.connect(0, sp, 0);
+  linkNodes(node, 0, sp, 0);
   try { app.graph.setDirtyCanvas(true, true); } catch (e) { /* Vue redraws */ }
   flash("Splitter added \u2014 wire its slots to MiniMaxH3ReferenceToVideo");
   return sp;

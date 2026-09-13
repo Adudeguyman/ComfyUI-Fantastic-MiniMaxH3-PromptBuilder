@@ -6,7 +6,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
-  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets } from "./medialoader.js";
+  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets, setterOf, linkNodes } from "./medialoader.js";
 import { STACK_NAME, ENCODE_NAMES, readStack, deriveEntries, labelGroups,
   rangeText as refmodRange, previewURL as refmodPreviewURL, KIND as REFMOD_KIND,
   openStackModal } from "./refmodstack.js";
@@ -35,8 +35,6 @@ const DELIVERY_TAGS = [
     ex: "Wait\u2026 <catches breath> hold on a sec." },
   { group: "Pauses and breath", tag: "<deep breath>", what: "Calming down",
     ex: "<deep breath> Okay. I can do this." },
-  { group: "Pauses and breath", tag: "<pants>", what: "Panting",
-    ex: "Run\u2026 <pants> run now!" },
 
   { group: "Delivery and emphasis", tag: "<i>", what: "Emphasize 1\u20134 words",
     ex: "I was <i>not</i> expecting that.", wrap: true },
@@ -65,10 +63,6 @@ const DELIVERY_TAGS = [
     ex: "<clears throat> So anyway\u2026" },
   { group: "Non-verbal sounds", tag: "<sniff>", what: "Sniffing",
     ex: "<sniff> It's just\u2026 really sad." },
-  { group: "Non-verbal sounds", tag: "<smacks lips>", what:
-    "Lip smack. Closed, it lands where you put it; left unclosed it lands " +
-    "at the end of the sentence.",
-    ex: "<smacks lips></smacks lips> Okay.", wrap: true },
   { group: "Non-verbal sounds", tag: "<mhm>", what: "Agreement sound",
     ex: "Yeah, <mhm> exactly." },
   { group: "Non-verbal sounds", tag: "<phew>", what: "Relief",
@@ -96,6 +90,20 @@ const PAINT_RE = new RegExp([
 ].join("|"), "g");
 
 const LANG_RE = /^(\s*\[[^\]\n]+\])/;
+/* Every delivery tag, opening or closing, as one alternation — for picking
+ * them out of a <d> line so the mirror and the picker's example can colour
+ * them. Longer names first so "<long pause>" isn't cut to "<pause>". */
+const DELIVERY_RE = new RegExp("(<\\/?(?:" + [...new Set(DELIVERY_TAGS.map((t) => t.tag.slice(1, -1)))]
+  .sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")>)", "g");
+
+/** Text with its delivery tags wrapped as .mmh3-dtag spans. */
+function deliverySpans(text) {
+  // split() with a capture group alternates text, tag, text… — the parity
+  // is what says which is which, so empties are dropped only afterwards.
+  return String(text).split(DELIVERY_RE)
+    .map((part, i) => (i % 2 ? el("span", { class: "mmh3-dtag" }, part) : part))
+    .filter((part) => part !== "");
+}
 
 const MODE_SENDS = {
   T2VA: "Sends: prompt only \u2014 no reference media leaves the node in this mode.",
@@ -616,13 +624,18 @@ function viewURL(v) {
   );
 }
 
+/** The node behind an input, looked through reroutes and KJNodes' Get/Set
+ *  pairs (a Get node stands in for whatever feeds its Set node). */
 function originNode(node, slotIndex) {
   let n = node.getInputNode?.(slotIndex);
   let guard = 0;
-  while (n && /reroute/i.test(n.type || "") && guard++ < 16) {
-    const nn = n.getInputNode?.(0);
-    if (!nn) break;
-    n = nn;
+  while (n && guard++ < 16) {
+    let up = null;
+    if (/reroute/i.test(n.type || "")) up = n.getInputNode?.(0);
+    else if (n.type === "GetNode") up = setterOf(n)?.getInputNode?.(0);
+    else break;
+    if (!up) break;
+    n = up;
   }
   return n || null;
 }
@@ -741,6 +754,53 @@ function refmodsReachEncode(node) {
     (enc.inputs || []).some((i) => i.name === "mods" && i.link != null));
 }
 
+/** The RefMod Text Encodes this builder drives, through its prompt or mods output. */
+function encodersOf(node) {
+  const seen = new Set(), out = [];
+  const modsOut = (node.outputs || []).findIndex((o) => o.name === "mods");
+  for (const slot of modsOut >= 0 ? [0, modsOut] : [0]) {
+    for (const n of outputTargets(node, slot)) {
+      if (ENCODE_NAMES.has(n?.type) && !seen.has(n)) { seen.add(n); out.push(n); }
+    }
+  }
+  return out;
+}
+
+/** Where the Text Encode's media comes from: "builder" (this node's
+ *  references output), "loader" (the same Media Loader, wired straight in),
+ *  "other" (a source this builder can't see), or null (no media sent). */
+function mediaReach(node) {
+  const refIn = (node.inputs || []).findIndex((i) => i.name === "references");
+  const loader = refIn >= 0 && node.inputs[refIn].link != null ? originNode(node, refIn) : null;
+  let found = null;
+  for (const enc of encodersOf(node)) {
+    const ri = (enc.inputs || []).findIndex((i) => i.name === "references");
+    if (ri < 0 || enc.inputs[ri].link == null) continue;
+    const src = originNode(enc, ri);
+    if (src === node) return "builder";
+    if (loader && src === loader) return "loader";
+    found = found || "other";
+  }
+  return found;
+}
+
+/** The mode the node's Python side gates media by: the saved mode, or REF
+ *  (everything passes) when nothing has been saved yet — nodes.py's rule,
+ *  which differs from the editor's own T2VA starting point. */
+function gateMode(node) {
+  try {
+    const mode = JSON.parse(node.widgets?.find((w) => w.name === "builder_state")?.value || "{}").mode;
+    return MODE_CAPACITY[mode] ? mode : "REF";
+  } catch (e) { return "REF"; }
+}
+
+/** Media slots as the builder's own outputs would carry them: everything a
+ *  connected Media Loader holds, else what is wired to the picture_/video_/
+ *  audio_ inputs. */
+function mediaSlots(node) {
+  return slotsFromBundle(node) || directSlots(node);
+}
+
 /** Reference slots when this prompt uses RefMods.
  *
  * RefMod Text Encode (ours or ComfyUI-MiniMaxH3Mod's) labels its bundle
@@ -749,18 +809,39 @@ function refmodsReachEncode(node) {
  * loader at the head of the chain contributes entries we cannot see, so the
  * result is marked partial and the numbers are best-effort.
  */
-function refmodSlots(node) {
+function refmodSlots(node, opts = {}) {
   const src = refmodSource(node);
   if (!src.head) return null;
   const { chain, partial } = modsChain(src.head);
   if (!chain.length) return null;
+  // A draft can stand in for what the nearest stack holds (its own picks, or
+  // the ones frozen when it started) and for the loader's media.
+  const nearest = chain[chain.length - 1];
+  const picksOf = (st) => (st === nearest && opts.picks ? opts.picks : readStack(st).picks);
+  const sourceLabel = opts.picks ? (opts.picksLabel || "Draft RefMods") : "RefMod Stack";
+  const media = opts.media ? slotsFromItems(opts.media, opts.mediaLabel || "Media Loader") : mediaSlots(node);
 
-  const groups = labelGroups(chain.flatMap((st) => deriveEntries(readStack(st).picks)));
+  // Loader media the Text Encode also receives is labelled first, one
+  // counter per kind — the RefMods' numbers move up behind it.
+  const reach = mediaReach(node);
   const out = [];
+  const offset = { Picture: 0, Video: 0, Audio: 0 };
+  if (reach === "builder" || reach === "loader") {
+    const cap = reach === "builder" ? MODE_CAPACITY[gateMode(node)] : MODE_CAPACITY.REF;
+    for (const m of media || []) {
+      // The builder withholds what its mode doesn't use; a loader wired
+      // straight in sends everything. Orphan soundtracks reach neither.
+      if (!m.tag || m.idx > (cap[m.kind] ?? 0)) continue;
+      out.push(m);
+      offset[m.kind] = Math.max(offset[m.kind], m.idx);
+    }
+  }
+  const groups = labelGroups(chain.flatMap((st) => deriveEntries(picksOf(st))));
   const copyTags = new Set();
   for (const g of groups) {
     if (!g.nums.length) continue;
     const kind = REFMOD_KIND[g.kind].label;
+    g.nums = g.nums.map((num) => num + offset[kind]);
     const tags = g.nums.map((num) => `<${kind} ${num}>`);
     tags.slice(1).forEach((t) => copyTags.add(t));
     out.push({
@@ -768,14 +849,16 @@ function refmodSlots(node) {
       note: g.key === "audio" ? "voice" : null,
       copies: tags.slice(1), range: refmodRange(g),
       slotName: `refmod:${g.file}`,
-      source: `RefMod Stack \u2022 ${g.name}`,
+      source: `${sourceLabel} \u2022 ${g.name}`,
       preview: g.preview ? { type: "img", url: refmodPreviewURL(g.preview) } : null,
     });
   }
   out.refmod = true;
-  out.partial = partial;
+  out.partial = partial || reach === "other";
   out.copyTags = copyTags;
   out.unsent = !!src.direct && !refmodsReachEncode(node);
+  out.media = reach;
+  out.mediaUnsent = !reach && (media || []).some((m) => m.tag);
   return out;
 }
 
@@ -788,11 +871,18 @@ function refmodStackFor(node) {
   return chain.length ? { stack: chain[chain.length - 1] } : { stack: null, why: "other" };
 }
 
-function getRefSlots(node) {
-  const viaRefmod = refmodSlots(node);
+function getRefSlots(node, opts = {}) {
+  const viaRefmod = refmodSlots(node, opts);
   if (viaRefmod) return viaRefmod;
+  if (opts.media) return slotsFromItems(opts.media, opts.mediaLabel || "Media Loader");
   const bundled = slotsFromBundle(node);
   if (bundled) return bundled;
+  return directSlots(node);
+}
+
+/** Slots from the picture_/video_/audio_ inputs, numbered as the native
+ *  Reference to Video node numbers them. */
+function directSlots(node) {
   const group = (re) => {
     const arr = [];
     (node.inputs || []).forEach((inp, i) => {
@@ -972,7 +1062,14 @@ function validate(state, slots) {
       warn("RefMods are wired into this node, but its mods output isn't connected " +
         "to RefMod Text Encode \u2014 wire mods into the Text Encode's mods input, " +
         "or the model won't see them.");
-    if (slots.partial)
+    if (slots.mediaUnsent)
+      warn("This node's media isn't sent to RefMod Text Encode \u2014 wire its " +
+        "references output into the Text Encode's references input, or the model " +
+        "won't see those pictures and clips.");
+    if (slots.media === "other")
+      info("The Text Encode's references input comes from somewhere this node can't " +
+        "see, so its media is numbered first and the labels shown here may be shifted.");
+    else if (slots.partial)
       info("A loader that isn't a RefMod Stack heads this chain, so its entries " +
         "are numbered first and the labels shown here may be shifted.");
   } else if (state.mode === "REF") {
@@ -1310,7 +1407,7 @@ const CSS = `
   box-shadow:0 16px 40px rgba(0,0,0,.55);pointer-events:none;}
 .mmh3-phrasepeekhead{display:flex;gap:8px;align-items:baseline;
   margin-bottom:5px;}
-.mmh3-phrasepeekhead span:first-child{font-size:calc(11px * var(--mmh3-fs, 1));color:#d7dbe2;
+.mmh3-phrasepeekhead span:first-child{font-size:calc(11px * var(--mmh3-fs, 1));color:#e692c8;
   font-weight:600;}
 .mmh3-phrasepeekcat{font-size:calc(9px * var(--mmh3-fs, 1));color:#6b7484;text-transform:uppercase;
   letter-spacing:.06em;}
@@ -1525,6 +1622,7 @@ const CSS = `
 .mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-dblock,
 .mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-dmark,
 .mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-dlang,
+.mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-dtag,
 .mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-dtext{
   color:transparent;background:none;box-shadow:none;}
 .mmh3-reftag{border-radius:3px;background:rgba(224,169,76,.18);color:#e0a94c;
@@ -1563,6 +1661,9 @@ const CSS = `
 .mmh3-dlang{color:#9dc0e4;background:rgba(126,167,216,.16);border-radius:3px;
   box-shadow:0 0 0 1px rgba(126,167,216,.16);}
 .mmh3-dtext{color:#e8eef6;}
+.mmh3-dtag{color:#e692c8;background:rgba(230,146,200,.14);border-radius:3px;
+  box-shadow:0 0 0 1px rgba(230,146,200,.28);
+  -webkit-box-decoration-break:clone;box-decoration-break:clone;}
 .mmh3-chippeek{position:fixed;z-index:10003;width:220px;background:#1e222a;
   border:1px solid #3a4252;border-radius:9px;overflow:hidden;
   box-shadow:0 16px 40px rgba(0,0,0,.55);pointer-events:none;}
@@ -1764,6 +1865,25 @@ function validateDraftMedia(raw) {
       out.uid = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
     }
     seen.add(out.uid);
+    items.push(out);
+  }
+  return { items: items.length ? items : null, dropped };
+}
+
+/** RefMod picks a draft stored — from disk, so unvalidated. Keeps what the
+ *  stack panel can show: a name and at least one channel with a file. */
+function validateDraftRefmods(raw) {
+  if (!Array.isArray(raw)) return { items: null, dropped: 0 };
+  let dropped = 0;
+  const items = [];
+  for (const p of raw) {
+    if (!p || typeof p !== "object" || Array.isArray(p)) { dropped++; continue; }
+    const chan = (c) => (c && typeof c === "object" && typeof c.file === "string" && c.file.trim()) ? { ...c } : null;
+    const visual = chan(p.visual), audio = chan(p.audio);
+    if (!visual && !audio) { dropped++; continue; }
+    const out = { ...p, visual: visual || undefined, audio: audio || undefined };
+    if (typeof out.name !== "string" || !out.name.trim()) out.name = (visual || audio).file;
+    if (typeof out.label !== "string" || !out.label.trim()) out.label = out.name.split("/").pop();
     items.push(out);
   }
   return { items: items.length ? items : null, dropped };
@@ -2988,7 +3108,39 @@ class Editor {
     }
     if (!stack) stack = addRefModStack(this.node, { focus: false });
     if (!stack) return;
-    openStackModal(stack, { onClose: () => { this.refreshSlots(); this.render(); } });
+    if (this.bufferMode === "draft") { this.openDraftRefMods(stack); return; }
+    openStackModal(stack, { onClose: () => {
+      // The stack may have changed under a parked draft: refresh tags and staleness.
+      this.draftRefmodsStale = this._refmodsDiverged();
+      this.refreshSlots(); this.render();
+    } });
+  }
+
+  /** The same stack panel, pointed at this draft's RefMods instead of the
+   *  node's stack: it edits a stand-in that holds the draft's picks, and
+   *  the real stack is only written when the draft is committed. Copy-on-
+   *  write like the media: looking without changing anything forks nothing. */
+  openDraftRefMods(stack) {
+    if (!this.draftEntry) return;
+    const live = readStack(stack);
+    const start = this.draftRefmodsView() || live.picks;
+    const startKey = stableStringify(start);
+    const stub = {
+      title: "Draft RefMods \u2014 applied to the stack on commit",
+      widgets: [{ name: "stack_state", value: JSON.stringify({ picks: JSON.parse(JSON.stringify(start)), budget: live.budget }) }],
+    };
+    openStackModal(stub, { onClose: () => {
+      const picks = readStack(stub).picks;
+      if (this.draftEntry && (this.draftRefmods() || stableStringify(picks) !== startKey)) {
+        const v = validateDraftRefmods(JSON.parse(JSON.stringify(picks)));
+        this.draftEntry.refmods = v.items || [];
+        if (v.dropped) this.draftDropped = (this.draftDropped || 0) + v.dropped;
+        this.draftRefmodsStale = this._refmodsDiverged();
+        this.flushDraftSave();
+      }
+      this.refreshSlots();
+      this.render();
+    } });
   }
 
   openMedia() {
@@ -3099,7 +3251,13 @@ class Editor {
       const vb = validateDraftMedia(e.mediaBase);
       e.media = vm.items;
       e.mediaBase = vb.items;
-      this.draftDropped = vm.dropped + vb.dropped;
+      // RefMods follow the same two-field split as media. A draft written
+      // before RefMods existed simply has neither, and follows the stack.
+      const vr = validateDraftRefmods(e.refmods);
+      const vrb = validateDraftRefmods(e.refmodsBase);
+      e.refmods = Array.isArray(e.refmods) ? (vr.items || []) : null;
+      e.refmodsBase = vrb.items;
+      this.draftDropped = vm.dropped + vb.dropped + vr.dropped + vrb.dropped;
       if (this.draftDropped) {
         console.warn("[MiniMaxH3 PromptBuilder] draft media: discarded " +
           `${this.draftDropped} unusable item(s)`);
@@ -3143,10 +3301,16 @@ class Editor {
         // have wiped the loader on commit.
         mediaBase: this._snapshotMedia(),
         media: null,
+        // The RefMod picks, split the same way: refmodsBase is frozen for
+        // display, refmods is written only through the draft's own stack
+        // panel and applied to the stack on commit ([] = deliberately none).
+        refmodsBase: this._snapshotRefmods(),
+        refmods: null,
         savedTo: null,
       };
     }
     this.draftStale = this._mediaDiverged();
+    this.draftRefmodsStale = this._refmodsDiverged();
     this.node._mmh3DraftActive = true;
     this.draftDropped = this.draftDropped || 0;
     this.refreshSlots();
@@ -3188,6 +3352,8 @@ class Editor {
       state: this.draftEntry.state,
       media: this.draftEntry.media ?? null,
       mediaBase: this.draftEntry.mediaBase ?? null,
+      refmods: this.draftEntry.refmods ?? null,
+      refmodsBase: this.draftEntry.refmodsBase ?? null,
       savedTo: this.draftEntry.savedTo ?? null,
     };
   }
@@ -3208,11 +3374,11 @@ class Editor {
       this.draftEntry.mode = modeOverride;
     }
     const payload = this.draftPayload(this.draftEntry.mode);
-    // The no-empty-drafts rule: a pristine blank with no library tie isn't
-    // worth a disk entry — or an LRU slot.
+    // The no-empty-drafts rule: a pristine blank with no library tie and no
+    // media or RefMods of its own isn't worth a disk entry — or an LRU slot.
     const blank = defaultState();
     blank.mode = payload.state.mode;
-    if (!payload.savedTo &&
+    if (!payload.savedTo && !payload.media && !payload.refmods &&
         stableStringify(payload.state) === stableStringify(blank)) {
       return;
     }
@@ -3272,6 +3438,43 @@ class Editor {
     return (Array.isArray(items) && items.length) ? items : null;
   }
 
+  /** The picks of the stack this prompt's RefMods come from, or null. */
+  _snapshotRefmods() {
+    const { stack } = refmodStackFor(this.node);
+    if (!stack) return null;
+    const picks = readStack(stack).picks;
+    return picks.length ? JSON.parse(JSON.stringify(picks)) : null;
+  }
+
+  /** RefMods the draft OWNS — edited through its own stack panel, applied to
+   *  the stack on commit. Null = never edited (follows the stack); [] = the
+   *  draft deliberately has none, which does clear the stack on commit. */
+  draftRefmods() {
+    const r = this.draftEntry?.refmods;
+    return Array.isArray(r) ? r : null;
+  }
+
+  /** What the draft DISPLAYS for RefMods: its own set, else the frozen
+   *  base, else null (the stack itself). Display only. */
+  draftRefmodsView() {
+    if (!this.draftEntry) return null;
+    const own = this.draftRefmods();
+    if (own) return own;
+    const b = this.draftEntry.refmodsBase;
+    return (Array.isArray(b) && b.length) ? b : null;
+  }
+
+  /** True when the stack has moved on from the picks this draft froze. */
+  _refmodsDiverged() {
+    if (this.draftRefmods()) return false;
+    const b = this.draftEntry?.refmodsBase;
+    if (!Array.isArray(b) || !b.length) return false;
+    const { stack } = refmodStackFor(this.node);
+    if (!stack) return true;                  // stack unwired since creation
+    const strip = (picks) => picks.map(({ missing, ...p }) => p);
+    return stableStringify(strip(b)) !== stableStringify(strip(readStack(stack).picks));
+  }
+
   /** Media the draft OWNS — edited deliberately, and applied on commit.
    *  Null means the draft has never been given media of its own. Always go
    *  through this: a bare `.media` check treats [] as a real set. */
@@ -3304,11 +3507,14 @@ class Editor {
   }
 
   refreshSlots() {
-    const snap = this.bufferMode === "draft" ? this.draftView() : null;
-    this.slots = snap
-      ? slotsFromItems(snap, this.draftMedia() ? "Draft media" : "Media Loader")
-      : getRefSlots(this.node);
-    if (!this.slots) this.slots = getRefSlots(this.node);
+    if (this.bufferMode !== "draft") { this.slots = getRefSlots(this.node); return; }
+    // A draft stands in for the loader's items and the stack's picks where it
+    // has its own (or frozen) copies; the wiring itself is always live.
+    const snap = this.draftView(), picks = this.draftRefmodsView();
+    this.slots = getRefSlots(this.node, {
+      media: snap || undefined, mediaLabel: this.draftMedia() ? "Draft media" : "Media Loader",
+      picks: picks || undefined, picksLabel: this.draftRefmods() ? "Draft RefMods" : "RefMod Stack",
+    }) || getRefSlots(this.node);
   }
 
   /** A loaded prompt named a media preset. Never apply it silently: it
@@ -3417,6 +3623,10 @@ class Editor {
       // draft OWNS is left alone — that was a deliberate choice.
       this.draftEntry.mediaBase = this._snapshotMedia();
       this.draftStale = this._mediaDiverged();
+      if (!this.draftRefmods()) {
+        this.draftEntry.refmodsBase = this._snapshotRefmods();
+        this.draftRefmodsStale = this._refmodsDiverged();
+      }
     }
     this.pullPending = false;
     this.flushDraftSave();
@@ -3474,6 +3684,7 @@ class Editor {
     // Only a set the draft OWNS is applied. The frozen base is display-only:
     // applying it would revert any media work done on Live while drafting.
     const media = this.draftMedia();
+    const refmods = this.draftRefmods();
     // Draft becomes live: adopt its state and library identity as the live
     // buffer, write the node, apply the media snapshot through the same
     // front door presets use, and consume the draft entry.
@@ -3484,6 +3695,7 @@ class Editor {
     this.state = committed;
     this.writeNode();
     if (media) this._applyMediaSnapshot(media);
+    if (refmods) this._applyRefmodSnapshot(refmods);
     clearTimeout(this._draftTimer);
     draftApi("/clear", { id: draftIdFor(this.node) }).catch(() => {});
     this.draftEntry = null;
@@ -3494,6 +3706,20 @@ class Editor {
     this.applyDraftChrome();
     toast("Draft committed to Live");
     this.render();
+  }
+
+  /** Write a draft's picks into the stack this prompt's RefMods come from,
+   *  keeping the stack's own token budget. */
+  _applyRefmodSnapshot(picks) {
+    try {
+      const { stack } = refmodStackFor(this.node);
+      if (!stack) { toast("The draft's RefMods had no stack to go to \u2014 use + RefMods first", 5000); return; }
+      const w = stack.widgets?.find((x) => x.name === "stack_state");
+      if (!w) return;
+      w.value = JSON.stringify({ picks: JSON.parse(JSON.stringify(picks)), budget: readStack(stack).budget });
+      stack._mmrPanel?.reload();
+      stack.setDirtyCanvas?.(true, true);
+    } catch (e) { console.error("[MiniMaxH3 PromptBuilder] applying draft RefMods failed:", e); }
   }
 
   _applyMediaSnapshot(items) {
@@ -3561,7 +3787,7 @@ class Editor {
         ? el("span", { class: "mmh3-draftdropped",
             title: "Items that were missing a file or had an unknown type. " +
               "See the browser console for details." },
-            `\u26a0 ${this.draftDropped} unusable media item` +
+            `\u26a0 ${this.draftDropped} unusable reference item` +
             `${this.draftDropped === 1 ? "" : "s"} discarded`)
         : null,
       el("span", { class: "mmh3-draftmsg" },
@@ -3574,7 +3800,13 @@ class Editor {
             : (this.draftStale
               ? " \u00b7 showing media as of when this draft was started; " +
                 "the loader has changed since"
-              : " \u00b7 following the node's media")))),
+              : " \u00b7 following the node's media")) +
+          (this.draftRefmods()
+            ? " \u00b7 has its own RefMods, applied to the stack on commit"
+            : (this._refmodsDiverged()
+              ? " \u00b7 showing RefMods as of when this draft was started; " +
+                "the stack has changed since"
+              : (this.draftEntry?.refmodsBase ? " \u00b7 following the stack's RefMods" : ""))))),
       el("div", { class: "mmh3-draftactions" },
         el("button", { class: "mmh3-btn",
           title: "Copy the Live prompt into this draft \u2014 " +
@@ -3684,9 +3916,7 @@ class Editor {
       const text = box.value || "";
       mirror.replaceChildren();
       let last = 0;
-      PAINT_RE.lastIndex = 0;
-      let m;
-      while ((m = PAINT_RE.exec(text)) !== null) {
+      for (const m of text.matchAll(PAINT_RE)) {
         if (m.index > last)
           mirror.append(document.createTextNode(text.slice(last, m.index)));
         mirror.append(...this.paintToken(m[0]));
@@ -3740,7 +3970,7 @@ class Editor {
       const lang = inner.match(LANG_RE);
       const body = lang ? inner.slice(lang[0].length) : inner;
       if (lang) kids.push(el("span", { class: "mmh3-dlang" }, lang[1]));
-      kids.push(el("span", { class: "mmh3-dtext" }, body));
+      kids.push(el("span", { class: "mmh3-dtext" }, ...deliverySpans(body)));
       kids.push(el("span", { class: "mmh3-dmark" }, "</d>"));
       return [el("span", { class: "mmh3-dblock" }, ...kids)];
     }
@@ -4301,7 +4531,7 @@ class Editor {
       el("div", { class: "mmh3-phrasepeekhead" },
         el("span", {}, t.tag),
         el("span", { class: "mmh3-phrasepeekcat" }, t.group)),
-      el("div", { class: "mmh3-phrasepeektext" }, t.ex),
+      el("div", { class: "mmh3-phrasepeektext" }, ...deliverySpans(t.ex)),
       el("div", { class: "mmh3-tagpeekwhat" }, t.what));
     document.body.append(box);
     const r = this.tagEl.getBoundingClientRect();
@@ -5265,7 +5495,7 @@ function hideWidget(node, name) {
 
 /** The one place this file links two nodes. */
 function wire(from, outSlot, to, inSlot) {
-  return from.connect(outSlot, to, inSlot);
+  return linkNodes(from, outSlot, to, inSlot);
 }
 
 function redraw(node) {
@@ -5273,6 +5503,18 @@ function redraw(node) {
     node.setDirtyCanvas?.(true, true);
     app.graph.setDirtyCanvas(true, true);
   } catch (e) { /* Vue redraws itself */ }
+}
+
+/** Pass this builder's media on to a Text Encode whose references input is
+ *  empty, when the builder has a Media Loader. Returns true if it wired. */
+function feedEncoderMedia(node, enc) {
+  const refIn = (node.inputs || []).findIndex((i) => i.name === "references");
+  const refOut = (node.outputs || []).findIndex((o) => o.name === "references");
+  const ri = (enc.inputs || []).findIndex((i) => i.name === "references");
+  if (refIn < 0 || refOut < 0 || ri < 0) return false;
+  if (node.inputs[refIn].link == null || enc.inputs[ri].link != null) return false;
+  wire(node, refOut, enc, ri);
+  return true;
 }
 
 /** Wire a RefMod Stack into this builder's mods input. Focuses the stack
@@ -5284,16 +5526,20 @@ function addRefModStack(node, { focus = true } = {}) {
   const inIdx = (node.inputs || []).findIndex((i) => i.name === "mods");
   const outIdx = (node.outputs || []).findIndex((o) => o.name === "mods");
   if (inIdx < 0 || outIdx < 0) {
-    toast("This Prompt Builder has no mods socket \u2014 restart ComfyUI and reload the page", 6000);
+    toast("This Prompt Builder has no mods input \u2014 restart ComfyUI and reload the page", 6000);
     return null;
   }
 
   if (node.inputs[inIdx].link != null) {
     const { stack } = refmodStackFor(node);
+    // An older workflow may have the stack but not the media wire: finish it.
+    const fed = encodersOf(node).filter((enc) => feedEncoderMedia(node, enc)).length;
+    if (fed) redraw(node);
     if (stack && focus && !safeCanvasFocus(stack))
       openStackModal(stack, { onClose: () => updateSummary(node) });
     if (!stack) toast("Something other than a RefMod Stack is on this node's mods input");
-    else if (focus) toast("A RefMod Stack is already connected");
+    else if (focus) toast(fed ? "RefMod Stack already connected \u2014 wired this node's media on to RefMod Text Encode too"
+                              : "A RefMod Stack is already connected");
     return stack;
   }
 
@@ -5304,6 +5550,7 @@ function addRefModStack(node, { focus = true } = {}) {
     const head = mi >= 0 && enc.inputs[mi].link != null ? originNode(enc, mi) : null;
     if (head?.type === STACK_NAME) {
       wire(head, 0, node, inIdx);     // slot 0 is the stack's mods bundle
+      feedEncoderMedia(node, enc);
       redraw(node);
       toast("Connected the RefMod Stack that already feeds RefMod Text Encode");
       return head;
@@ -5332,6 +5579,7 @@ function addRefModStack(node, { focus = true } = {}) {
   for (const enc of encoders) {
     const mi = modsInput(enc);
     if (mi >= 0 && enc.inputs[mi].link == null) { wire(node, outIdx, enc, mi); fed++; }
+    feedEncoderMedia(node, enc);
   }
   redraw(node);
   toast(fed
@@ -5349,9 +5597,14 @@ function addMediaLoader(node) {
 
   const existing = node.inputs[inIdx].link != null ? originNode(node, inIdx) : null;
   if (existing) {
+    // An older workflow may have the loader but not pass its media on to a
+    // RefMod Text Encode: finish that wire before focusing the loader.
+    const fed = encodersOf(node).filter((enc) => feedEncoderMedia(node, enc)).length;
+    if (fed) redraw(node);
     // Focusing the canvas is renderer-specific; open its editor if that fails.
     if (!safeCanvasFocus(existing)) openLoaderModal(existing, {});
-    toast("Media Loader is already connected");
+    toast(fed ? "Media Loader already connected \u2014 wired its media on to RefMod Text Encode too"
+              : "Media Loader is already connected");
     return;
   }
 
@@ -5368,8 +5621,10 @@ function addMediaLoader(node) {
     loader.pos = [node.pos[0] - ((loader.size?.[0] || 430) + 60), node.pos[1]];
   } catch (e) { /* let the renderer place it */ }
   wire(loader, 0, node, inIdx);   // slot 0 is the references bundle
+  const fed = encodersOf(node).filter((enc) => feedEncoderMedia(node, enc)).length;
   redraw(node);
-  toast("Media Loader added and connected");
+  toast(fed ? "Media Loader added and connected \u2014 its media goes on to RefMod Text Encode"
+            : "Media Loader added and connected");
 }
 
 function openEditor(node) {

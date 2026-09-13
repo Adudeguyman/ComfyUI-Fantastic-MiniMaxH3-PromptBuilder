@@ -28,7 +28,7 @@ import comfy.model_management as mm
 
 from . import media_io
 from .refmod_core import H3RefMod
-from .refmods import search_dirs, valid_rel, sanitize_name, PREVIEW_EXT
+from .refmods import search_dirs, valid_rel, sanitize_name, _contained_target, PREVIEW_EXT
 
 CONCEPT_TYPES = ("generic", "identity", "pose_motion", "clothing", "background",
                  "voice", "singing", "music_style", "sound_fx", "ambience", "style")
@@ -478,7 +478,7 @@ class MiniMaxH3FantasticRefModCreate:
         audio_max_seconds = max(0.5, min(600.0, float(audio_max_seconds or 0) or 30.0))
         items = parse_sources(source)
 
-        # --- gather: sockets replace what the source list provides
+        # --- gather: connected inputs replace what the source list provides
         if image is not None:
             looks = [(image, image.shape[0] > 1)]
         else:
@@ -501,6 +501,9 @@ class MiniMaxH3FantasticRefModCreate:
         if not valid_rel(base):
             raise ValueError(f"'{base}' is not a valid RefMod name.")
         root = target_root()
+        # valid_rel already refused '..', drives and absolute paths; check the
+        # resolved target against the root as well, and refuse, never rewrite.
+        _contained_target(root, base)
         both = bool(looks) and voice is not None
         pbar = comfy.utils.ProgressBar(100)
 

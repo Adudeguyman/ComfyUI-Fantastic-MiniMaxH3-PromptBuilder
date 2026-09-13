@@ -151,6 +151,52 @@ def _slug(text):
     return out[:80] or None
 
 
+def _host_port(value):
+    """('host', port or None) from a Host header or an Origin's authority.
+
+    Parsed by hand rather than with a URL library: a browser only ever sends
+    `host[:port]` or `[ipv6]:port`, and anything else is refused rather
+    than guessed at. Userinfo never appears in either header."""
+    v = (value or "").strip().lower()
+    if not v or "@" in v:
+        return "", None
+    if v.startswith("["):                       # [ipv6] or [ipv6]:port
+        end = v.find("]")
+        if end < 0:
+            return "", None
+        host, rest = v[1:end], v[end + 1:]
+    else:
+        host, sep, port = v.partition(":")
+        rest = (":" + port) if sep else ""
+    if not host:
+        return "", None
+    if not rest:
+        return host, None
+    if not rest.startswith(":") or not rest[1:].isdigit():
+        return "", None
+    return host, int(rest[1:])
+
+
+def _same_authority(origin, host_header):
+    """Does an Origin header name the host this request arrived at?
+
+    `Origin: null` (an opaque or sandboxed origin) never matches. A default
+    port left implicit on one side still matches the same port stated on
+    the other, so `http://host` and `Host: host:80` agree."""
+    origin = (origin or "").strip()
+    if not origin or origin.lower() == "null":
+        return False
+    scheme, sep, rest = origin.partition("://")
+    if not sep:
+        return False
+    o_host, o_port = _host_port(rest.split("/", 1)[0])
+    h_host, h_port = _host_port(host_header)
+    if not o_host or not h_host or o_host != h_host:
+        return False
+    default = 443 if scheme.strip().lower() == "https" else 80
+    return (o_port or default) == (h_port or default)
+
+
 def _contained(path, directory):
     """True when `path` resolves to a file strictly inside `directory`.
 
@@ -312,15 +358,7 @@ if PromptServer is not None and web is not None:
         origin = (request.headers.get("Origin") or "").strip()
         if not origin:
             return False
-        if origin.lower() == "null":            # sandboxed / opaque origin
-            return True
-        try:
-            from urllib.parse import urlsplit
-            netloc = urlsplit(origin).netloc
-        except Exception:
-            return True
-        host = (request.headers.get("Host") or "").strip()
-        return bool(netloc) and netloc.lower() != host.lower()
+        return not _same_authority(origin, request.headers.get("Host"))
 
     def _guard(json_only=True):
         """Route decorator: refuse cross-site or token-less requests before

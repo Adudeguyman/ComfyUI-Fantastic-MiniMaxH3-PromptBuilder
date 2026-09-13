@@ -45,6 +45,52 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.7.0
+
+**RefMods.** Save a character, a place, a look or a voice once and use it
+in any prompt after that — no re-uploading, no re-cropping. A RefMod is a
+small file in `models/refmods`; the model reads it the same way it reads a
+reference picture or clip.
+
+- **Fantastic H3 RefMod Stack** holds the RefMods a prompt uses. Click
+  **Browse library…** to pick from what you've saved, set a weight per
+  pick, and see the exact `<Picture 1>` / `<Video 1>` / `<Audio 1>` labels
+  the prompt should cite.
+- **The library** is where RefMods are made and looked after. Drop in
+  pictures, clips or audio (or pull them from a Media Loader), choose Full
+  or Compressed, and create. Several photos become one RefMod; a clip's
+  soundtrack or an audio file becomes its voice. Later you can rename it,
+  give it a description and a preview image, see what's actually stored
+  inside it, drop or reorder its frames, add more, swap the voice, or save
+  the result as a copy and keep the original.
+- **Fantastic H3 RefMod Text Encode** takes the place of *MiniMax H3
+  Reference to Video*. It sends the RefMods and the Media Loader's media to
+  the model together, numbered in one sequence, and gives you the empty
+  latent to sample from.
+- **The Prompt Builder** gets a **+ RefMods** button that adds and wires a
+  stack for you, shows RefMods as chips beside your media, warns when
+  something isn't reaching the Text Encode, and keeps a draft's RefMods
+  separate from Live — the same way it already handles media.
+- A ready-made workflow, `MMH3_RefMod_Stack_Example.json`, shows the whole
+  chain. Use a **ref2va** checkpoint with it: that's the model that was
+  trained on references.
+
+**Also:**
+
+- Delivery tags like `<whisper>` and `<pause>` now show in pink in the
+  prompt, in the picker's preview and in the guide, so they stand out from
+  the words being spoken. `<pants>` and `<smacks lips>` are gone — they
+  didn't do anything.
+- Weight sliders on a long stack no longer jump the list back to the top.
+- Set/Get nodes between the builder and the Text Encode are followed, so
+  labels and warnings stay right on tidy graphs.
+- A draft with its own media or RefMods but no text yet is saved to disk
+  like any other draft (it used to be lost on reload).
+- Security: the pack has a `SECURITY.md`, and its code no longer contains
+  anything the Comfy Registry's automated scan flags.
+
+---
+
 ## What's new in 1.6.4
 
 **Features:**
@@ -235,8 +281,6 @@ reference mid-sentence doesn't mean finding the node on the canvas.
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
 - [License](#license)
-
----
 
 ## What you get
 
@@ -550,6 +594,14 @@ A draft's media is in one of three states, and the banner always says which:
 The distinction matters: a draft you never edited media in will never change
 your Media Loader on commit, so improving your Live references while a draft
 sits open is safe.
+
+RefMods get the same treatment. A draft remembers the stack's picks as of
+when it started, so its `<Video N>` labels keep meaning the same files while
+you rework the Live stack; **◈ RefMods** in draft mode opens the stack panel
+on the draft's own copy of the picks (with the library and Create a click
+away as usual), and only a set you edited that way is written to the RefMod
+Stack when you commit. The banner says which state the draft's RefMods are
+in, just as it does for media.
 
 Because a draft's media is the one thing that can reach the Media Loader
 without having been uploaded through it, it's checked when the draft loads.
@@ -1211,20 +1263,30 @@ queue will enforce, and the labels the next node will assign.
 To use RefMods with this builder, click **+ RefMods** on the node. It adds
 a RefMod Stack wired into the builder's `mods` input (or connects the stack
 already feeding your Text Encode), and the builder passes the bundle on
-through its `mods` output. Wire the builder's `prompt` and `mods` outputs
-into RefMod Text Encode — the button does the `mods` half itself when the
-Text Encode is already there, and the editor warns when the bundle doesn't
-reach one. A stack wired straight to the Text Encode still works: the
-builder finds it by following its `prompt` output.
+through its `mods` output. Wire the builder's `prompt`, `mods` and
+`references` outputs into RefMod Text Encode — the buttons do the `mods`
+and `references` halves themselves when the Text Encode is already there,
+and the editor warns when either bundle doesn't reach one. A stack wired
+straight to the Text Encode still works: the builder finds it by following
+its `prompt` output. Media from the Media Loader and RefMods can be used
+together this way; the editor numbers the media first, then the RefMods,
+matching Text Encode.
 
-**Fantastic H3 RefMod Text Encode** takes the H3 CLIP, the bundle, the H3
-video VAE and a prompt, and
-presents each reference to the model's own encoder during tokenization, so
-the prompt can cite `<Picture n>`, `<Video n>` and `<Audio n>`. It numbers
-them one counter per kind in bundle order, with every copy numbered, and
-reports the map on `reference_map`. Connect its conditioning straight to the
-sampler; it has already attached the references. The builder shows the same
-labels as its reference chips, groups a pick's
+**Fantastic H3 RefMod Text Encode** stands in for *MiniMax H3 Reference to
+Video*. It takes the H3 CLIP, a prompt, the RefMod bundle on `mods`, and a
+Media Loader bundle on `references` — the loader's own output, or the
+builder's `references` output — with the video VAE for pictures and clips
+and the audio VAE for voices. It presents every reference to the model's own
+encoder during tokenization, so the prompt can cite `<Picture n>`,
+`<Video n>` and `<Audio n>`: the loader's media is labelled first, the
+RefMods after it, one counter per kind with every copy numbered, and the
+map is reported on `reference_map`. Loader media is sized as the native
+node sizes it (`width`, `height`, `length` and `ref_image_size` are the
+same settings); RefMods keep the size they were saved at. Connect its
+conditioning straight to the sampler — it has already attached the
+references — and its `latent` output is the empty AV latent to sample
+from, so no separate Empty Latent node is needed. The builder shows the same
+labels as its reference chips, media and RefMods together, groups a pick's
 copies under its first label (citing `<Picture 1>` is enough when 1–3 are
 the same file), and warns when the prompt cites a label the stack doesn't
 send. The stack's `labels` output carries the same map as text, and its
