@@ -1413,6 +1413,11 @@ ships with this pack — click 📖 in the editor to read it.
 
 Built against ComfyUI's native MiniMax H3 support.
 
+RefMods: the format and the encode/apply runtime are adapted from
+[ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod)
+by Luisa (luisacaotica), MIT License; the library's layout took cues from
+FranckyB's [ComfyUI-H3RefMods](https://github.com/FranckyB/ComfyUI-H3RefMods).
+
 ## License
 
 MIT

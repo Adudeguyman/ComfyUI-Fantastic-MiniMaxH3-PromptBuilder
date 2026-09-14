@@ -411,3 +411,16 @@ seconds** isn't set very low.
 Yes. Copy the files from `models/refmods` (the `.safetensors` files and
 any preview image with the same name) to another ComfyUI's `models/refmods`
 folder.
+
+---
+
+## Credits
+
+The RefMod format, and the code that encodes and applies them, come from
+[ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod)
+by Luisa (luisacaotica), MIT License. This pack carries its own copy of
+that runtime so RefMods work without the original installed, and the files
+are the same format both ways: RefMods made here load in that pack, and
+its RefMods load here. The library's layout took cues from FranckyB's
+[ComfyUI-H3RefMods](https://github.com/FranckyB/ComfyUI-H3RefMods).
+
