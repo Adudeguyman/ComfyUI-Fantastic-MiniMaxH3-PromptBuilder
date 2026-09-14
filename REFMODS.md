@@ -8,7 +8,7 @@ character, a clip of a place, or a recording of a voice, and it's ready to
 drop into any prompt from then on. No re-uploading, no re-cropping, and it
 looks the same every time you use it.
 
-<!-- screenshot: the RefMod library with a few cards -->
+![The RefMod library](docs/refmods/01-library.png)
 
 ---
 
@@ -61,7 +61,7 @@ workflow already has a **RefMod Text Encode**, the button connects that
 too. From here, everything happens inside windows. You rarely need to
 touch the wires again.
 
-<!-- screenshot: Prompt Builder with + RefMods, and the stack it adds -->
+![The RefMod Stack, Prompt Builder and RefMod Text Encode wired together](docs/refmods/02-nodes.png)
 
 The RefMod Stack has three buttons at the top:
 
@@ -79,7 +79,7 @@ You can also open the stack from inside the prompt editor with the
 Click **Create…** on the stack (or open the library and choose the
 **Create** tab).
 
-<!-- screenshot: the Create tab with a few photos added -->
+![The Create tab with photos and a voice ready to become one RefMod](docs/refmods/03-create.png)
 
 ### 1. Add your media
 
@@ -154,7 +154,7 @@ it there. When it's done, the new RefMod appears in the library.
 Everything you create is saved automatically. Open **Browse library…** to
 see it all.
 
-<!-- screenshot: library grid with the details panel open -->
+![A RefMod's details panel](docs/refmods/04-details.png)
 
 - **Search** by name, folder or description.
 - Filter by **Image / Video / Audio** and sort by name, size or newest.
@@ -193,7 +193,7 @@ RefMod's dataset needs to run everything through a ComfyUI queue, so it
 can take a moment to load individual elements, and it will wait until any
 jobs already running in your ComfyUI queue have finished.
 
-<!-- screenshot: edit mode with stored frames and a new photo -->
+![Editing a RefMod's stored frames](docs/refmods/05-edit.png)
 
 - **Remove a frame**: untick it, or click ×.
 - **Reorder**: drag the rows.
@@ -230,7 +230,7 @@ always safe.
 In the library, click **Add** on a card. Cards already in the stack show
 **✓ Add again**. Close the library and they're listed on the RefMod Stack.
 
-<!-- screenshot: the stack with two RefMods and their weights -->
+![Two RefMods in the stack with their weights and labels](docs/refmods/06-stack.png)
 
 Each row has:
 
@@ -280,7 +280,9 @@ You don't have to type these lines yourself. In **Reference** mode, click
 definition line and a matching retention entry for every RefMod in your
 stack, and ticks the right task types in the summary.
 
-<!-- screenshot: the Draft from RefMods button and the lines it wrote -->
+![RefMod chips and the Draft from RefMods button in the editor](docs/refmods/07a-draft-button.png)
+
+![The definitions and retention entries it wrote](docs/refmods/07b-draft-filled.png)
 
 How each RefMod is written depends on its **concept**, the "what is this?"
 setting you pick when creating it (or later, in its details panel in the

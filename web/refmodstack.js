@@ -288,6 +288,9 @@ const CSS = `
 .mmr-cactions{display:flex;gap:5px;}
 .mmr-cactions .mmr-btn{flex:1 1 0;min-width:0;text-align:center;padding:4px 6px;overflow:hidden;text-overflow:ellipsis;}
 .mmr-inspector{border-left:1px solid #23272f;background:#16191e;padding:10px;display:flex;flex-direction:column;gap:8px;overflow:auto;}
+/* An explicit display beats the hidden attribute, so hide it by hand — or a
+   deselected panel wraps into the grid's next row under the folder list. */
+.mmr-inspector[hidden]{display:none;}
 .mmr-inspector>*{flex:0 0 auto;}
 .mmr-ithumb{width:100%;height:150px;flex:0 0 auto;background:#101217;border-radius:6px;display:flex;align-items:center;justify-content:center;
   color:#6b7484;font-family:ui-monospace,monospace;font-size:calc(11px * var(--mmh3-fs, 1));overflow:hidden;}
@@ -2225,6 +2228,10 @@ app.registerExtension({
     const onConfigure = nodeType.prototype.onConfigure;
     nodeType.prototype.onConfigure = function () {
       const r = onConfigure?.apply(this, arguments);
+      // The saved size is applied after onNodeCreated sized the node, so a
+      // workflow saved with a shorter node would draw the panel past its
+      // bottom edge. Grow back to the panel's minimum.
+      applyCanvasSizing(this, this._mmrWidget, NODE_W, PANEL_H);
       setTimeout(() => this._mmrPanel?.reload(), 0);
       return r;
     };
