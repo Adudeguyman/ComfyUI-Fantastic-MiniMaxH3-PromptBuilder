@@ -16,7 +16,7 @@ jobs:
     # before the version-bump push, since registry versions are immutable.
     env:
       COMFY_NODE_CHANGELOG: |
-        RefMods: save a character, place, look or voice once and reuse it in any prompt. New RefMod Stack, library (browse, create, edit, inspect) and RefMod Text Encode nodes, which replaces MiniMax H3 Reference to Video and takes Media Loader media and RefMods together. The Prompt Builder gets a + RefMods button, RefMod chips, a Draft from RefMods button for subject definitions and retention analysis, and draft-mode RefMods. Delivery tags are highlighted; two that didn't work were removed. Includes a step-by-step RefMods guide (REFMODS.md) and security hardening for the Comfy Registry.
+        Fixes for RefMods made from video clips: Create and Edit now take the first frames of the clip on H3's real frame grid (22 frames store 7, 39 store 12, 56 store 17) instead of evenly spaced picks that stored only 2, with a live readout under Clip frames. Deleting a RefMod closes its details panel. Reads the single-file bundles saved by ComfyUI-MiniMaxH3Mod 0.2.6.
     steps:
       - name: Check out code
         uses: actions/checkout@v4

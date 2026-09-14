@@ -45,6 +45,17 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.7.1
+
+- RefMods made from a **video clip** now hold real motion. Create and Edit
+  take the first frames of the clip (after your trim) on H3's own frame
+  grid — 22 frames store 7, 39 store 12, 56 store 17 — instead of evenly
+  spaced picks that stored only 2 frames. **Clip frames** defaults to 22
+  and shows what you'll get as you change it.
+- Deleting a RefMod now closes its details panel.
+- Single-file RefMod bundles saved by ComfyUI-MiniMaxH3Mod 0.2.6 show up
+  in the library and can be used and inspected (not edited) here.
+
 ## What's new in 1.7.0
 
 **RefMods.** Save a character, a place, a look or a voice once and use it
