@@ -46,9 +46,15 @@ Your RefMods are saved in `ComfyUI/models/refmods`. You never have to go
 there yourself, but it's handy to know if you want to back them up or
 share them.
 
-There's a ready-made workflow in `example_workflows`:
-**MMH3_RefMod_Stack_Example.json**. Load it, pick your model files, and
-everything below is already wired up.
+There are two ready-made workflows in `example_workflows`. Load one, pick
+your model files, and everything below is already wired up:
+
+- **MMH3_RefMod_Vanilla_Stack_Example.json** uses only this pack and
+  ComfyUI's own nodes.
+- **MMH3_RefMod_Fully_Fantastic_Example.json** is the same chain with the
+  Fantastic LoRA loader and seed nodes from the
+  [comfyui-fantastic-loras](https://github.com/Adudeguyman/comfyui_fantastic-loras)
+  pack, so install that first.
 
 ---
 
@@ -62,6 +68,35 @@ too. From here, everything happens inside windows. You rarely need to
 touch the wires again.
 
 ![The RefMod Stack, Prompt Builder and RefMod Text Encode wired together](docs/refmods/02-nodes.png)
+
+### The three nodes
+
+- **Fantastic H3 RefMod Stack** holds the RefMods you've picked for this
+  prompt.
+- **Fantastic H3 Prompt Builder** is where you write the prompt. It shows
+  your RefMods as chips and passes them on.
+- **Fantastic H3 RefMod Text Encode** takes the place of the native
+  **MiniMax H3 Reference to Video** node. Use one or the other, not both.
+
+The Text Encode node does everything Reference to Video did, and it
+understands RefMods:
+
+- Wire the H3 **clip** and **vae** into it as you would for Reference to
+  Video, plus the **audio_vae** if any of your references have a voice.
+- The Prompt Builder's **prompt**, **mods** and **references** outputs go
+  to the inputs of the same names. **+ RefMods** and **+ Media loader**
+  make those connections for you.
+- Its **conditioning** goes to your sampler or guider, and its **latent**
+  is the empty video to sample into, so you don't need a separate Empty
+  Latent node either.
+- **width**, **height**, **length** and **ref_image_size** are the same
+  settings Reference to Video has, and they mean the same thing.
+- **reference_map** is a text output listing every label and where it
+  came from. Handy for checking with a preview node.
+
+Media from a Media Loader still works through it, so you can mix RefMods
+with one-off pictures and clips in the same prompt. There's more on that
+under [Using RefMods with regular media](#using-refmods-with-regular-media).
 
 The RefMod Stack has three buttons at the top:
 

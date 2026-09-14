@@ -72,8 +72,11 @@ reference picture or clip. New to them? See the
   stack for you, shows RefMods as chips beside your media, warns when
   something isn't reaching the Text Encode, and keeps a draft's RefMods
   separate from Live — the same way it already handles media.
-- A ready-made workflow, `MMH3_RefMod_Stack_Example.json`, shows the whole
-  chain. Use a **ref2va** checkpoint with it: that's the model that was
+- Two ready-made workflows show the whole chain:
+  `MMH3_RefMod_Vanilla_Stack_Example.json` (this pack and core nodes only)
+  and `MMH3_RefMod_Fully_Fantastic_Example.json` (adds the Fantastic LoRA
+  loader and seeds, from the `comfyui-fantastic-loras` pack). Use a
+  **ref2va** checkpoint with them: that's the model that was
   trained on references. However, MiniMax has admitted there are faults
   with the open-weight ref2va model, so we strongly encourage using a
   fl2va/ref2va hybrid model that enables reference capabilities with fl2va
