@@ -16,7 +16,7 @@ jobs:
     # before the version-bump push, since registry versions are immutable.
     env:
       COMFY_NODE_CHANGELOG: |
-        RefMods: a stack node with a library browser, hybrid weights and live labels; RefMod Text Encode (stands in for Reference to Video, takes Media Loader media and RefMods together) and Apply; Create, Edit (frames, voice, save as copy) and Inspect nodes run through the queue. Prompt Builder gains mods input/output, + RefMods, draft-mode RefMods and pink delivery tags. Origin checks no longer use a URL library.
+        RefMods: save a character, place, look or voice once and reuse it in any prompt. New RefMod Stack, library (browse, create, edit, inspect) and RefMod Text Encode nodes, which replaces MiniMax H3 Reference to Video and takes Media Loader media and RefMods together. The Prompt Builder gets a + RefMods button, RefMod chips, a Draft from RefMods button for subject definitions and retention analysis, and draft-mode RefMods. Delivery tags are highlighted; two that didn't work were removed. Includes a step-by-step RefMods guide (REFMODS.md) and security hardening for the Comfy Registry.
     steps:
       - name: Check out code
         uses: actions/checkout@v4
