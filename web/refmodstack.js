@@ -221,7 +221,7 @@ const CSS = `
   letter-spacing:.07em;text-transform:uppercase;color:#6b7484;margin-bottom:2px;}
 .mmr-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(12px);opacity:0;pointer-events:none;
   background:#232a38;border:1px solid #4d6ea6;color:#d7dbe2;font:calc(12px * var(--mmh3-fs, 1)) system-ui,sans-serif;
-  padding:7px 14px;border-radius:7px;transition:opacity .2s,transform .2s;z-index:10060;}
+  padding:7px 14px;border-radius:7px;transition:opacity .2s,transform .2s;z-index:10200;}
 .mmr-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
 /* library */
@@ -372,6 +372,7 @@ const CSS = `
 .mmr-srcbar{display:flex;flex-direction:column;gap:7px;}
 .mmr-srcbar .mmr-seg{align-self:flex-start;}
 .mmr-srchint{font-size:calc(11px * var(--mmh3-fs, 1));color:#8a93a3;line-height:1.45;}
+.mmr-numhint{display:block;font-size:calc(10px * var(--mmh3-fs, 1));margin-top:2px;}
 .mmr-srchint.warn,.mmr-fitcap.warn{color:#e3a64a;}
 .mmr-fitcap{font-size:calc(10.5px * var(--mmh3-fs, 1));color:#8a93a3;}
 .mmr-srcacts{display:flex;gap:6px;margin-top:2px;}
@@ -709,7 +710,7 @@ function clampSetting(key, value, fallback) {
   return Math.min(r[1], Math.max(r[0], v));
 }
 function loadSettings() {
-  const d = { mode: "Compressed Reference", ref_resolution: 1024, grid: 16, latent_frames: 16,
+  const d = { mode: "Compressed Reference", ref_resolution: 1024, grid: 16, latent_frames: 22,
     refinement_steps: 500, max_tokens: 5120, audio_max_seconds: 30, concept_type: "generic",
     subfolder: "", write_preview: true, videoVae: "", audioVae: "", combine: true };
   let st = d;
@@ -1152,7 +1153,7 @@ export function openLibrary(panel, opts = {}) {
   }
 
   function select(name) {
-    view.selected = view.selected === name ? null : name;
+    view.selected = name == null || view.selected === name ? null : name;
     body.classList.toggle("withinspector", !!view.selected);
     inspector.hidden = !view.selected;
     drawGrid();
@@ -1189,7 +1190,11 @@ export function openLibrary(panel, opts = {}) {
         const r = await postApi("/minimax_h3/refmods/delete", { headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ files: files(it), preview: it.preview }) });
         const d = await r.json(); if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-        toast(`Deleted ${it.label}`); view.selected = null; await load(true);
+        toast(`Deleted ${it.label}`);
+        // Close the details panel along with the selection: clearing the
+        // selection alone left the panel up, still asking to confirm.
+        select(null);
+        await load(true);
         if (panel) panel.refresh();
       } catch (err) { say(`Couldn't delete: ${err.message}`, true); confirmDel = false; delBtn.textContent = "Delete"; }
     } }, "Delete");
@@ -1616,18 +1621,30 @@ export function openLibrary(panel, opts = {}) {
     w *= x.rec.crop?.w || 1; h *= x.rec.crop?.h || 1;
     return [Math.max(1, w), Math.max(1, h)];
   }
-  const snap = (k) => (k <= 1 ? 1 : Math.floor((k - 1) / 4) * 4 + 1);
-  /** Latent frames one source contributes, or null while its length is unknown. */
-  function framesOf(x) {
-    if (x.rec.kind === "picture") return 1;
+  /** H3's video VAE works in chunks of 17 frames: it stores 2 latent frames
+   *  for the first chunk and 5 more per chunk after that, so a clip is cut to
+   *  5, 22, 39, 56… source frames (fewer than 5 are taken as they are). */
+  const h3Take = (n) => (n <= 1 ? 1 : n < 5 ? n : n - ((n - 5) % 17));
+  const h3Stored = (n) => (n <= 1 ? 1 : 5 * Math.ceil(n / 17) - 3);
+  /** Source frames a clip has after its trim, or null while unknown. */
+  function clipFrames(x) {
     if (!x.dim?.dur) return null;
     const t0 = Number(x.rec.trim?.start) || 0;
     const t1 = x.rec.trim?.end != null ? Number(x.rec.trim.end) : x.dim.dur;
-    let n = Math.max(1, Math.round(Math.max(0, t1 - t0) * 24) + (x.rec.trim ? 1 : 0));
-    if (fullMode()) { n = snap(Math.min(st.latent_frames, n)); return n <= 1 ? 1 : (n - 1) / 4 + 1; }
-    n = snap(n);
-    return Math.min(st.latent_frames, n <= 1 ? 1 : (n - 1) / 4 + 1);
+    return Math.max(1, Math.round(Math.max(0, t1 - t0) * 24) + (x.rec.trim ? 1 : 0));
   }
+  /** Latent frames one source contributes, or null while its length is unknown. */
+  function framesOf(x) {
+    if (x.rec.kind === "picture") return 1;
+    const n = clipFrames(x);
+    return n == null ? null : h3Stored(h3Take(Math.min(st.latent_frames, n)));
+  }
+  /** "22 frames from the start → 7 stored" for the Clip frames setting. */
+  const clipFramesHint = () => {
+    const take = h3Take(st.latent_frames), stored = h3Stored(take);
+    return `${take} frame${take === 1 ? "" : "s"} from the clip's start \u2192 ${stored} stored` +
+      (take !== st.latent_frames ? ` (H3 encodes whole chunks: ${st.latent_frames} is cut to ${take})` : "");
+  };
   /** Full or Compressed: the setting, or the file's own mode while editing. */
   const fullMode = () => (editing ? editing.visual?.mode === "encode" : st.mode === "Full Reference");
   /** Token estimate for a set of look sources saved as one RefMod. */
@@ -1844,11 +1861,16 @@ export function openLibrary(panel, opts = {}) {
     const target = stackTarget();
     setChildren(sourceList, sources.length ? sources.map((x, i) => sourceRow(x, i, x === firstLook, target))
       : el("div", { class: "mmr-status" }, "Nothing to encode yet."));
-    const num = (key, label, min, max, step, title) => el("label", { class: "mmr-ilabel", title }, label,
-      el("input", { class: "mmr-num", type: "number", min, max, step, value: st[key],
-        onchange: (e) => { st[key] = clampSetting(key, e.target.value, st[key]); e.target.value = st[key]; saveSettings(st);
-          if (key === "ref_resolution" || key === "grid") noteEl?.replaceWith(modeNote());
-          paintBudget(); } }));
+    const num = (key, label, min, max, step, title, hint) => {
+      const sub = hint ? el("span", { class: "mmr-dim mmr-numhint" }, hint()) : null;
+      return el("label", { class: "mmr-ilabel", title }, label,
+        el("input", { class: "mmr-num", type: "number", min, max, step, value: st[key],
+          onchange: (e) => { st[key] = clampSetting(key, e.target.value, st[key]); e.target.value = st[key]; saveSettings(st);
+            if (key === "ref_resolution" || key === "grid") noteEl?.replaceWith(modeNote());
+            if (sub) sub.textContent = hint();
+            if (key === "latent_frames") paintCreate(); else paintBudget(); } }),
+        sub);
+    };
     const vaeSel = (key, label, guess) => {
       if (!st[key] && vaes.length) st[key] = vaes.find((v) => guess.test(v)) || "";
       return el("label", { class: "mmr-ilabel" }, label,
@@ -1861,7 +1883,7 @@ export function openLibrary(panel, opts = {}) {
         el("div", { class: "mmr-fh" }, "Settings"),
         el("div", { class: "mmr-grid2" },
           num("max_tokens", "Max tokens", 0, 1048576, 256, "Refuses to save anything bigger than this. 0 = no limit."),
-          num("latent_frames", "Clip frames", 1, 1024, 1, "How much of each added clip is kept."),
+          num("latent_frames", "Clip frames", 1, 1024, 1, "Frames taken from the start of each added clip, after its trim.", clipFramesHint),
           num("audio_max_seconds", "Voice seconds", 0.5, 600, 0.5, "Seconds of a new voice kept from the start.")),
         el("div", { class: "mmr-fh", style: { marginTop: "8px" } }, "Models"),
         needLook ? vaeSel("videoVae", "H3 video VAE", /minimax.*video|h3.*video/i) : null,
@@ -1884,7 +1906,7 @@ export function openLibrary(panel, opts = {}) {
         num("max_tokens", "Max tokens", 0, 1048576, 256, "Refuses to create anything bigger than this. 0 = no limit."),
         st.mode === "Compressed Reference" ? num("grid", "Grid (long edge)", 2, 64, 2, "How small Compressed goes. 16 is up to 64 tokens per frame.") : null,
         st.mode === "Compressed Reference" ? num("refinement_steps", "Refinement steps", 0, 5000, 50, "How long Compressed is tuned toward the full picture.") : null,
-        num("latent_frames", "Clip frames", 1, 1024, 1, "How much of each clip is kept."),
+        num("latent_frames", "Clip frames", 1, 1024, 1, "Frames taken from the start of each clip, after its trim. Trim the clip to the moment you want first.", clipFramesHint),
         num("audio_max_seconds", "Voice seconds", 0.5, 600, 0.5, "Seconds of voice kept from the start.")),
       el("label", { class: "mmr-ilabel" }, "Concept", el("select", { class: "mmr-sel", onchange: (e) => { st.concept_type = e.target.value; saveSettings(st); } },
         CONCEPTS.map((c) => el("option", { value: c, selected: c === st.concept_type }, c)))),
@@ -1961,7 +1983,10 @@ export function openLibrary(panel, opts = {}) {
                 "Sets dataset size and aspect ratio") : null)
           : el("input", { class: "mmr-search", value: x.name, "aria-label": "RefMod name", onchange: (e) => { x.name = cleanName(e.target.value); e.target.value = x.name; } }),
         el("div", { class: "mmr-dim" }, [x.origin, ...bits].filter(Boolean).join(" · ")),
-        f != null ? el("div", { class: "mmr-dim" }, `${f} frame${f === 1 ? "" : "s"}`) : null,
+        f != null ? el("div", { class: "mmr-dim" }, x.rec.kind === "video"
+          ? (() => { const n = clipFrames(x), take = h3Take(Math.min(st.latent_frames, n));
+              return `first ${take} of ${n} frames \u2192 ${f} stored frame${f === 1 ? "" : "s"}`; })()
+          : `${f} frame${f === 1 ? "" : "s"}`) : null,
         target && x.use && isLook(x) && !isStored(x) && !setsFrame && effDims(x) ? (() => {
           const [w, h] = effDims(x), fit = fitOf(w / h, target);
           return el("div", { class: "mmr-fitcap" + (fit.keep < 0.8 ? " warn" : "") }, fitCaption(fit));

@@ -150,6 +150,23 @@ size and aspect ratio*.
 
 Hover over any preview to see it larger.
 
+### Clips
+
+A clip becomes a short run of stored frames, so the model can read a
+motion or a look in movement. Two things to know:
+
+- **Trim first.** Only the start of the clip is used, so trim it in the
+  Media Loader (or with **Crop / trim…** here) to the moment you want.
+- **Clip frames** is how many frames are taken from that start. H3 stores
+  frames in chunks: 2 stored frames for anything up to 17, then 5 more for
+  each further 17. So 22 frames store 7, 39 store 12, 56 store 17, and
+  anything in between is cut down to the nearest of those. The line under
+  the setting shows the result live, and each clip's row says which frames
+  it uses.
+
+Use **Full** for motion. Compressed keeps the overall look but not enough
+detail to carry movement.
+
 ### 4. Full or Compressed?
 
 - **Full** keeps as much detail as possible. Use it for faces, specific

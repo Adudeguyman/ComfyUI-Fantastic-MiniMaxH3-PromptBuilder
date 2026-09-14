@@ -14,6 +14,7 @@ ComfyUI manages the VAEs' memory; the library submits it as a hidden prompt.
 """
 
 import json
+import math
 import os
 import tempfile
 import time
@@ -65,9 +66,27 @@ def ensure_min_size(image, floor=320):
     return samples.movedim(1, -1)
 
 
-def snap_to_causal_grid(n):
-    """The video VAE accepts 4k+1 frames only (1, 5, 9, …)."""
-    return 1 if n <= 1 else ((n - 1) // 4) * 4 + 1
+def snap_to_h3_grid(n):
+    """Frames the H3 video VAE encodes whole: it works in chunks of 17 and
+    stores 2 latent frames for the first chunk, then 5 more per chunk, so a
+    clip is cut to 5, 22, 39, 56… frames (the same rule core's Reference to
+    Video applies). Fewer than 5 frames are taken as they are."""
+    if n <= 1:
+        return 1
+    if n < 5:
+        return n
+    return n - ((n - 5) % 17)
+
+
+def h3_latent_frames(n):
+    """Latent frames the H3 video VAE stores for n pixel frames."""
+    if n <= 1:
+        return 1
+    return 5 * math.ceil(n / 17) - 3
+
+
+# kept for callers that still import the old name
+snap_to_causal_grid = snap_to_h3_grid
 
 
 # ------------------------------------------------------------ latents
@@ -164,15 +183,14 @@ def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
     n = len(sources)
     for i, (src, is_video) in enumerate(sources):
         src = src if is_video else src[:1]
-        if mode == "encode" and is_video and latent_frames < src.shape[0]:
-            idx = torch.linspace(0, src.shape[0] - 1, latent_frames).round().long()
-            src = src[idx]
+        if is_video:
+            # The first `latent_frames` pixel frames of the clip, consecutive
+            # so the motion is real, then cut to a whole number of H3 chunks.
+            # (Evenly spaced picks across a long clip encoded as if they were
+            # consecutive, which stored a jerky, mostly-frozen reference.)
+            src = src[:snap_to_h3_grid(min(latent_frames, src.shape[0]))]
         src = _cover(src, *canvas) if canvas else resize_ref(src, ref_resolution)
         src = ensure_min_size(src)
-        if is_video and src.shape[0] > 1:
-            valid = snap_to_causal_grid(src.shape[0])
-            if valid != src.shape[0]:
-                src = src[:valid]
         if first_frame is None:
             first_frame = src[0].detach().cpu()
         mm.throw_exception_if_processing_interrupted()
@@ -184,8 +202,8 @@ def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
         if mode == "encode":
             part = z.to(torch.float16)
         else:
-            pool_t = min(latent_frames, z.shape[2]) if is_video else 1
-            part = pool_latent(z, pool_t, gh, gw).to(torch.float16)
+            # Compressed pools space only; the clip keeps every stored frame.
+            part = pool_latent(z, z.shape[2] if is_video else 1, gh, gw).to(torch.float16)
             if steps > 0:
                 part = optimize_latent(part, z.float(), steps=steps,
                     progress=(lambda k, m, i=i: progress((i + k / m) / n)) if progress else None)
@@ -430,8 +448,10 @@ class MiniMaxH3FantasticRefModCreate:
                     "tooltip": "Short edge each source is scaled down to before encoding (never up)."}),
                 "grid": ("INT", {"default": 16, "min": 2, "max": 64, "step": 2,
                     "tooltip": "Compressed: size of the small grid on its long edge. 16 is up to 64 tokens per frame."}),
-                "latent_frames": ("INT", {"default": 16, "min": 1, "max": 1024,
-                    "tooltip": "Clips: frames sampled (Full) or latent frames kept (Compressed)."}),
+                "latent_frames": ("INT", {"default": 22, "min": 1, "max": 1024,
+                    "tooltip": "Clips: how many frames to take from the start of the clip (after its trim). "
+                               "H3 stores 2 frames for up to 17 and 5 more per 17 after that, so 22 stores 7, "
+                               "39 stores 12, 56 stores 17; anything between is cut down to the last of those."}),
                 "refinement_steps": ("INT", {"default": 500, "min": 0, "max": 5000,
                     "tooltip": "Compressed: how long the small grid is refined toward the full encode."}),
                 "max_tokens": ("INT", {"default": 5120, "min": 0, "max": 1048576,

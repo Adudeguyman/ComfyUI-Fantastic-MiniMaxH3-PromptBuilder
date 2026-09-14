@@ -1242,6 +1242,12 @@ video, like `<Video 1>`. Switch to **One
 per source** to turn a batch of unrelated items into separate RefMods
 instead.
 
+A clip contributes its first `latent_frames` frames (after its trim in the
+Media Loader), consecutive so the motion is real; H3's video VAE stores 2
+frames for up to 17 and 5 more per further 17, so 22 frames store 7, 39
+store 12, 56 store 17, and other counts are cut down to the nearest of
+those. The setting's caption shows the result live.
+
 Under the Create button the tab shows how many frames and tokens the
 result will have. If that goes over the token limit, Create is blocked
 until you raise the limit, lower the resolution, switch to Compressed or

@@ -19,7 +19,7 @@ import comfy.model_management as mm
 
 from .refmod_core import H3RefMod, load_cached
 from .refmod_create import (_cover, ensure_min_size, resize_ref, pool_latent, optimize_latent,
-                            encode_audio, save_mod, snap_to_causal_grid, parse_sources,
+                            encode_audio, save_mod, snap_to_h3_grid, parse_sources,
                             load_look, load_voice)
 from .refmods import (resolve_file, _split_pair, _root_of, _contained_target, sanitize_name,
                       valid_rel, split_member, read_meta, PREVIEW_EXT)
@@ -46,16 +46,13 @@ def encode_like(vae, mod, sources, latent_frames=16, progress=None):
     parts, shapes = [], []
     for i, (src, is_video) in enumerate(sources):
         src = src if is_video else src[:1]
-        if full and is_video and latent_frames < src.shape[0]:
-            idx = torch.linspace(0, src.shape[0] - 1, latent_frames).round().long()
-            src = src[idx]
+        if is_video:
+            src = src[:snap_to_h3_grid(min(latent_frames, src.shape[0]))]
         if full:
             src = _cover(src, W * 16, H * 16)          # exact canvas: latent H x W
         else:
             src = resize_ref(src, res)
         src = ensure_min_size(src)
-        if is_video and src.shape[0] > 1:
-            src = src[:snap_to_causal_grid(src.shape[0])]
         mm.throw_exception_if_processing_interrupted()
         z = vae.encode(src)
         if z.dim() != 5 or z.shape[1] != 24:
@@ -66,7 +63,7 @@ def encode_like(vae, mod, sources, latent_frames=16, progress=None):
                 raise ValueError(f"New frame encoded to {z.shape[3]}x{z.shape[4]}, but the file holds {H}x{W}.")
             part = z.to(torch.float16)
         else:
-            part = pool_latent(z, min(latent_frames, z.shape[2]) if is_video else 1, H, W).to(torch.float16)
+            part = pool_latent(z, z.shape[2] if is_video else 1, H, W).to(torch.float16)
             if steps > 0:
                 part = optimize_latent(part, z.float(), steps=steps,
                     progress=(lambda k, m, i=i: progress((i + k / m) / len(sources))) if progress else None)
@@ -100,7 +97,7 @@ class MiniMaxH3FantasticRefModEdit:
                 "frames": ("STRING", {"default": "", "tooltip": "JSON list giving the new frame order: stored frame indices (0-based) and \"a0\", \"a1\"… for the items in 'add'. Empty = stored frames unchanged, additions appended."}),
                 "add": ("STRING", {"default": "", "tooltip": "JSON list of Media Loader items (pictures/clips) to encode and add."}),
                 "voice": ("STRING", {"default": "", "tooltip": "A Media Loader item (audio, or a clip with sound) to replace the voice; 'remove' to drop it; empty = unchanged."}),
-                "latent_frames": ("INT", {"default": 16, "min": 1, "max": 1024, "tooltip": "Most latent frames an added clip contributes."}),
+                "latent_frames": ("INT", {"default": 22, "min": 1, "max": 1024, "tooltip": "Frames taken from the start of an added clip; 22 stores 7 frames, 39 stores 12, 56 stores 17."}),
                 "audio_max_seconds": ("FLOAT", {"default": 30.0, "min": 0.5, "max": 600.0, "step": 0.5}),
                 "save_as": ("STRING", {"default": "", "tooltip": "Save the result as a new RefMod with this name (folders allowed, e.g. characters/hero_v2) and leave the original untouched. Empty = overwrite the original."}),
             },
