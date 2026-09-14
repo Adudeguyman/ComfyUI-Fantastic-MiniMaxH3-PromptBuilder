@@ -43,6 +43,11 @@ glance which preset matches it. Hover the thumbnail for the exact figures.
 *Trim and crop clips on the fly without touching the original files, and pull
 any frame straight out of a video into your picture references.*
 
+![The RefMod library](docs/refmods/01-library.png)
+
+*Now supports creating, editing, organizing, and tagging
+[RefMods](REFMODS.md).*
+
 ---
 
 ## What's new in 1.7.1
