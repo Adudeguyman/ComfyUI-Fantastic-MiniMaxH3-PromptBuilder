@@ -87,7 +87,32 @@ const PAINT_RE = new RegExp([
   "\\[Shot \\d+\\](?:\\s+at\\s+\\d{1,2}:\\d{2}(?:\\.\\d{1,3})?)?",
   "<(?:Picture|Video|Audio|Subject) \\d+>",     // a reference tag
   "\\(S\\d+(?:\\s*,\\s*S\\d+)*\\)",           // (S1) or (S1,S2)
+  "![A-Za-z][\\w-]*",                          // !Name shorthand for a named subject
 ].join("|"), "g");
+const NAME_TOKEN_RE = /!([A-Za-z][\w-]*)/g;
+
+/** Named subjects: { name: "<Subject N>" } from the definition lines that
+ *  carry a name and are switched on. Names are matched exactly (case too). */
+function subjectNames(state) {
+  const out = {};
+  for (const d of state?.ref?.subjectDefs || []) {
+    if (d.off) continue;
+    const name = (d.name || "").trim();
+    const m = (d.text || "").trim().match(/^<Subject (\d+)>/);
+    if (name && m && /^[A-Za-z][\w-]*$/.test(name) && !(name in out)) out[name] = `<Subject ${m[1]}>`;
+  }
+  return out;
+}
+
+/** Turn every !Name into "<Subject N> Name" — or just "Name" inside a
+ *  spoken <d> line, where a label would be read aloud. Unknown names are
+ *  left as typed so the warning can point at them. */
+function expandNames(text, names) {
+  if (!text || !Object.keys(names).length) return text;
+  const parts = String(text).split(/(<d>[\s\S]*?<\/d>)/);
+  return parts.map((part, i) => part.replace(NAME_TOKEN_RE,
+    (m, name) => (names[name] ? (i % 2 ? name : `${names[name]} ${name}`) : m))).join("");
+}
 
 const LANG_RE = /^(\s*\[[^\]\n]+\])/;
 /* Every delivery tag, opening or closing, as one alternation — for picking
@@ -96,12 +121,20 @@ const LANG_RE = /^(\s*\[[^\]\n]+\])/;
 const DELIVERY_RE = new RegExp("(<\\/?(?:" + [...new Set(DELIVERY_TAGS.map((t) => t.tag.slice(1, -1)))]
   .sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")>)", "g");
 
-/** Text with its delivery tags wrapped as .mmh3-dtag spans. */
-function deliverySpans(text) {
+/** Text with its delivery tags wrapped as .mmh3-dtag spans, and any !Name
+ *  shorthand as a subject tag (it becomes the bare name in a spoken line). */
+function deliverySpans(text, names = null) {
   // split() with a capture group alternates text, tag, text… — the parity
   // is what says which is which, so empties are dropped only afterwards.
   return String(text).split(DELIVERY_RE)
-    .map((part, i) => (i % 2 ? el("span", { class: "mmh3-dtag" }, part) : part))
+    .flatMap((part, i) => {
+      if (i % 2) return [el("span", { class: "mmh3-dtag" }, part)];
+      if (!names) return [part];
+      return part.split(/(![A-Za-z][\w-]*)/).map((p, j) => (j % 2
+        ? el("span", { class: "mmh3-reftag " + (names[p.slice(1)] ? "subj" : "unknown"),
+            title: names[p.slice(1)] ? `just \u201c${p.slice(1)}\u201d when spoken` : "No subject has this name" }, p)
+        : p));
+    })
     .filter((part) => part !== "");
 }
 
@@ -1053,19 +1086,28 @@ function genBase(state) {
 
 function genRef(state) {
   const r = state.ref;
+  const names = subjectNames(state);
+  const ex = (t) => expandNames(t, names);
   const defs = r.subjectDefs
     .filter((d) => !d.off)
-    .map((d) => d.text.trim()).filter(Boolean).join("\n");
+    .map((d) => {
+      let line = d.text.trim();
+      const name = (d.name || "").trim();
+      // The name rides on the definition so the model ties it to the label.
+      if (line && name && /^<Subject \d+>/.test(line))
+        line = line.replace(/\.?\s*$/, "") + `. Their name is ${name}.`;
+      return line;
+    }).filter(Boolean).join("\n");
   const types = TASK_TYPES.filter((t) => r.summaryTypes.includes(t)).join(" + ");
-  const summary = `[${types || "reference generation"}] ${r.summaryText.trim()}`;
+  const summary = `[${types || "reference generation"}] ${ex(r.summaryText.trim())}`;
   const retention = r.retention
     .filter((row) => row.label && !row.off)
     .map((row) => {
       const ctx = row.context?.trim() ? ` (${row.context.trim()})` : "";
-      return `${row.label}${ctx}: ${row.marker} - ${row.note.trim()}`;
+      return `${row.label}${ctx}: ${row.marker} - ${ex(row.note.trim())}`;
     })
     .join("\n");
-  const detail = [r.styleLine.trim(), r.detail.trim()].filter(Boolean).join("\n");
+  const detail = [ex(r.styleLine.trim()), ex(r.detail.trim())].filter(Boolean).join("\n");
   const on = (name) => sectionOn(state, name);
   const blocks = [];
   if (on("subject_definitions"))
@@ -1075,9 +1117,9 @@ function genRef(state) {
     blocks.push(`retention_analysis:\n${retention}`);
   blocks.push(`detailed_description:\n${detail}`);
   if (on("overall_soundscape"))
-    blocks.push(`overall_soundscape:\n${r.soundscape.trim()}`);
+    blocks.push(`overall_soundscape:\n${ex(r.soundscape.trim())}`);
   if (on("non_diegetic_music"))
-    blocks.push(`non_diegetic_music:\n${r.music.trim() || "N/A"}`);
+    blocks.push(`non_diegetic_music:\n${ex(r.music.trim()) || "N/A"}`);
   return blocks.join("\n\n");
 }
 
@@ -1272,6 +1314,22 @@ function validate(state, slots) {
       if (![...retLabels].some((l) => l === `<Subject ${n}>`))
         warn(`<Subject ${n}> has no retention_analysis entry.`);
     }
+    // !Name shorthand: every one used must belong to a named, switched-on subject.
+    const names = subjectNames(state);
+    const r = state.ref;
+    const used = new Set([...[r.summaryText, r.styleLine, r.detail, r.soundscape, r.music,
+      ...liveRet.map((x) => x.note)].join("\n").matchAll(NAME_TOKEN_RE)].map((m) => m[1]));
+    for (const nm of used) {
+      if (!names[nm]) warn(`!${nm} is used, but no switched-on subject definition has the name "${nm}" \u2014 ` +
+        "give a subject that name, or write it out.");
+    }
+    liveDefs.forEach((d) => {
+      const nm = (d.name || "").trim();
+      if (nm && !/^[A-Za-z][\w-]*$/.test(nm))
+        warn(`Subject name "${nm}" can't be used as a !tag \u2014 letters, digits, - and _ only, no spaces.`);
+      else if (nm && !/^<Subject \d+>/.test((d.text || "").trim()))
+        warn(`The name "${nm}" is on a line that doesn't start with <Subject N>, so it isn't used.`);
+    });
     // The guide requires the marker to sit inside the role the definition
     // already states, so a plain contradiction is worth flagging.
     liveRet.forEach((row) => {
@@ -1560,6 +1618,9 @@ const CSS = `
 .mmh3-btn.ghost:hover{color:#e05a5a;}
 .mmh3-defrow{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start;}
 .mmh3-defrow textarea{flex:1;min-height:38px;}
+.mmh3-defname{width:110px;flex:0 0 auto;align-self:flex-start;}
+.mmh3-defname[hidden]{display:none;}
+.mmh3-chipname{color:#a9b2c2;font-size:calc(10px * var(--mmh3-fs, 1));}
 .mmh3-minitags{display:flex;gap:4px;flex-wrap:wrap;margin:-2px 0 8px 2px;min-height:14px;}
 .mmh3-minitag{font-size:calc(10px * var(--mmh3-fs, 1));border-radius:8px;padding:1px 7px;background:#20242d;border:1px solid #363d4a;}
 .mmh3-minitag.pic{color:#e0a94c;border-color:#8a6a2c;}
@@ -4059,7 +4120,7 @@ class Editor {
       const lang = inner.match(LANG_RE);
       const body = lang ? inner.slice(lang[0].length) : inner;
       if (lang) kids.push(el("span", { class: "mmh3-dlang" }, lang[1]));
-      kids.push(el("span", { class: "mmh3-dtext" }, ...deliverySpans(body)));
+      kids.push(el("span", { class: "mmh3-dtext" }, ...deliverySpans(body, subjectNames(this.state))));
       kids.push(el("span", { class: "mmh3-dmark" }, "</d>"));
       return [el("span", { class: "mmh3-dblock" }, ...kids)];
     }
@@ -4068,6 +4129,11 @@ class Editor {
     }
     if (tok.startsWith("(")) {
       return [el("span", { class: "mmh3-reftag spk", dataset: { tag: tok } }, tok)];
+    }
+    if (tok.startsWith("!")) {
+      const known = subjectNames(this.state)[tok.slice(1)];
+      return [el("span", { class: "mmh3-reftag " + (known ? "subj" : "unknown"), dataset: { tag: tok },
+        title: known ? `${known} ${tok.slice(1)} in the prompt` : "No subject has this name" }, tok)];
     }
     let cls;
     if (tok.startsWith("<Subject")) {
@@ -5377,10 +5443,20 @@ class Editor {
     const subjChips = () => {
       const defText = r.subjectDefs.map((d) => d.text).join("\n");
       const ns = [...new Set([...defText.matchAll(/<Subject (\d+)>/g)].map((m) => m[1]))];
-      return ns.map((n) => el("span", {
-        class: "mmh3-chip subj", title: `Insert <Subject ${n}>`,
-        onclick: () => this.insert(`<Subject ${n}>`),
-      }, el("b", {}, `Subject ${n}`)));
+      const names = subjectNames(this.state);
+      const nameOf = (n) => Object.keys(names).find((k) => names[k] === `<Subject ${n}>`);
+      return ns.flatMap((n) => {
+        const nm = nameOf(n);
+        const chips = [el("span", {
+          class: "mmh3-chip subj", title: `Insert <Subject ${n}>`,
+          onclick: () => this.insert(`<Subject ${n}>`),
+        }, el("b", {}, `Subject ${n}`), nm ? el("span", { class: "mmh3-chipname" }, nm) : null)];
+        if (nm) chips.push(el("span", {
+          class: "mmh3-chip subj", title: `Insert !${nm} \u2014 becomes "<Subject ${n}> ${nm}" in the prompt`,
+          onclick: () => this.insert(`!${nm}`),
+        }, el("b", {}, `!${nm}`)));
+        return chips;
+      });
     };
     const subjChipWrap = el("span", { style: { display: "contents" } });
     this._paintSubjChips = () => subjChipWrap.replaceChildren(...subjChips());
@@ -5483,10 +5559,17 @@ class Editor {
         };
         const ta = el("textarea", { rows: 2, value: d.text,
           placeholder: "<Subject 1> is the ... in <Picture 1>, with ...",
-          oninput: (e) => { d.text = e.target.value; d.role = null; paintMini(); } });
+          oninput: (e) => { d.text = e.target.value; d.role = null; paintMini(); nameIn.hidden = !/^\s*<Subject \d+>/.test(d.text); } });
+        // A name rides on a <Subject N> line: the prompt adds "Their name
+        // is X." and !X anywhere else becomes "<Subject N> X".
+        const nameIn = el("input", { class: "mmh3-defname", type: "text", value: d.name || "",
+          placeholder: "name", title: "Optional name for this subject. The prompt adds \u201cTheir name is \u2026\u201d " +
+            "to the line, and typing !Name in any field stands for \u201c<Subject N> Name\u201d.",
+          hidden: !/^\s*<Subject \d+>/.test(d.text || ""),
+          oninput: (e) => { d.name = e.target.value.trim(); this._paintSubjChips?.(); this.updatePreview(); } });
         paintMini();
         const row = el("div", { class: "mmh3-defrow" + (d.off ? " off" : "") },
-          this.rowPower(d, drawDefs), ta,
+          this.rowPower(d, drawDefs), ta, nameIn,
           el("button", { class: "mmh3-btn ghost", title: "Remove line",
             onclick: () => { r.subjectDefs.splice(i, 1); drawDefs(); this.updatePreview(); },
           }, "\u2715"));

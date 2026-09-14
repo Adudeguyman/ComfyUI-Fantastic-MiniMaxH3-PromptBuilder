@@ -371,6 +371,14 @@ The drafted lines are a starting point. Read them over and add the details
 that matter for your shot, like hair, clothing or where the subject
 appears.
 
+**Give the subject a name.** Each `<Subject N>` line has a small name box.
+Type a name there — `Bob` — and the prompt adds *Their name is Bob.* to the
+definition. From then on you can write **`!Bob`** anywhere in the prompt
+instead of `<Subject 1>`: it shows as a green tag in the editor and turns
+into `<Subject 1> Bob` in the prompt (just `Bob` inside a spoken line), so
+every mention restates who it is. A `!Bob` chip appears next to the
+Subject chip to insert it.
+
 The editor warns you if the prompt cites a label that isn't being sent, or
 if a label is sent but never used.
 

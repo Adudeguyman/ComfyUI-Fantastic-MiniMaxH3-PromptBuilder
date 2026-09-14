@@ -782,6 +782,26 @@ Phrases are stored with ComfyUI rather than in the workflow, so they follow the
 install and are shared by every prompt you write. They're plain text — for
 saving a whole prompt, use the [prompt library](#prompt-library) instead.
 
+### Naming a subject
+
+Every `<Subject N>` line has a small **name** box beside it. Give a subject
+a name — say `Bob` — and two things happen:
+
+- The generated prompt adds *Their name is Bob.* to that definition line, so
+  the model ties the name to the label. The line you edit stays as you
+  wrote it.
+- **`!Bob`** works as shorthand in every other field. In the editor it shows
+  as a green subject tag, keeping the text easy to read; in the prompt it
+  becomes `<Subject 1> Bob`, which restates the identity every time the
+  name comes up. Inside a spoken `<d>…</d>` line it becomes just `Bob`, so
+  nobody says a label out loud.
+
+The chip bar shows the name on the subject's chip and adds a `!Bob` chip
+that inserts the shorthand. Names are one word (letters, digits, `-` and
+`_`), matched exactly; a `!Name` nobody is called, or a name on a line that
+is switched off, gets a warning rather than a silent gap in the prompt.
+Names save with the prompt.
+
 ### Switching lines off
 
 Every line in `subject_definitions` and every row in `retention_analysis` has
