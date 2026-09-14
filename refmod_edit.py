@@ -22,7 +22,7 @@ from .refmod_create import (_cover, ensure_min_size, resize_ref, pool_latent, op
                             encode_audio, save_mod, snap_to_causal_grid, parse_sources,
                             load_look, load_voice)
 from .refmods import (resolve_file, _split_pair, _root_of, _contained_target, sanitize_name,
-                      valid_rel, PREVIEW_EXT)
+                      valid_rel, split_member, read_meta, PREVIEW_EXT)
 
 
 def _first_source_px(mod):
@@ -131,6 +131,12 @@ class MiniMaxH3FantasticRefModEdit:
         root = _root_of(path)
         if root is None:
             raise ValueError("That file is outside every RefMod folder.")
+        head, _t = read_meta(stem)
+        if isinstance(head, dict) and head.get("kind") == "bundle":
+            raise ValueError(
+                f"'{split_member(rel)[0]}' is a single-file bundle from ComfyUI-MiniMaxH3Mod. "
+                "It can be used and inspected here, but not edited: save its members as "
+                "standalone files with that pack's Save H3 RefMods node first.")
         mod = load_cached(stem)
         root_dir, base_name = os.path.dirname(stem), os.path.basename(stem)
         pair_base, role = _split_pair(base_name)

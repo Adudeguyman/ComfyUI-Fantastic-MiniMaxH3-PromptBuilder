@@ -1123,6 +1123,9 @@ export function openLibrary(panel, opts = {}) {
     if (it.audio && Number(it.audio.seconds || 0) < 0.5) b.push(el("span", { class: "mmr-b warn",
       title: "This voice is shorter than half a second — effectively silent. Recreate it and check the audio's trim." }, "voice empty"));
     if (it.paired) b.push(el("span", { class: "mmr-b pair" }, "pair"));
+    if (it.bundle) b.push(el("span", { class: "mmr-b pair", title: "A single-file bundle made by ComfyUI-MiniMaxH3Mod. " +
+      "Its first look and first voice are used here; it can be inspected but not edited in this library." },
+      `bundle · ${it.bundle} member${it.bundle === 1 ? "" : "s"}`));
     if (it.visual) b.push(el("span", { class: "mmr-b",
       title: it.visual.mode === "encode"
         ? "Full: keeps the most detail. Heavier to use."
@@ -1209,7 +1212,12 @@ export function openLibrary(panel, opts = {}) {
           if (panel) panel.state.picks.forEach((p) => {
             if (p.name !== it.name) return;
             p.name = target; p.label = newName;
-            for (const k of ["visual", "audio"]) if (p[k] && d.moved[p[k].file]) p[k].file = d.moved[p[k].file];
+            for (const k of ["visual", "audio"]) {
+              if (!p[k]) continue;
+              // a bundle member is "<file>#<index>": the file part moved
+              const [base, idx] = String(p[k].file).split("#");
+              if (d.moved[base]) p[k].file = d.moved[base] + (idx != null ? `#${idx}` : "");
+            }
           });
         }
         say("Saved."); toast(`Saved ${newName}`);
@@ -1272,9 +1280,12 @@ export function openLibrary(panel, opts = {}) {
       el("label", { class: "mmr-inline", title: "Preview at a lower weight: the same softening a weight below 1 applies" },
         "Strength", slider, sval),
       btn, box,
-      el("div", { class: "mmr-iactions" },
-        el("button", { class: "mmr-btn primary", title: "Drop, reorder or add frames and change the voice on the Create tab",
-          onclick: () => startEdit(it) }, "Edit frames & voice…")));
+      it.bundle
+        ? el("div", { class: "mmr-dim mmr-isub" }, "A single-file bundle from ComfyUI-MiniMaxH3Mod: usable and inspectable here, " +
+            "but edit it with that pack (or save its members as standalone files there first).")
+        : el("div", { class: "mmr-iactions" },
+            el("button", { class: "mmr-btn primary", title: "Drop, reorder or add frames and change the voice on the Create tab",
+              onclick: () => startEdit(it) }, "Edit frames & voice…")));
   }
 
   /** Decode a RefMod through the queue. `opts.forEdit` asks for full-strength

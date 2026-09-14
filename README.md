@@ -1315,7 +1315,12 @@ own text encoding.
 
 Files from the H3RefMods fork's older "combined" format keep a voice inside
 the visual file; they load with the visual half only and are marked
-*embedded audio ignored* in the library.
+*embedded audio ignored* in the library. ComfyUI-MiniMaxH3Mod 0.2.6's
+single-file **bundles** (format version 5, several references in one file)
+are listed with a *bundle* badge and addressed as `name#index`; the first
+look and first voice inside become the card's channels. They can be picked,
+inspected, renamed, described and deleted here, but not edited — use that
+pack's Save H3 RefMods node to split one into standalone files first.
 
 ---
 

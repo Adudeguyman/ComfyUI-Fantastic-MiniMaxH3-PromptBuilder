@@ -229,11 +229,25 @@ class H3RefMod:
         return block
 
     @classmethod
-    def load(cls, path_no_ext: str, device: str = "cpu") -> "H3RefMod":
+    def load(cls, path_no_ext: str, device: str = "cpu", member=None) -> "H3RefMod":
         meta, _tensors = read_meta(path_no_ext)
         if not isinstance(meta, dict):
             raise ValueError(f"{path_no_ext}.safetensors has no RefMod metadata.")
-        latent = load_file(path_no_ext + ".safetensors", device=device)["latent"].clone()
+        if meta.get("kind") == "bundle":
+            # ComfyUI-MiniMaxH3Mod's single-file bundle (format 5): members are
+            # ordinary references stored as ref_0, ref_1… with their own
+            # metadata. Read only the one asked for.
+            from .refmods import bundle_members
+            refs = bundle_members(meta)
+            if member is None or not 0 <= member < len(refs):
+                raise ValueError(f"{os.path.basename(path_no_ext)} is a RefMod bundle; "
+                                 "pick one of its members from the library.")
+            from safetensors import safe_open
+            with safe_open(path_no_ext + ".safetensors", framework="pt", device=device) as fh:
+                latent = fh.get_tensor(f"ref_{member}").clone()
+            meta = refs[member]
+        else:
+            latent = load_file(path_no_ext + ".safetensors", device=device)["latent"].clone()
         raw_config = meta.get("refmod_config")
         try:
             config = json.loads(raw_config) if isinstance(raw_config, str) else {}
@@ -280,12 +294,12 @@ def _stamp(path_no_ext):
     return tuple(out)
 
 
-def load_cached(path_no_ext: str) -> H3RefMod:
+def load_cached(path_no_ext: str, member=None) -> H3RefMod:
     """Load once per file version; a rewritten file is picked up by stamp."""
-    key = os.path.normcase(os.path.abspath(path_no_ext))
+    key = os.path.normcase(os.path.abspath(path_no_ext)) + (f"#{member}" if member is not None else "")
     if key in _CACHE and _STAMPS.get(key) == _stamp(path_no_ext):
         return _CACHE[key]
-    mod = H3RefMod.load(path_no_ext, device="cpu")
+    mod = H3RefMod.load(path_no_ext, device="cpu", member=member)
     _CACHE[key] = mod
     _STAMPS[key] = _stamp(path_no_ext)
     while _CACHE and (len(_CACHE) > _CACHE_MAX or sum(

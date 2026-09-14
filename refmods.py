@@ -242,7 +242,28 @@ def scan_library():
             continue
         seen.add(rel)
         meta, tensors = read_meta(os.path.join(root, base))
-        if not meta or meta.get("kind") not in KIND_LABEL:
+        if not meta:
+            continue
+        refs = bundle_members(meta)
+        if refs:
+            # A single-file bundle from ComfyUI-MiniMaxH3Mod 0.2.6+: one card,
+            # its first look and first voice as the channels. Members are
+            # addressed as "<name>#<index>" and never pair with other files.
+            g = groups[(d, rel_dir, base)] = {"root": root, "rel_dir": rel_dir, "base": base,
+                                              "bundle": len(refs)}
+            order.append((d, rel_dir, base))
+            for i, m in enumerate(refs):
+                want = "audio" if m.get("kind") == "audio" else "visual"
+                if want in g:
+                    continue
+                ch = _channel(m, f"{rel}#{i}", {})
+                ch["meta_name"] = str(m.get("name", "") or "")
+                ch["desc"] = str(m.get("description", "") or meta.get("description", "") or "")
+                ch["concept"] = str(m.get("concept_type", "generic") or "generic")
+                ch["member"] = i
+                g[want] = ch
+            continue
+        if meta.get("kind") not in KIND_LABEL:
             continue
         ch = _channel(meta, rel, tensors)
         ch["meta_name"] = str(meta.get("name", "") or "")
@@ -281,11 +302,13 @@ def scan_library():
         for c in (vis, aud):
             if c:
                 try:
-                    mtime = max(mtime, int(os.stat(os.path.join(g["root"], os.path.basename(c["file"]) + ".safetensors")).st_mtime))
+                    fbase = os.path.basename(split_member(c["file"])[0])
+                    mtime = max(mtime, int(os.stat(os.path.join(g["root"], fbase + ".safetensors")).st_mtime))
                 except OSError:
                     pass
         item = {"mtime": mtime,
             "name": name, "label": base, "folder": rel_dir,
+            "bundle": g.get("bundle", 0),
             "desc": first["desc"] or (aud["desc"] if aud else ""),
             "concept": first["concept"],
             "preview": (f"{rel_dir}/{preview}" if rel_dir else preview) if preview else None,
@@ -305,12 +328,33 @@ def scan_library():
     return _SCAN_VAL
 
 
+def split_member(rel):
+    """('hero', 2) for 'hero#2' — a member inside a single-file bundle
+    (ComfyUI-MiniMaxH3Mod's format version 5); ('hero', None) otherwise."""
+    rel = (rel or "").replace("\\", "/")
+    base, sep, idx = rel.rpartition("#")
+    if sep and idx.isdigit() and base:
+        return base, int(idx)
+    return rel, None
+
+
+def bundle_members(meta):
+    """The member metadata list of a bundle header, or [] for a plain file."""
+    if not isinstance(meta, dict) or meta.get("kind") != "bundle":
+        return []
+    refs = meta.get("members")
+    if not isinstance(refs, list) or not refs or len(refs) > 256:
+        return []
+    return [m for m in refs if isinstance(m, dict) and m.get("kind") in KIND_LABEL]
+
+
 def resolve_file(rel, exts):
     """Absolute path of `<rel>.<ext>` inside one of the search dirs, or None.
+    A '#i' member suffix is ignored here: the file is what gets resolved.
 
     Same containment test the pack's loader applies: relative names only,
     realpath inside the root, so a crafted name cannot read outside."""
-    rel = (rel or "").replace("\\", "/")
+    rel, _member = split_member(rel)
     if (not rel or ntpath.splitdrive(rel)[0] or rel.startswith("/")
             or any(p in ("..", "") or p in SKIP_DIRS for p in rel.split("/"))):
         return None
@@ -512,7 +556,7 @@ class MiniMaxH3RefModStack:
                     raise FileNotFoundError(
                         f"RefMod '{file}' was not found under models/refmods. "
                         "Open the library and pick it again.")
-                mod = load_cached(path[:-len(".safetensors")])
+                mod = load_cached(path[:-len(".safetensors")], split_member(file)[1])
                 rows.extend((mod, s) for s in strengths)
                 whole = sum(1 for s in strengths if s >= 1.0)
                 tail = [s for s in strengths if s < 1.0]
@@ -599,7 +643,10 @@ def item_files(files, preview):
         path = resolve_file(rel, (".safetensors",))
         if not path:
             raise FileNotFoundError(f"RefMod '{rel}' not found")
-        stems.append((rel.replace("\\", "/"), path[:-len(".safetensors")]))
+        rel = split_member(rel)[0].replace("\\", "/")
+        if any(p == path[:-len(".safetensors")] for _r, p in stems):
+            continue                       # a bundle's members share one file
+        stems.append((rel, path[:-len(".safetensors")]))
     if not stems:
         raise ValueError("no files named")
     pv = None
@@ -661,6 +708,8 @@ def rewrite_meta(files, **fields):
         for k, v in fields.items():
             if v is not None:
                 meta[k] = v
+                for m in bundle_members(meta):
+                    m[k] = v
         tensors = load_file(path + ".safetensors")
         tensors = {k: v.clone() for k, v in tensors.items()}
         fd, tmp = tempfile.mkstemp(prefix=".refmod-", suffix=".tmp", dir=os.path.dirname(path))

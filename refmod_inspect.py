@@ -20,7 +20,7 @@ import folder_paths
 import comfy.model_management as mm
 
 from .refmod_core import check_bundle, load_cached, _blur_latent
-from .refmods import resolve_file
+from .refmods import resolve_file, split_member
 
 SUBFOLDER = "minimax_h3_inspect"
 MAX_FRAMES = 48
@@ -118,7 +118,7 @@ class MiniMaxH3FantasticRefModInspect:
             path = resolve_file(file.strip(), (".safetensors",))
             if not path:
                 raise FileNotFoundError(f"RefMod '{file}' was not found under models/refmods.")
-            mod = load_cached(path[:-len(".safetensors")])
+            mod = load_cached(path[:-len(".safetensors")], split_member(file.strip())[1])
             where = file.strip()
         else:
             rows = check_bundle(mods, "RefMod Inspect")
