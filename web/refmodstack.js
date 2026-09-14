@@ -715,6 +715,10 @@ function loadSettings() {
     subfolder: "", write_preview: true, videoVae: "", audioVae: "", combine: true };
   let st = d;
   try { st = { ...d, ...(JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}")) }; } catch (e) { st = d; }
+  // Settings saved by 1.7.0 carry its Clip frames default of 16, which on
+  // H3's real frame grid is cut to 5 and stores only 2 frames. Move that one
+  // value to the new default once; a number the user chose is left alone.
+  if (!(st.v >= 2)) { if (st.latent_frames === 16) st.latent_frames = 22; st.v = 2; }
   for (const k of Object.keys(SETTING_RANGES)) st[k] = clampSetting(k, st[k], d[k]);
   return st;
 }
