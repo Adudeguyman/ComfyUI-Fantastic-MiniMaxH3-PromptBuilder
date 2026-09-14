@@ -1618,8 +1618,9 @@ const CSS = `
 .mmh3-btn.ghost:hover{color:#e05a5a;}
 .mmh3-defrow{display:flex;gap:6px;margin-bottom:6px;align-items:flex-start;}
 .mmh3-defrow textarea{flex:1;min-height:38px;}
-.mmh3-defname{width:110px;flex:0 0 auto;align-self:flex-start;}
-.mmh3-defname[hidden]{display:none;}
+.mmh3-form .mmh3-defrow textarea{flex:1 1 auto;min-width:0;}
+.mmh3-form .mmh3-defrow input[type=text].mmh3-defname{width:110px;flex:0 0 110px;min-width:0;align-self:flex-start;}
+.mmh3-form .mmh3-defrow input[type=text].mmh3-defname[hidden]{display:none;}
 .mmh3-chipname{color:#a9b2c2;font-size:calc(10px * var(--mmh3-fs, 1));}
 .mmh3-minitags{display:flex;gap:4px;flex-wrap:wrap;margin:-2px 0 8px 2px;min-height:14px;}
 .mmh3-minitag{font-size:calc(10px * var(--mmh3-fs, 1));border-radius:8px;padding:1px 7px;background:#20242d;border:1px solid #363d4a;}
