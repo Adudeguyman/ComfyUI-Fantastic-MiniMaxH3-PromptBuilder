@@ -350,7 +350,6 @@ def _refmod_preset_path(name):
 def _clean_picks(picks):
     """The parts of a RefMod stack a preset keeps: what the Prompt Builder
     and the stack node read. Previews and ids are re-derived on load."""
-    from . import refmods
     out = []
     for p in picks if isinstance(picks, list) else []:
         if not isinstance(p, dict):

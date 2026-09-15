@@ -50,7 +50,7 @@ Every GET only reads:
 | `/minimax_h3/capabilities` | reports which decoders are available |
 | `/minimax_h3/refmods` | scans the RefMod folders' file headers (`refmods.scan_library`) |
 | `/minimax_h3/refmods/preview` | serves the image beside a RefMod — only a name that `refmods.resolve_file` resolves inside a RefMod root, and only with a `.png/.jpg/.jpeg/.webp` extension |
-| `/minimax_h3/presets`, `/prompts`, `/phrases`, `/drafts` | list or count saved JSON |
+| `/minimax_h3/presets`, `/refmod_presets`, `/prompts`, `/phrases`, `/drafts` | list or count saved JSON |
 
 No GET creates a directory, writes, deletes or loads a model.
 
@@ -67,7 +67,7 @@ name is first reduced to a safe character set (`sanitize_name`, `_slug`,
 |---|---|---|
 | Uploaded media (`/minimax_h3/upload`) | `input/minimax_h3/` | basename only via `_safe()`, extension allow-list (`IMAGE_EXT`/`VIDEO_EXT`/`AUDIO_EXT`), unique name, written to a temp name then `os.replace` |
 | Media file names carried in the Media Loader's `media_state` widget, preset files, and every route that reads media | ComfyUI's input, output and temp directories | `media_io.resolve()` — core's `get_annotated_filepath` plus an independent realpath prefix check; raises, no fallback join |
-| Prompt library, presets, phrases, drafts | the pack's own folders under the user directory | `_slug()`/`_preset_path()` reduce names to one safe path component; `_contained()` re-checks the realpath beside each write and delete |
+| Prompt library, presets, RefMod presets, phrases, drafts | the pack's own folders under the user directory | `_slug()`/`_preset_path()`/`_refmod_preset_path()` reduce names to one safe path component; `_contained()` re-checks the realpath beside each write and delete. A RefMod preset stores only file names, weights and switches; loading one resolves each name through `refmods.resolve_file()` and reports what is missing rather than failing |
 | Output folder picker (`/minimax_h3/mkdir`) | ComfyUI's output directory | realpath + prefix check, refused when outside |
 | `filename_prefix` widget on the Filename Prefix node | ComfyUI's output directory | `_contain_prefix()` in `nodes.py`: `..` segments raise, drive letters and UNC prefixes are stripped, realpath + commonpath; core's save nodes check again |
 | RefMod file names — the Stack's `stack_state` widget, the Inspect/Edit `file` widgets, the library routes | the registered `refmods` folders (`models/refmods` and `extra_model_paths.yaml` entries) | `refmods.resolve_file()`: relative names only, no `..` segment, realpath + commonpath per root, and only the requested extension |

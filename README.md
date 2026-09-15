@@ -50,6 +50,22 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.7.3
+
+- **A new RefMod Stack node.** Twelve fixed slots that never resize the
+  node, a slider per channel labelled with its tag, a position badge on
+  each card, and ⤢ Size for node and text scale. Colours match the Media
+  Loader.
+- **RefMod presets.** Save a stack with its weights and load it into any
+  stack node. A prompt in the library can be linked to one.
+- **Chain stacks.** Wire stacks together and each one shows where it sits
+  in the chain and which labels come from the stacks before it.
+- **Right-click a tag** to swap in another picture, subject, name or
+  speaker, swap two of them, or remove it — in one place, one field, or
+  everywhere.
+- **Tab to fill names.** Start typing `!cas` and press Tab for
+  `!castle_with_moat`.
+
 ## What's new in 1.7.2
 
 - **Name your subjects.** Each `<Subject N>` line has a name box, and
@@ -497,6 +513,20 @@ prompt live as you type.
 formatted cut times, writes camera moves as proper sentences, wraps dialogue
 with the right language tags and speaker IDs, and drops in reference tags.
 
+**Right-click a tag** — a `<Picture 2>`, `<Subject 1>`, `!Ann` or `(S1)` — to put
+another of the same kind in its place, swap the two, or remove it. **This
+tag**, **Field** and **Everywhere** set how far the change reaches, and each
+shows how many copies it would change. Tags nothing in the prompt cites yet
+are listed first, marked *unused*. Removing a subject or media tag
+everywhere also deletes the definition line and retention row for it.
+Speaker IDs work inside group tags too: swapping S1 and S2 everywhere turns
+`(S1,S2)` into `(S2,S1)`, and the next unused ID is offered as *new*. A
+line inserted with a speaker button's voice option moves as a whole: give it
+another speaker and its name and voice clause become theirs, and removing
+the ID drops the voice clause but keeps the name. Swapping IDs everywhere
+only renumbers, so every line keeps its speaker.
+This tag and Field can be undone with Ctrl+Z.
+
 **Things it checks:** shots numbered in order, cut times increasing and inside
 your video's length, `[Shot 1]` not carrying a timestamp, dialogue tags balanced
 and labelled, references you connected but never mentioned, and — in reference
@@ -818,7 +848,9 @@ a name — say `Bob` — and two things happen:
 The chip bar shows the name on the subject's chip and adds a `!Bob` chip
 that inserts the shorthand. Names are one word (letters, digits, `-` and
 `_`); `!bob`, `!Bob` and `!BOB` all work and the prompt uses the spelling
-you gave the subject. Hover a `!Bob` tag and you get the same pop-up card as
+you gave the subject. Start typing one, like `!cas` for `castle_with_moat`,
+and the rest appears in grey after the cursor: press **Tab** to fill it in,
+or Escape to dismiss it. Hover a `!Bob` tag and you get the same pop-up card as
 the subject itself — its picture and what it cites. A `!Name` nobody is
 called, or a name on a line that is switched off, gets a warning rather
 than a silent gap in the prompt. Names save with the prompt.

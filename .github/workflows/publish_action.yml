@@ -16,7 +16,7 @@ jobs:
     # before the version-bump push, since registry versions are immutable.
     env:
       COMFY_NODE_CHANGELOG: |
-        Name your subjects with a name box and !Name shorthand. RefMods can store a subject name, appearance and voice description, and Draft from RefMods writes them into the prompt. Voice lines get a voice box, and speaker buttons can insert a line that names the voice. Draft from RefMods can start over or fill missing names and voices when everything is already drafted. The built-in Guide adds parts on using the Prompt Builder and RefMods.
+        A new RefMod Stack node with twelve fixed slots, per-channel sliders labelled with their tags, position badges and a Size control; it never resizes on its own. RefMod presets save a stack with its weights, and prompts can link to them. Chained stacks show their position and upstream labels. Right-click any tag, name or speaker ID to replace, swap or remove it in one place, one field or everywhere. Start typing a subject name and press Tab to fill it in.
     steps:
       - name: Check out code
         uses: actions/checkout@v4

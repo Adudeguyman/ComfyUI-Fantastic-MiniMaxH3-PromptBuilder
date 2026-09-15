@@ -139,6 +139,138 @@ function voiceBinding(text) {
   return { audio: `<Audio ${a[1]}>`, subj: subj ? subj[0] : null, sx: s[1] };
 }
 
+/* Right-click a tag: the tags a text holds, and how to rewrite them. */
+
+/** Reference tags, !Name shorthand and speaker IDs in a text, in order. */
+function tagTokens(text) {
+  const t = String(text || ""), out = [];
+  for (const m of t.matchAll(/<(?:Subject|Picture|Video|Audio) \d+>/g))
+    out.push({ tok: m[0], start: m.index, end: m.index + m[0].length });
+  for (const m of t.matchAll(NAME_TOKEN_RE))
+    out.push({ tok: m[0], start: m.index, end: m.index + m[0].length });
+  for (const m of t.matchAll(/\(S\d+(?:\s*,\s*S\d+)*\)/g))
+    out.push({ tok: m[0], start: m.index, end: m.index + m[0].length });
+  return out.sort((a, b) => a.start - b.start);
+}
+const isSpk = (tok) => tok.startsWith("(");
+const spkIds = (tok) => tok.match(/S\d+/g) || [];
+/** "(S2,S1)" from ids, in number order; "" when none are left. */
+const spkTok = (ids) => {
+  const sorted = [...new Set(ids)].sort((a, b) => +a.slice(1) - +b.slice(1));
+  return sorted.length ? `(${sorted.join(",")})` : "";
+};
+/** Same tag: exact for labels, any case for names (!ann is !Ann), the same
+ *  IDs for speakers whatever the spacing. */
+const sameTok = (a, b) => {
+  if (isSpk(a) || isSpk(b)) return isSpk(a) && isSpk(b) && spkTok(spkIds(a)) === spkTok(spkIds(b));
+  return (a.startsWith("<") || b.startsWith("<")) ? a === b : a.toLowerCase() === b.toLowerCase();
+};
+/** Copies of a tag. A single speaker ID also counts inside group tags. */
+const countTok = (text, tok) => {
+  if (isSpk(tok) && spkIds(tok).length === 1)
+    return tagTokens(text).filter((t) => isSpk(t.tok) && spkIds(t.tok).includes(spkIds(tok)[0])).length;
+  return tagTokens(text).filter((t) => sameTok(t.tok, tok)).length;
+};
+const tagClass = (tok) => (tok.startsWith("<") ? tok.match(/^<(\w+)/)[1] : isSpk(tok) ? "Speaker" : "Name");
+const TAG_CLASS_LABEL = { Picture: "picture", Video: "video", Audio: "audio", Subject: "subject",
+  Name: "subject name", Speaker: "speaker ID" };
+
+/** Close the gaps removed tags leave behind. "!" is left alone: it starts
+ *  a name, and pulling it onto the previous word would break the name. */
+const tidyGaps = (t) => t.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([,.;:?)])/g, "$1")
+  .replace(/\(\s*\)/g, "").replace(/^[ \t]+|[ \t]+$/gm, "");
+
+/** Replace every copy of tok with target (remove it when target is null).
+ *  With swap, copies of target become `back` (tok as the prompt spells it). */
+function rewriteTokens(text, tok, target, swap, back = tok, ctx = null) {
+  let out = "", last = 0;
+  // One speaker ID is rewritten wherever it appears, group tags included:
+  // swapping S1 and S2 turns "(S1,S2)" into "(S2,S1)", removing S2 leaves "(S1)".
+  const byId = isSpk(tok) && spkIds(tok).length === 1 && (target == null || (isSpk(target) && spkIds(target).length === 1));
+  const from = byId ? spkIds(tok)[0] : null, to = byId && target != null ? spkIds(target)[0] : null;
+  if (byId && ctx) {
+    // A line from a speaker button — "!Ann (S1), in the low voice referenced
+    // from <Audio 1>, says:" — belongs to its speaker as a whole. When the ID
+    // changes hands, the name and voice clause follow the new speaker's voice
+    // line; removing the ID drops the clause and keeps the name. Only wording
+    // that matches the old speaker's voice line is touched.
+    const P = reEsc(ctx.prefix);
+    const re = new RegExp(`(?:${P}([A-Za-z][\\w-]*) )?\\((S\\d+)\\)(, in the [^<\\n]+? referenced from (<Audio \\d+>),)?`, "g");
+    text = text.replace(re, (m, name, id, clause, audio) => {
+      const Y = id === from ? to : (swap && id === to ? from : undefined);
+      if (Y === undefined) return m;
+      const bx = ctx.bindings[id] || null, by = Y ? ctx.bindings[Y] || null : null;
+      let who = name ? `${ctx.prefix}${name} ` : "";
+      if (Y && name && bx?.name && name.toLowerCase() === bx.name.toLowerCase())
+        who = by?.name ? `${ctx.prefix}${by.name} ` : "";
+      let how = clause || "";
+      if (clause && bx?.audio && audio === bx.audio)
+        how = Y && by?.voice && by?.audio ? `, in the ${noArticle(by.voice)} referenced from ${by.audio},` : "";
+      return who + (Y ? `(${Y})` : "") + how;
+    });
+  }
+  for (const t of tagTokens(text)) {
+    let rep = null;
+    if (byId && isSpk(t.tok)) {
+      const ids = spkIds(t.tok);
+      if (ctx && ids.length === 1) continue;           // handled with its line above
+      if (!ids.includes(from) && !(swap && to && ids.includes(to))) continue;
+      rep = spkTok(ids.map((id) => id === from ? to : (swap && id === to ? from : id)).filter(Boolean));
+    } else if (sameTok(t.tok, tok)) rep = target ?? "";
+    else if (swap && target != null && sameTok(t.tok, target)) rep = back;
+    if (rep === null) continue;
+    out += text.slice(last, t.start) + rep;
+    last = t.end;
+  }
+  out += text.slice(last);
+  return target == null ? tidyGaps(out) : out;
+}
+
+/** A single removed tag takes one neighbouring space with it. */
+function tidyRange(text, start, end) {
+  const before = text[start - 1], after = text[end];
+  if (before === " " && (after === undefined || after === " " || after === "\n" || /[,.;:?)]/.test(after)))
+    return { start: start - 1, end };
+  if (after === " " && (start === 0 || before === "\n" || before === "("))
+    return { start, end: end + 1 };
+  return { start, end };
+}
+
+/** Show a name suggestion in a chip field's mirror, at a text offset. A
+ *  partly typed !name is painted as its own chip, so the suggestion goes
+ *  after that chip rather than inside it. */
+function insertGhost(root, pos, text) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let seen = 0, node;
+  while ((node = walker.nextNode())) {
+    const len = node.nodeValue.length;
+    if (seen + len >= pos) {
+      const off = pos - seen;
+      const ghost = el("span", { class: "mmh3-ghost" }, text);
+      const parent = node.parentNode;
+      if (off === len && parent !== root && parent.classList?.contains("mmh3-reftag")) { parent.after(ghost); return; }
+      parent.insertBefore(ghost, node.splitText(off));
+      return;
+    }
+    seen += len;
+  }
+}
+
+/** Edit a field through the browser so Ctrl+Z undoes it, falling back to
+ *  setting the value. Either way the field's own input handler runs. */
+function editField(box, start, end, text) {
+  const v = box.value, want = v.slice(0, start) + text + v.slice(end);
+  box.focus();
+  box.setSelectionRange(start, end);
+  let ok = false;
+  try { ok = document.execCommand(text ? "insertText" : "delete", false, text); } catch (e) { ok = false; }
+  if (!ok || box.value !== want) {
+    box.value = want;
+    box.setSelectionRange(start + text.length, start + text.length);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+}
+
 /** Turn every !Name into "<Subject N> Name" — or just "Name" inside a
  *  spoken <d> line, where a label would be read aloud. The name is written
  *  as it was defined, whatever case was typed. Unknown names are left as
@@ -1605,6 +1737,36 @@ const CSS = `
 .mmh3-ctxitem{padding:7px 10px;border-radius:6px;font-size:calc(12px * var(--mmh3-fs, 1));color:#d7dbe2;
   cursor:pointer;white-space:nowrap;}
 .mmh3-ctxitem:hover{background:#2a313d;}
+.mmh3-tagpick{position:absolute;z-index:10006;width:350px;background:#1b1f27;border:1px solid #3a4252;border-radius:9px;
+  padding:9px;box-shadow:0 12px 32px rgba(0,0,0,.5);color:#d7dbe2;font-size:calc(12px * var(--mmh3-fs, 1));}
+.mmh3-tagpickhead{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.mmh3-tagpicktag{font-family:ui-monospace,monospace;font-size:calc(12px * var(--mmh3-fs, 1));}
+.mmh3-tagpickgrow{flex:1;}
+.mmh3-tagpickrow{display:flex;align-items:center;gap:6px;margin-bottom:7px;}
+.mmh3-tagpicklbl{width:56px;flex:0 0 auto;color:#8a93a3;font-size:calc(10.5px * var(--mmh3-fs, 1));}
+.mmh3-tagseg{display:inline-flex;border:1px solid #3a4252;border-radius:6px;overflow:hidden;}
+.mmh3-tagseg button{background:#12151b;border:0;border-right:1px solid #3a4252;color:#8a93a3;padding:3px 8px;
+  font-size:calc(11px * var(--mmh3-fs, 1));cursor:pointer;font-family:inherit;}
+.mmh3-tagseg button:last-child{border-right:0;}
+.mmh3-tagseg button.on{background:#2b3140;color:#d7dbe2;}
+.mmh3-tagseg button:disabled{opacity:.4;cursor:default;}
+.mmh3-tagpickgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:8px;
+  max-height:250px;overflow:auto;}
+.mmh3-tagpickopt{display:flex;flex-direction:column;gap:3px;min-width:0;text-align:left;background:#12151b;
+  border:1px solid #2e3440;border-radius:7px;padding:5px;cursor:pointer;color:#d7dbe2;font-family:inherit;}
+.mmh3-tagpickopt:hover{border-color:#6f86b8;background:#1b2230;}
+.mmh3-tagpickthumb{position:relative;height:48px;border-radius:5px;overflow:hidden;background:#0d1015;display:flex;align-items:center;
+  justify-content:center;color:#6b7484;font-weight:600;font-size:calc(11px * var(--mmh3-fs, 1));}
+.mmh3-tagpickthumb .mmh3-thumb{width:100%;height:100%;object-fit:cover;display:block;border-radius:0;}
+.mmh3-tagpicknm{font-family:ui-monospace,monospace;font-size:calc(10.5px * var(--mmh3-fs, 1));white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;}
+.mmh3-tagpickun{position:absolute;left:3px;top:3px;padding:0 4px;border-radius:4px;background:rgba(18,21,27,.85);
+  border:1px solid rgba(224,169,76,.55);color:#e0a94c;font-family:system-ui,sans-serif;font-weight:500;
+  font-size:calc(9px * var(--mmh3-fs, 1));line-height:1.4;}
+.mmh3-tagpicksub{color:#6b7484;font-size:calc(10px * var(--mmh3-fs, 1));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mmh3-tagpickfoot{display:flex;align-items:center;gap:8px;border-top:1px solid #2a2f3a;padding-top:8px;}
+.mmh3-tagpicknote{color:#8a93a3;font-size:calc(10.5px * var(--mmh3-fs, 1));}
+.mmh3-tagpicknone{color:#8a93a3;padding:4px 2px 10px;font-size:calc(11px * var(--mmh3-fs, 1));}
 .mmh3-phraseover{z-index:10004;display:flex;align-items:center;
   justify-content:center;}
 .mmh3-phrasemodal{width:min(520px,92vw);background:#191c22;
@@ -1833,6 +1995,8 @@ const CSS = `
 .mmh3-chipwrap.plain textarea.mmh3-chiptext::selection{
   background:rgba(96,140,210,.45);color:#fff;}
 .mmh3-chipwrap.plain .mmh3-chipmirror{color:transparent;}
+/* A name suggestion after the caret: grey in both modes, Tab fills it in. */
+.mmh3-chipmirror .mmh3-ghost,.mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-ghost{color:#6b7484;}
 .mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-reftag,
 .mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-dblock,
 .mmh3-chipwrap.plain .mmh3-chipmirror .mmh3-dmark,
@@ -3020,6 +3184,14 @@ class Editor {
       if (!box || typeof box.value !== "string") return;
       const a = box.selectionStart ?? 0;
       const b = box.selectionEnd ?? 0;
+      // On a tag: replace, swap or remove it. A selection reaching beyond
+      // that one tag keeps the phrase menu.
+      const hit = this.tagUnderPointer(e, box);
+      if (hit && (b <= a || (a >= hit.start && b <= hit.end))) {
+        e.preventDefault();
+        this.openTagMenu(e.clientX, e.clientY, box, hit);
+        return;
+      }
       if (b <= a) return;                       // no selection: native menu
       e.preventDefault();
       this.openCtx(e.clientX, e.clientY, box.value.slice(a, b));
@@ -3052,6 +3224,7 @@ class Editor {
       // A window opened from here owns Escape: the Media Loader, the RefMod
       // Stack or library, or a crop editor.
       if (document.querySelector(".mml-overlay, .mmr-overlay, .mml-tmover")) return;
+      if (this._tagMenu) { this.closeTagMenu(); return; }
       // A strip is already asking a question; Escape shouldn't answer it.
       if (this.closePending || this.clearPending || this.linkOffer) return;
       this.requestClose();
@@ -4309,6 +4482,10 @@ class Editor {
       // The trailing newline keeps the mirror's last line height in step with
       // the textarea's when the text ends mid-line.
       mirror.append(document.createTextNode(text.slice(last) + "\n"));
+      // Typing a subject's name: the rest of it, greyed after the caret.
+      const g = box._ghost = this.nameSuggestion(box);
+      box._ghostKey = g ? `${g.pos}|${g.name}` : "";
+      if (g) insertGhost(mirror, g.pos, g.name.slice(g.typed));
       syncBox();
     };
 
@@ -4329,8 +4506,30 @@ class Editor {
       mirror.scrollLeft = box.scrollLeft;
     };
 
+    box.addEventListener("input", () => { box._ghostOff = false; });
     box.addEventListener("input", paint);
     box.addEventListener("scroll", syncBox);
+    // The suggestion follows the caret, and Tab takes it.
+    const caretMoved = () => {
+      const g = this.nameSuggestion(box);
+      if ((g ? `${g.pos}|${g.name}` : "") !== (box._ghostKey || "")) paint();
+    };
+    ["keyup", "click", "focus"].forEach((ev) => box.addEventListener(ev, caretMoved));
+    box.addEventListener("blur", () => { if (box._ghostKey) paint(); });
+    box.addEventListener("keydown", (e) => {
+      const g = box._ghost;
+      if (!g) return;
+      if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        editField(box, g.pos - g.typed, g.pos, g.name);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();            // hides the suggestion, not the editor
+        box._ghostOff = true;
+        paint();
+      }
+    });
     // Dragging the resize grip can add or remove the scrollbar.
     if (typeof ResizeObserver === "function") {
       new ResizeObserver(syncBox).observe(box);
@@ -4344,6 +4543,24 @@ class Editor {
     this._chipFields.push(paint);
     paint();
     return wrap;
+  }
+
+  /** A subject name to finish: the caret sits right after "!cas" and a
+   *  switched-on subject is named castle_with_moat. First match
+   *  alphabetically when several start the same way. */
+  nameSuggestion(box) {
+    if (box._ghostOff || document.activeElement !== box) return null;
+    const pos = box.selectionStart;
+    if (pos == null || pos !== box.selectionEnd) return null;
+    const v = box.value || "";
+    if (/[\w-]/.test(v[pos] || "")) return null;          // mid-word: nothing to finish
+    const m = v.slice(0, pos).match(new RegExp(`(?:^|[^\\w])${reEsc(NAME_PREFIX)}([A-Za-z][\\w-]*)$`));
+    if (!m) return null;
+    const typed = m[1], low = typed.toLowerCase();
+    const hits = Object.values(subjectNames(this.state)).map((n) => n.name)
+      .filter((n) => n.length > typed.length && n.toLowerCase().startsWith(low))
+      .sort((a, b) => a.localeCompare(b));
+    return hits.length ? { pos, typed: typed.length, name: hits[0] } : null;
   }
 
   /** Render one matched token as the spans the mirror shows. */
@@ -5519,6 +5736,286 @@ class Editor {
     }
   }
 
+  /* --- right-click a tag: replace, swap or remove ------------------- */
+
+  /** Reference mode: each voice-timbre line ties a speaker ID to its
+   *  subject, that subject's name, the audio tag and, when filled in, a
+   *  description of the voice. { S1: { audio, subj, sx, name, voice } } */
+  speakerBindings() {
+    const binds = {};
+    if (this.state.mode !== "REF") return binds;
+    const names = subjectNames(this.state);
+    for (const d of this.state.ref?.subjectDefs || []) {
+      const b = !d.off && voiceBinding(d.text);
+      if (!b || binds[b.sx]) continue;
+      const named = b.subj ? Object.values(names).find((n) => n.tag === b.subj) : null;
+      binds[b.sx] = { ...b, name: named ? named.name : "", voice: oneLine(d.voice) };
+    }
+    return binds;
+  }
+
+  /** Every string in this mode's prompt a tag can sit in. */
+  tagTexts() {
+    const st = this.state, out = [];
+    const add = (obj, key, where = "") => { if (obj && typeof obj[key] === "string") out.push({ obj, key, where }); };
+    if (st.mode === "REF") {
+      const r = st.ref;
+      (r.subjectDefs || []).forEach((d) => add(d, "text", "def"));
+      ["summaryText", "styleLine", "detail", "soundscape", "music"].forEach((k) => add(r, k));
+      (r.retention || []).forEach((row) => { add(row, "label", "label"); add(row, "context"); add(row, "note"); });
+    } else {
+      ["imd", "soundscape", "music"].forEach((k) => add(st, k));
+    }
+    return out;
+  }
+
+  /** The tag under a right-click: read off the painted chips where the
+   *  field has them, else from where the click put the caret. */
+  tagUnderPointer(e, box) {
+    const toks = tagTokens(box.value);
+    if (!toks.length) return null;
+    const mirror = box.closest(".mmh3-chipwrap")?.querySelector(".mmh3-chipmirror");
+    if (mirror) {
+      const chips = [...mirror.querySelectorAll(".mmh3-reftag[data-tag]")];
+      const hit = chips.find((c) => {
+        const r = c.getBoundingClientRect();
+        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      });
+      if (!hit) return null;
+      const same = toks.filter((t) => sameTok(t.tok, hit.dataset.tag));
+      const k = chips.filter((c) => sameTok(c.dataset.tag, hit.dataset.tag)).indexOf(hit);
+      return same[Math.max(0, Math.min(k, same.length - 1))] || null;
+    }
+    const a = box.selectionStart ?? -1, b = box.selectionEnd ?? a;
+    if (a < 0) return null;
+    return toks.find((t) => a >= t.start && a <= t.end && b <= t.end) || null;
+  }
+
+  /** Nothing in the prompt cites it. A subject's own definition line and a
+   *  retention label don't count as citing it. */
+  tagUnused(tok, texts = this.tagTexts()) {
+    for (const t of texts) {
+      if (t.where === "label" || (isSpk(tok) && t.where === "def")) continue;
+      const v = t.obj[t.key] || "";
+      let n = countTok(v, tok);
+      if (t.where === "def" && tok.startsWith("<Subject") && v.trim().startsWith(tok)) n -= 1;
+      if (n > 0) return false;
+    }
+    return true;
+  }
+
+  /** Other tags of the same kind, unused ones first. */
+  tagChoices(tok) {
+    const cls = tagClass(tok), texts = this.tagTexts(), list = [];
+    if (cls === "Name") {
+      for (const n of Object.values(subjectNames(this.state)))
+        list.push({ tok: NAME_PREFIX + n.name, sub: n.tag, slot: this.subjectInfo(n.tag)?.slot || null, initial: n.name[0] });
+    } else if (cls === "Subject") {
+      const seen = new Set();
+      for (const d of this.state.ref?.subjectDefs || []) {
+        const m = (d.text || "").match(/^\s*(<Subject \d+>)/);
+        if (!m || seen.has(m[1])) continue;
+        seen.add(m[1]);
+        const nm = (d.name || "").trim();
+        list.push({ tok: m[1], sub: nm || "no name", slot: this.subjectInfo(m[1])?.slot || null, initial: nm ? nm[0] : "S" });
+      }
+    } else if (cls === "Speaker") {
+      // Voice lines say who each speaker is; group tags only offer groups.
+      const single = spkIds(tok).length === 1, bindings = {}, names = subjectNames(this.state);
+      for (const d of this.state.ref?.subjectDefs || []) {
+        const b = !d.off && voiceBinding(d.text);
+        if (b && !bindings[b.sx]) bindings[b.sx] = b;
+      }
+      const seen = new Map();
+      for (const t of texts) for (const k of tagTokens(t.obj[t.key] || "")) {
+        if (!isSpk(k.tok)) continue;
+        const ids = spkIds(k.tok);
+        if (single && ids.length !== 1) continue;
+        if (!seen.has(spkTok(ids))) seen.set(spkTok(ids), ids);
+      }
+      if (single) Object.keys(bindings).forEach((sx) => { if (!seen.has(`(${sx})`)) seen.set(`(${sx})`, [sx]); });
+      for (const [norm, ids] of seen) {
+        const b = ids.length === 1 ? bindings[ids[0]] : null;
+        const named = b?.subj ? Object.values(names).find((n) => n.tag === b.subj) : null;
+        list.push({ tok: norm, sub: ids.length > 1 ? "speaking together" : (named ? named.name : b?.subj || "no voice line"),
+          slot: b?.subj ? this.subjectInfo(b.subj)?.slot || null : null, initial: ids.join("+") });
+      }
+      if (single) {
+        const used = new Set([...seen.values()].flat());
+        let i = 1;
+        while (used.has(`S${i}`)) i++;
+        list.push({ tok: `(S${i})`, sub: "new speaker", slot: null, initial: `S${i}`, fresh: true });
+      }
+    } else {
+      for (const s of this.slots || []) {
+        if (!s.tag || !s.tag.startsWith(`<${cls} `)) continue;
+        const src = s.refmod?.name || String(s.source || "").split("•").pop().trim() || s.note || "";
+        list.push({ tok: s.tag, sub: src, slot: s, initial: cls.slice(0, 3).toUpperCase() });
+      }
+    }
+    return list.filter((o) => !sameTok(o.tok, tok))
+      .map((o) => ({ ...o, unused: !o.fresh && this.tagUnused(o.tok, texts) }))
+      .sort((a, b) => b.unused - a.unused);
+  }
+
+  /** Carry out a choice from the tag menu; returns what happened. */
+  applyTagEdit(box, hit, scope, mode, target) {
+    const tok = hit.tok;
+    const swap = mode === "swap" && target != null && scope !== "this";
+    const named = tagClass(tok) === "Name" ? lookupName(subjectNames(this.state), tok.slice(1)) : null;
+    const back = named ? NAME_PREFIX + named.name : isSpk(tok) ? spkTok(spkIds(tok)) : tok;
+    const verb = target == null ? "Removed" : swap ? "Swapped" : "Replaced";
+    const what = target == null ? back : swap ? `${back} and ${target}` : `${back} with ${target}`;
+    // A speaker's name and voice clause go with its ID — except when swapping
+    // IDs everywhere, which renumbers the voice lines too and changes nobody.
+    const oneSpk = isSpk(tok) && spkIds(tok).length === 1 && (target == null || spkIds(target).length === 1);
+    const ctx = oneSpk && !(scope === "all" && swap) ? { bindings: this.speakerBindings(), prefix: NAME_PREFIX } : null;
+    if (scope === "this") {
+      if (ctx) {
+        const v = box.value;
+        let s0 = hit.start, e0 = hit.end;
+        const pre = v.slice(0, s0).match(new RegExp(`${reEsc(NAME_PREFIX)}[A-Za-z][\\w-]* $`));
+        if (pre) s0 -= pre[0].length;
+        const post = v.slice(e0).match(/^, in the [^<\n]+? referenced from <Audio \d+>,/);
+        if (post) e0 += post[0].length;
+        const text = rewriteTokens(v.slice(s0, e0), tok, target, false, back, ctx);
+        const r = text === "" ? tidyRange(v, s0, e0) : { start: s0, end: e0 };
+        editField(box, r.start, r.end, text);
+      } else {
+        const r = target == null ? tidyRange(box.value, hit.start, hit.end) : hit;
+        editField(box, r.start, r.end, target ?? "");
+      }
+      this.lastFocus = box;
+      return `${verb} ${what}`;
+    }
+    if (scope === "field") {
+      const v = box.value, n = countTok(v, tok) + (swap ? countTok(v, target) : 0);
+      editField(box, 0, v.length, rewriteTokens(v, tok, target, swap, back, ctx));
+      this.lastFocus = box;
+      return `${verb} ${what} in this field (${n})`;
+    }
+    let n = 0, dropped = 0;
+    const r = this.state.ref;
+    if (target == null && tok.startsWith("<") && this.state.mode === "REF") {
+      // Removing a label everywhere takes the lines that define it too, or
+      // they'd be left reading "is the man in…".
+      const before = r.subjectDefs.length + r.retention.length;
+      r.subjectDefs = r.subjectDefs.filter((d) => !(d.text || "").trim().startsWith(tok));
+      r.retention = r.retention.filter((row) => row.label !== tok);
+      dropped = before - r.subjectDefs.length - r.retention.length;
+    }
+    for (const t of this.tagTexts()) {
+      const v = t.obj[t.key] || "";
+      const c = countTok(v, tok) + (swap ? countTok(v, target) : 0);
+      if (!c) continue;
+      n += c;
+      t.obj[t.key] = rewriteTokens(v, tok, target, swap, back, ctx);
+    }
+    this.render();
+    return `${verb} ${what} everywhere (${n})` +
+      (dropped ? ` and deleted ${dropped} line${dropped === 1 ? "" : "s"} defining it` : "");
+  }
+
+  /** The tag menu: other tags of the same kind to put in its place, how
+   *  far the change reaches, and Remove. */
+  openTagMenu(x, y, box, hit) {
+    this.closeTagMenu();
+    this.chipLeave();
+    this.closeCtx();
+    const tok = hit.tok, cls = tagClass(tok);
+    const st = { scope: "this", mode: "replace" };
+    const host = this.overlay.querySelector(".mmh3-modal") || document.body;
+    const menu = el("div", { class: "mmh3-tagpick", role: "dialog", "aria-label": `Replace ${tok}` });
+    const chipCls = cls === "Name" || cls === "Subject" ? "subj" : cls === "Speaker" ? "spk" : (this.slotFor(tok)?.cls || "unknown");
+    const thumb = (o) => {
+      const wrap = el("span", { class: "mmh3-tagpickthumb" });
+      if (o.slot?.preview?.url) wrap.append(this.mediaThumb(o.slot));
+      else wrap.append(o.initial || "?");
+      if (o.unused || o.fresh) wrap.append(el("span", { class: "mmh3-tagpickun",
+        title: o.fresh ? "The next speaker ID not used anywhere yet" : "Nothing in the prompt cites this yet" }, o.fresh ? "new" : "unused"));
+      return wrap;
+    };
+    const place = () => {
+      const pr = (menu.offsetParent || document.body).getBoundingClientRect();
+      const w = menu.offsetWidth, h = menu.offsetHeight;
+      let left = x - pr.left, top = y - pr.top + 8;
+      left = Math.max(8, Math.min(left, pr.width - w - 8));
+      if (top + h > pr.height - 8) top = Math.max(8, y - pr.top - h - 8);
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+    };
+    const paint = () => {
+      const texts = this.tagTexts();
+      const inField = countTok(box.value, tok);
+      const everywhere = texts.reduce((n, t) => n + countTok(t.obj[t.key] || "", tok), 0);
+      const choices = this.tagChoices(tok);
+      const seg = (key, val, label, disabled = false, title = "") => el("button", {
+        type: "button", class: st[key] === val ? "on" : "", disabled, title,
+        onclick: (e) => { e.stopPropagation(); st[key] = val; if (st.scope === "this") st.mode = "replace"; paint(); },
+      }, label);
+      const go = (target) => {
+        const msg = this.applyTagEdit(box, hit, st.scope, st.mode, target);
+        this.closeTagMenu();
+        toast(msg, 3500);
+      };
+      let note = st.mode === "swap" ? "Swap exchanges both tags" : "Unused tags first";
+      if (st.scope === "all" && tok.startsWith("<") && this.state.mode === "REF") {
+        const r = this.state.ref;
+        const lines = r.subjectDefs.filter((d) => (d.text || "").trim().startsWith(tok)).length +
+          r.retention.filter((row) => row.label === tok).length;
+        if (lines) note = `Remove also deletes the ${lines} line${lines === 1 ? "" : "s"} defining it`;
+      }
+      menu.replaceChildren(
+        el("div", { class: "mmh3-tagpickhead" },
+          el("span", { class: `mmh3-reftag ${chipCls} mmh3-tagpicktag` }, tok),
+          el("span", { class: "mmh3-tagpicknote" }, TAG_CLASS_LABEL[cls]),
+          el("span", { class: "mmh3-tagpickgrow" }),
+          el("button", { type: "button", class: "mmh3-btn ghost", title: "Close", onclick: () => this.closeTagMenu() }, "✕")),
+        el("div", { class: "mmh3-tagpickrow" },
+          el("span", { class: "mmh3-tagpicklbl" }, "Apply to"),
+          el("span", { class: "mmh3-tagseg" },
+            seg("scope", "this", "This tag"),
+            seg("scope", "field", `Field (${inField})`),
+            seg("scope", "all", `Everywhere (${everywhere})`))),
+        el("div", { class: "mmh3-tagpickrow" },
+          el("span", { class: "mmh3-tagpicklbl" }, "Action"),
+          el("span", { class: "mmh3-tagseg" },
+            seg("mode", "replace", "Replace"),
+            seg("mode", "swap", "Swap", st.scope === "this",
+              st.scope === "this" ? "Swap needs Field or Everywhere — on one tag it's the same as Replace"
+                : "Exchange the two tags"))),
+        choices.length
+          ? el("div", { class: "mmh3-tagpickgrid" }, choices.map((o) => el("button", {
+              type: "button", class: "mmh3-tagpickopt",
+              title: `${st.mode === "swap" && st.scope !== "this" ? "Swap with" : "Replace with"} ${o.tok}`,
+              onclick: () => go(o.tok) },
+              thumb(o),
+              el("span", { class: "mmh3-tagpicknm" }, o.tok),
+              el("span", { class: "mmh3-tagpicksub" }, o.sub))))
+          : el("div", { class: "mmh3-tagpicknone" }, `No other ${TAG_CLASS_LABEL[cls]} to put in its place.`),
+        el("div", { class: "mmh3-tagpickfoot" },
+          el("button", { type: "button", class: "mmh3-btn danger", onclick: () => go(null) }, "Remove"),
+          el("span", { class: "mmh3-tagpicknote" }, note)));
+      place();
+    };
+    host.append(menu);
+    paint();
+    const onDown = (e) => { if (!menu.contains(e.target)) this.closeTagMenu(); };
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); this.closeTagMenu(); } };
+    document.addEventListener("mousedown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    this._tagMenu = { menu, onDown, onKey };
+  }
+
+  closeTagMenu() {
+    const m = this._tagMenu;
+    if (!m) return;
+    m.menu.remove();
+    document.removeEventListener("mousedown", m.onDown, true);
+    window.removeEventListener("keydown", m.onKey, true);
+    this._tagMenu = null;
+  }
+
   /** The speaker button's menu: a plain line, or one that names the voice.
    *  Kept inside the editor, so a click in it doesn't count as outside. */
   openSpeakerMenu(anchor, id, b, line, pick) {
@@ -5564,18 +6061,7 @@ class Editor {
       onclick: () => { this.voiceover = !this.voiceover; this.render(); },
     }, "\u{1F399} voiceover");
 
-    // Reference mode: a voice-timbre line ties a speaker ID to its subject
-    // (and that subject's name) and, when filled in, a description of the voice.
-    const binds = {};
-    if (this.state.mode === "REF") {
-      const names = subjectNames(this.state);
-      for (const d of this.state.ref?.subjectDefs || []) {
-        const b = !d.off && voiceBinding(d.text);
-        if (!b || binds[b.sx]) continue;
-        const named = b.subj ? Object.values(names).find((n) => n.tag === b.subj) : null;
-        binds[b.sx] = { ...b, name: named ? named.name : "", voice: oneLine(d.voice) };
-      }
-    }
+    const binds = this.speakerBindings();
 
     const line = (id, withVoice = false) => {
       const b = binds[id];
