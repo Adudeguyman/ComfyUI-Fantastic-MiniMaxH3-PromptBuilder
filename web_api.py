@@ -752,6 +752,11 @@ if PromptServer is not None and web is not None:
                 fields["description"] = str(body.get("description") or "")[:2000]
             if "concept_type" in body:
                 fields["concept_type"] = str(body.get("concept_type") or "generic")[:40]
+            if "subject_name" in body:
+                fields["subject_name"] = refmods.clean_subject_name(body.get("subject_name"))
+            for key in ("appearance", "voice_description"):
+                if key in body:
+                    fields[key] = refmods.clean_description(body.get(key), key.replace("_", " "))
             refmods.rewrite_meta(body.get("files"), **fields)
             return web.json_response({"ok": True})
         except (ValueError, FileNotFoundError) as exc:

@@ -16,7 +16,7 @@ jobs:
     # before the version-bump push, since registry versions are immutable.
     env:
       COMFY_NODE_CHANGELOG: |
-        Fixes for RefMods made from video clips: Create and Edit now take the first frames of the clip on H3's real frame grid (22 frames store 7, 39 store 12, 56 store 17) instead of evenly spaced picks that stored only 2, with a live readout under Clip frames. Deleting a RefMod closes its details panel. Reads the single-file bundles saved by ComfyUI-MiniMaxH3Mod 0.2.6.
+        Name your subjects with a name box and !Name shorthand. RefMods can store a subject name, appearance and voice description, and Draft from RefMods writes them into the prompt. Voice lines get a voice box, and speaker buttons can insert a line that names the voice. Draft from RefMods can start over or fill missing names and voices when everything is already drafted. The built-in Guide adds parts on using the Prompt Builder and RefMods.
     steps:
       - name: Check out code
         uses: actions/checkout@v4

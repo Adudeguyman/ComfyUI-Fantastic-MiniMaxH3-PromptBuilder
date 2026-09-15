@@ -29,7 +29,7 @@ import comfy.model_management as mm
 
 from . import media_io
 from .refmod_core import H3RefMod
-from .refmods import search_dirs, valid_rel, sanitize_name, _contained_target, PREVIEW_EXT
+from .refmods import search_dirs, valid_rel, sanitize_name, _contained_target, clean_subject_name, clean_description, PREVIEW_EXT
 
 CONCEPT_TYPES = ("generic", "identity", "pose_motion", "clothing", "background",
                  "voice", "singing", "music_style", "sound_fx", "ambience", "style")
@@ -321,6 +321,9 @@ def save_mod(mod, path_no_ext):
     }
     if mod.config:
         meta["refmod_config"] = json.dumps(mod.config)
+    for key in ("subject_name", "appearance", "voice_description"):
+        if getattr(mod, key, ""):
+            meta[key] = getattr(mod, key)
     dest = path_no_ext + ".safetensors"
     fd, tmp = tempfile.mkstemp(prefix=".refmod-", suffix=".tmp", dir=os.path.dirname(dest) or ".")
     os.close(fd)
@@ -467,6 +470,12 @@ class MiniMaxH3FantasticRefModCreate:
                     "tooltip": "Media Loader item, or a list of them, as JSON. Filled by the RefMod library."}),
             },
             "optional": {
+                "subject_name": ("STRING", {"default": "", "tooltip": "Optional one-word name used in prompts: the Prompt Builder's "
+                    "Draft from RefMods names the subject this, and !Name stands for it. Kept in the file's header."}),
+                "appearance": ("STRING", {"default": "", "tooltip": "Optional: how the subject looks. Draft from RefMods writes it "
+                    "into the subject's definition line. Kept in the file's header."}),
+                "voice_description": ("STRING", {"default": "", "tooltip": "Optional: how the voice sounds. Draft from RefMods adds it to "
+                    "the voice line, and the speaker buttons use it. Kept in the file's header."}),
                 "image": ("IMAGE", {"tooltip": "Look: one image, or a clip's frames at 24 fps. Replaces the source's pictures and clips."}),
                 "audio": ("AUDIO", {"tooltip": "Voice. Replaces the source's audio."}),
                 "vae": ("VAE", {"tooltip": "MiniMax H3 video VAE."}),
@@ -479,7 +488,7 @@ class MiniMaxH3FantasticRefModCreate:
         return float("nan")            # a save is a side effect: always run
 
     @classmethod
-    def VALIDATE_INPUTS(cls, name="", subfolder=""):
+    def VALIDATE_INPUTS(cls, name="", subfolder="", subject_name="", appearance="", voice_description=""):
         # No **kwargs here on purpose: ComfyUI skips every input's min/max
         # check for a node whose validator takes **kwargs, which is how a
         # cleared "Voice seconds" box once reached the encoder as 0.
@@ -488,12 +497,22 @@ class MiniMaxH3FantasticRefModCreate:
             return "Give the RefMod a name."
         if not valid_rel(rel):
             return f"'{rel}' is not a valid RefMod name."
+        try:
+            clean_subject_name(subject_name)
+            clean_description(appearance, "appearance")
+            clean_description(voice_description, "voice description")
+        except ValueError as exc:
+            return str(exc)
         return True
 
     def create(self, name, subfolder, mode, ref_resolution, grid, latent_frames,
                refinement_steps, max_tokens, audio_max_seconds, concept_type,
                description, write_preview, source, image=None, audio=None,
-               vae=None, audio_vae=None):
+               vae=None, audio_vae=None, subject_name="", appearance="", voice_description=""):
+        subject_name = clean_subject_name(subject_name)
+        described = {"subject_name": subject_name,
+                     "appearance": clean_description(appearance, "appearance"),
+                     "voice_description": clean_description(voice_description, "voice description")}
         mode_key = MODES.get(mode, "training")
         audio_max_seconds = max(0.5, min(600.0, float(audio_max_seconds or 0) or 30.0))
         items = parse_sources(source)
@@ -544,7 +563,8 @@ class MiniMaxH3FantasticRefModCreate:
                 source="stack" if len(looks) > 1 else ("video" if looks[0][1] else "image"),
                 source_shape=info["source_shape"], pool=info["pool"],
                 optimize_steps=refinement_steps if mode_key == "training" else 0,
-                tags=[tag], description=description or "", concept_type=concept_type), info)
+                tags=[tag], description=description or "", concept_type=concept_type,
+                **described), info)
         pbar.update_absolute(75)
         vmod = None
         if voice is not None:
@@ -554,7 +574,7 @@ class MiniMaxH3FantasticRefModCreate:
                 source_shape=f"audio:{alat.shape[-1]}", pool=f"{alat.shape[-1]} audio",
                 tags=[f"{alat.shape[-1] / 40:.1f}s audio"], description=description or "",
                 concept_type=concept_type if concept_type in ("voice", "singing", "music_style", "sound_fx", "ambience") else "voice",
-                sample_rate=32000)
+                sample_rate=32000, **described)
 
         # --- save; a failure part-way removes what was already written
         saved, mods = [], []

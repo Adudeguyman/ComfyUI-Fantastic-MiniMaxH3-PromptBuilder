@@ -177,6 +177,9 @@ class H3RefMod:
     concept_type: str = "generic"
     config: Dict = field(default_factory=dict)
     sample_rate: int = 32000
+    subject_name: str = ""    # used in prompts (!Name); description stays a personal note
+    appearance: str = ""      # drafted into the subject's definition line
+    voice_description: str = ""   # drafted onto the voice line and the speaker buttons
     path: str = ""
 
     def __post_init__(self):
@@ -271,6 +274,9 @@ class H3RefMod:
             concept_type=str(meta.get("concept_type", "generic") or "generic"),
             config=config if isinstance(config, dict) else {},
             sample_rate=int(meta.get("sample_rate", 32000) or 32000),
+            subject_name=str(meta.get("subject_name", "") or ""),
+            appearance=str(meta.get("appearance", "") or ""),
+            voice_description=str(meta.get("voice_description", "") or ""),
             path=path_no_ext,
         )
 

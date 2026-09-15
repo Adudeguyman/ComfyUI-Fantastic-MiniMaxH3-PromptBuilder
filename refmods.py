@@ -259,6 +259,9 @@ def scan_library():
                 ch = _channel(m, f"{rel}#{i}", {})
                 ch["meta_name"] = str(m.get("name", "") or "")
                 ch["desc"] = str(m.get("description", "") or meta.get("description", "") or "")
+                ch["subject_name"] = str(m.get("subject_name", "") or meta.get("subject_name", "") or "")
+                ch["appearance"] = str(m.get("appearance", "") or meta.get("appearance", "") or "")
+                ch["voice_description"] = str(m.get("voice_description", "") or meta.get("voice_description", "") or "")
                 ch["concept"] = str(m.get("concept_type", "generic") or "generic")
                 ch["member"] = i
                 g[want] = ch
@@ -268,6 +271,9 @@ def scan_library():
         ch = _channel(meta, rel, tensors)
         ch["meta_name"] = str(meta.get("name", "") or "")
         ch["desc"] = str(meta.get("description", "") or "")
+        ch["subject_name"] = str(meta.get("subject_name", "") or "")
+        ch["appearance"] = str(meta.get("appearance", "") or "")
+        ch["voice_description"] = str(meta.get("voice_description", "") or "")
         ch["concept"] = str(meta.get("concept_type", "generic") or "generic")
         want = "audio" if ch["kind"] == "audio" else "visual"
         pair_base, role = _split_pair(base)
@@ -311,12 +317,15 @@ def scan_library():
             "bundle": g.get("bundle", 0),
             "desc": first["desc"] or (aud["desc"] if aud else ""),
             "concept": first["concept"],
+            "subject_name": first.get("subject_name") or (aud.get("subject_name", "") if aud else ""),
+            "appearance": first.get("appearance") or (aud.get("appearance", "") if aud else ""),
+            "voice_description": (aud.get("voice_description") if aud else "") or first.get("voice_description", ""),
             "preview": (f"{rel_dir}/{preview}" if rel_dir else preview) if preview else None,
             "paired": bool(vis and aud),
         }
         for c in (vis, aud):
             if c:
-                for k in ("desc", "concept", "meta_name"):
+                for k in ("desc", "concept", "meta_name", "subject_name", "appearance", "voice_description"):
                     c.pop(k, None)
         if vis:
             item["visual"] = vis
@@ -326,6 +335,31 @@ def scan_library():
     items.sort(key=lambda i: (i["folder"].lower(), i["label"].lower()))
     _SCAN_KEY, _SCAN_VAL = key, {"roots": dirs, "items": items}
     return _SCAN_VAL
+
+
+SUBJECT_NAME_RE = re.compile(r"^[A-Za-z][\w-]{0,39}$")
+
+
+def clean_subject_name(value):
+    """A RefMod's subject name, as the prompt builder uses it for !Name: one
+    word of letters, digits, - and _, up to 40 characters. Empty clears it."""
+    name = str(value or "").strip()
+    if name and not SUBJECT_NAME_RE.match(name):
+        raise ValueError("A subject name is one word: letters, digits, - and _ (up to 40), starting with a letter.")
+    return name
+
+
+DESCRIPTION_LIMIT = 300
+
+
+def clean_description(value, what="description"):
+    """Appearance or voice wording the prompt builder drafts into a definition
+    line: one line (a line break reads to the model as a shot cut), no
+    trailing full stop, up to DESCRIPTION_LIMIT characters. Empty clears it."""
+    text = " ".join(str(value or "").split()).rstrip(" .")
+    if len(text) > DESCRIPTION_LIMIT:
+        raise ValueError(f"Keep the {what} under {DESCRIPTION_LIMIT} characters.")
+    return text
 
 
 def split_member(rel):
@@ -697,31 +731,39 @@ def rename_item(files, preview, new_base):
 
 def rewrite_meta(files, **fields):
     """Rewrite the header of each file with new description / concept_type."""
+    stems, _pv = item_files(files, None)
+    for rel, path in stems:
+        rewrite_stem_meta(path, label=rel, **fields)
+
+
+def rewrite_stem_meta(path, label="", **fields):
+    """Rewrite one RefMod's header fields in place; the tensors are copied as
+    they are. `path` is a stem already resolved inside a RefMod root."""
     import torch  # noqa: F401  (safetensors.torch needs it)
     from safetensors.torch import load_file, save_file
     import tempfile
-    stems, _pv = item_files(files, None)
-    for _rel, path in stems:
-        meta, _t = read_meta(path)
-        if not meta:
-            raise ValueError(f"{_rel}: no RefMod metadata")
-        for k, v in fields.items():
-            if v is not None:
-                meta[k] = v
-                for m in bundle_members(meta):
-                    m[k] = v
-        tensors = load_file(path + ".safetensors")
-        tensors = {k: v.clone() for k, v in tensors.items()}
-        fd, tmp = tempfile.mkstemp(prefix=".refmod-", suffix=".tmp", dir=os.path.dirname(path))
-        os.close(fd)
-        try:
-            save_file(tensors, tmp, metadata={"refmod_meta": json.dumps(meta)})
-            os.replace(tmp, path + ".safetensors")
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
-        if os.path.isfile(path + ".json"):
-            os.remove(path + ".json")         # the header is authoritative now
+    if _root_of(path + ".safetensors") is None:
+        raise ValueError("refusing to write outside the RefMod folders")
+    meta, _t = read_meta(path)
+    if not meta:
+        raise ValueError(f"{label or os.path.basename(path)}: no RefMod metadata")
+    for k, v in fields.items():
+        if v is not None:
+            meta[k] = v
+            for m in bundle_members(meta):
+                m[k] = v
+    tensors = load_file(path + ".safetensors")
+    tensors = {k: v.clone() for k, v in tensors.items()}
+    fd, tmp = tempfile.mkstemp(prefix=".refmod-", suffix=".tmp", dir=os.path.dirname(path))
+    os.close(fd)
+    try:
+        save_file(tensors, tmp, metadata={"refmod_meta": json.dumps(meta)})
+        os.replace(tmp, path + ".safetensors")
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    if os.path.isfile(path + ".json"):
+        os.remove(path + ".json")         # the header is authoritative now
 
 
 def delete_item(files, preview):

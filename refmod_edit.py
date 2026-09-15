@@ -22,7 +22,8 @@ from .refmod_create import (_cover, ensure_min_size, resize_ref, pool_latent, op
                             encode_audio, save_mod, snap_to_h3_grid, parse_sources,
                             load_look, load_voice)
 from .refmods import (resolve_file, _split_pair, _root_of, _contained_target, sanitize_name,
-                      valid_rel, split_member, read_meta, PREVIEW_EXT)
+                      valid_rel, split_member, read_meta, clean_subject_name, clean_description, rewrite_stem_meta,
+                      PREVIEW_EXT)
 
 
 def _first_source_px(mod):
@@ -73,14 +74,30 @@ def encode_like(vae, mod, sources, latent_frames=16, progress=None):
     return torch.cat(parts, dim=2).contiguous(), shapes
 
 
+# Header fields the prompt builder reads, and how each one is checked.
+PROMPT_FIELDS = (("subject_name", clean_subject_name),
+                 ("appearance", lambda v: clean_description(v, "appearance")),
+                 ("voice_description", lambda v: clean_description(v, "voice description")))
+
+
+def _changes(subject_name="", appearance="", voice_description=""):
+    """The header fields to change: empty keeps a field, '-' clears it."""
+    out = {}
+    for (key, clean), raw in zip(PROMPT_FIELDS, (subject_name, appearance, voice_description)):
+        text = (raw or "").strip()
+        if text:
+            out[key] = "" if text == "-" else clean(text)
+    return out
+
+
 class MiniMaxH3FantasticRefModEdit:
     CATEGORY = "conditioning/video_models"
     DESCRIPTION = (
         "Edit a saved RefMod: keep, drop or reorder its stored frames ('frames' "
         "is a JSON list of frame indices and \"a<k>\" entries in the new order), "
         "add pictures or clips encoded to the same shape ('add' is a JSON list "
-        "of Media Loader items), and replace or remove its voice. Nothing "
-        "already stored is re-encoded. Overwrites the file unless 'save_as' "
+        "of Media Loader items), replace or remove its voice, and set its "
+        "subject name, appearance and voice description. Nothing already stored is re-encoded. Overwrites the file unless 'save_as' "
         "names a copy. Queued by the RefMod library's edit mode; the VAEs are "
         "only needed for additions."
     )
@@ -104,6 +121,13 @@ class MiniMaxH3FantasticRefModEdit:
             "optional": {
                 "vae": ("VAE", {"tooltip": "MiniMax H3 video VAE, for added pictures."}),
                 "audio_vae": ("VAE", {"tooltip": "MiniMax H3 audio VAE, for a new voice."}),
+                "subject_name": ("STRING", {"default": "", "tooltip": "One-word name used in prompts, saved inside the file "
+                                            "(the Prompt Builder's Draft from RefMods names the subject this). "
+                                            "Empty keeps the stored name; '-' clears it."}),
+                "appearance": ("STRING", {"default": "", "tooltip": "How the subject looks, drafted into their definition line. "
+                                          "Empty keeps the stored text; '-' clears it."}),
+                "voice_description": ("STRING", {"default": "", "tooltip": "How the voice sounds, drafted onto the voice line and "
+                                                 "the speaker buttons. Empty keeps the stored text; '-' clears it."}),
             },
         }
 
@@ -112,12 +136,19 @@ class MiniMaxH3FantasticRefModEdit:
         return float("nan")
 
     @classmethod
-    def VALIDATE_INPUTS(cls, file=""):
+    def VALIDATE_INPUTS(cls, file="", subject_name="", appearance="", voice_description=""):
         if not (file or "").strip():
             return "Give the RefMod's file name."
+        try:
+            _changes(subject_name, appearance, voice_description)
+        except ValueError as exc:
+            return str(exc)
         return True
 
-    def edit(self, file, frames, add, voice, latent_frames, audio_max_seconds, save_as="", vae=None, audio_vae=None):
+    def edit(self, file, frames, add, voice, latent_frames, audio_max_seconds, save_as="", vae=None, audio_vae=None,
+             subject_name="", appearance="", voice_description=""):
+        # Header fields: empty keeps what's stored, '-' clears, anything else sets it.
+        changes = _changes(subject_name, appearance, voice_description)
         audio_max_seconds = max(0.5, min(600.0, float(audio_max_seconds or 0) or 30.0))
         latent_frames = max(1, int(latent_frames or 16))
         rel = file.strip().replace("\\", "/")
@@ -213,7 +244,8 @@ class MiniMaxH3FantasticRefModEdit:
                     source_shape=" +".join(s.strip() for s in shapes),
                     pool=(f"{latent.shape[2]}x{look_mod.latent_h}x{look_mod.latent_w}" if look_mod.mode != "encode" else ""),
                     optimize_steps=look_mod.optimize_steps, tags=[f"{latent.shape[2]} frame{'s' if latent.shape[2] != 1 else ''}"],
-                    description=look_mod.description, concept_type=look_mod.concept_type, config=look_mod.config)
+                    description=look_mod.description, concept_type=look_mod.concept_type, config=look_mod.config,
+                    **{**{k: getattr(look_mod, k) for k, _c in PROMPT_FIELDS}, **changes})
                 print(f"[MiniMaxH3FantasticRefModEdit] {rel}: {look_mod.latent_t} -> {latent.shape[2]} frames"
                       + (f" ({len(used)} added)" if used else ""))
         pbar.update_absolute(70)
@@ -235,7 +267,9 @@ class MiniMaxH3FantasticRefModEdit:
                 source_shape=f"audio:{alat.shape[-1]}", pool=f"{alat.shape[-1]} audio",
                 tags=[f"{alat.shape[-1] / 40:.1f}s audio"], description=src.description,
                 concept_type=src.concept_type if src.concept_type in ("voice", "singing", "music_style", "sound_fx", "ambience") else "voice",
-                sample_rate=32000)
+                sample_rate=32000,
+                **{**{k: getattr(src, k) or (getattr(voice_mod, k) if voice_mod else "") for k, _c in PROMPT_FIELDS},
+                   **changes})
         pbar.update_absolute(90)
 
         target = sanitize_name(save_as, folder=True) if (save_as or "").strip() else ""
@@ -256,10 +290,10 @@ class MiniMaxH3FantasticRefModEdit:
                     raise FileExistsError(f"'{os.path.relpath(d, root)}' already exists — pick another name.")
             os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
             if out_look is not None:
-                out_look = replace(out_look, name=base)
+                out_look = replace(out_look, name=base, **changes)
                 saved.append(save_mod(out_look, look_dest))
             if out_voice is not None:
-                out_voice = replace(out_voice, name=base)
+                out_voice = replace(out_voice, name=base, **changes)
                 saved.append(save_mod(out_voice, voice_dest))
             # the preview image travels with the copy
             for pv in (pair_base, base_name):
@@ -274,6 +308,7 @@ class MiniMaxH3FantasticRefModEdit:
             print(f"[MiniMaxH3FantasticRefModEdit] {rel}: saved a copy as {target}")
         else:
             # --- in place
+            final_look = look_stem
             if edited is not None:
                 saved.append(save_mod(edited, look_stem))
             if v:
@@ -288,6 +323,7 @@ class MiniMaxH3FantasticRefModEdit:
                             for ext in (".safetensors", ".json"):
                                 if os.path.isfile(look_stem + ext):
                                     os.replace(look_stem + ext, new_look + ext)
+                            final_look = new_look
                             print(f"[MiniMaxH3FantasticRefModEdit] {rel}: renamed to {os.path.basename(new_look)} to pair with its voice")
                 if remove_voice:
                     if voice_stem:
@@ -297,6 +333,18 @@ class MiniMaxH3FantasticRefModEdit:
                                 saved.append(f"removed {os.path.basename(voice_stem)}{ext}")
                 else:
                     saved.append(save_mod(vmod, voice_stem))
+            if changes:
+                # Halves not rewritten above get the changed fields in their
+                # header only; their tensors are copied as they are.
+                for half_stem, written, half in ((final_look, edited is not None, look_mod),
+                                                 (None if remove_voice else voice_stem, bool(v), voice_mod)):
+                    if (half_stem and not written and half is not None
+                            and any(getattr(half, k) != val for k, val in changes.items())
+                            and os.path.isfile(half_stem + ".safetensors")):
+                        rewrite_stem_meta(half_stem, **changes)
+                        saved.append(half_stem + ".safetensors")
+                        print(f"[MiniMaxH3FantasticRefModEdit] {os.path.basename(half_stem)}: updated "
+                              + ", ".join(k.replace("_", " ") for k in changes))
         pbar.update_absolute(100)
         rel_saved = [os.path.relpath(os.path.realpath(p), os.path.realpath(root)).replace("\\", "/")
                      if os.path.isabs(p) else p for p in saved]

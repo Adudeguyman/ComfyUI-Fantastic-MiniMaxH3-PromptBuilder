@@ -132,7 +132,14 @@ the Media Loader node and pick **RefMod library**.
   angles usually give a better likeness.
 - **One per source** makes a separate RefMod from each item.
 
-Give it a **name**.
+Give it a **name**. If it's a character, give it a **Subject name** too,
+like `Bob`, in the settings on the right. That's the name the prompt uses
+for them (see [Give the subject a name](#let-the-editor-write-them-for-you)).
+You can describe them there too: **Appearance** is how they look, like
+`shoulder-length auburn hair and a green wool coat`, and **Voice** is how
+they sound, like `low, husky voice with a slow, warm pace`. Voice only shows
+when there's audio. Drafting puts both into the prompt for you. With **One
+per source**, the settings list these boxes for each item.
 
 ### 3. Check the framing
 
@@ -208,7 +215,7 @@ see it all.
 
 ![A RefMod's details panel](docs/refmods/04-details.png)
 
-- **Search** by name, folder or description.
+- **Search** by name, folder, description or subject name.
 - Filter by **Image / Video / Audio** and sort by name, size or newest.
 - **Folders** on the left list any subfolders you've sorted RefMods into
   (for example `characters` or `places`). Click one to show only what's in
@@ -221,6 +228,12 @@ Click **Details** on a card to open its panel. From there you can:
   `characters/jodi`).
 - Add a **description** and pick a **concept** (identity, clothing,
   background, voice, style…) so it's easy to find later.
+- Give it a **Subject name**, like `Bob`. It's saved inside the RefMod
+  file, and drafting fills it in for you (see
+  [Give the subject a name](#let-the-editor-write-them-for-you)). You can
+  also set it on the Create tab as you make one, or in edit mode.
+- Describe its **Appearance** and **Voice**. Both are saved inside the file,
+  and drafting puts them into the prompt.
 - **Replace preview** to set a nicer thumbnail.
 - **Delete** it. You'll be asked to click twice.
 
@@ -253,6 +266,9 @@ jobs already running in your ComfyUI queue have finished.
   the RefMod's existing resolution and aspect ratio.
 - **Replace the voice**: drop in a new audio file.
 - **Remove the voice**: untick the stored voice row.
+- **Name and describe the subject**: fill in or clear **Subject name**,
+  **Appearance** and **Voice** in the settings on the right. If that's all
+  you change, only the file's header is rewritten.
 
 Editing never re-encodes what's already in a RefMod. Frames you keep are
 copied exactly as they were, and only the photos, clips or voice you add
@@ -321,7 +337,7 @@ follow it:
 
 ```text
 retention_analysis:
-<Subject 1> (appears in [Shot 1]): fully_preserved - the woman's identity is retained.
+<Subject 1> (appears in [Shot 1]): fully_preserved - the woman's identity is retained. Face, facial features, body type.
 <Audio 1>: reference - its vocal timbre guides the dialogue delivery of <Subject 1> without copying the original signal.
 ```
 
@@ -362,7 +378,12 @@ asked about that RefMod again.
 - **Add missing** keeps everything you've written and only drafts the
   RefMods that don't have a line yet. Use this after adding a new RefMod
   to the stack.
-- **Start over** clears both sections and drafts them fresh.
+- **Start over** clears all of both sections, including lines you wrote
+  for other media, and drafts them fresh.
+
+If every RefMod in the stack already has a line, there's nothing to add, so
+it offers **Start over** on its own. When a saved subject name or voice
+could go into an empty box, it also offers **Fill names and voices**.
 
 It only drafts RefMods. Pictures, clips and audio from the Media Loader are
 left for you to describe, since there's nothing saved about them.
@@ -378,6 +399,27 @@ instead of `<Subject 1>`: it shows as a green tag in the editor and turns
 into `<Subject 1> Bob` in the prompt (just `Bob` inside a spoken line), so
 every mention restates who it is. A `!Bob` chip appears next to the
 Subject chip to insert it.
+
+If the RefMod has a **Subject name** saved in the library, drafting fills
+the name box for you. Press **◈ Draft from RefMods** again later and
+choose **Fill names and voices** to fill any name or voice box left blank.
+A name you've typed yourself stays.
+
+**Describe them, too.** A RefMod's saved **Appearance** is drafted straight
+into its subject line:
+`<Subject 1> is the person in <Video 1>, with shoulder-length auburn hair and a green wool coat.`
+Its **Voice** goes in the small voice box beside its `<Audio N>` line, and
+the prompt adds *It is a low, husky voice with a slow, warm pace.*
+
+The speaker buttons in the dialogue row use it. When a speaker has a voice
+line, their button gets an arrow with two choices:
+
+- **Just (S1)** inserts `!Ann (S1) says:` and an empty spoken line.
+- **(S1) with voice** inserts `!Ann (S1), in the low, husky voice with a
+  slow, warm pace referenced from <Audio 1>, says:` and an empty spoken line.
+
+Clicking the button itself repeats your last choice for that speaker. Each
+speaker remembers its own, and it works the same with voiceover on.
 
 The editor warns you if the prompt cites a label that isn't being sent, or
 if a label is sent but never used.

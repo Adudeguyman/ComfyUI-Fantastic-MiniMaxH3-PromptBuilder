@@ -50,6 +50,21 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.7.2
+
+- **Name your subjects.** Each `<Subject N>` line has a name box, and
+  `!Ann` works as shorthand anywhere in the prompt.
+- **RefMods remember who they are.** Save a subject name, how they look and
+  how they sound with a RefMod. Draft from RefMods writes all of it into
+  your prompt.
+- **Voices you can describe.** Voice lines get a voice box, and the speaker
+  buttons can insert a line that names the voice, like "in the low, husky
+  voice referenced from <Audio 1>".
+- Draft from RefMods can start over or fill in missing names and voices
+  when everything is already drafted.
+- The built-in 📖 Guide adds parts on using the Prompt Builder and RefMods.
+- The Quick start now builds the workflow before you write the prompt.
+
 ## What's new in 1.7.1
 
 - RefMods made from a **video clip** now hold real motion. Create and Edit
@@ -415,23 +430,19 @@ above should be listed.
 
 ## Quick start
 
-This is the same for every mode:
+This is the same for every mode. Build the workflow first, then write the
+prompt into it:
 
-1. Add a **Fantastic H3 Prompt Builder**.
-2. Click **Edit prompt…**, pick your mode along the top, and fill in the fields.
-   The finished prompt builds live in the right-hand panel.
-3. Click **Save to node**.
-4. Connect the Prompt Builder's `prompt` output to the `prompt` input on
-   whichever H3 node you're using:
+1. Start from ComfyUI's own MiniMax H3 template for your mode. It already has
+   the loaders, sampler, decode and save nodes.
+2. Add a **Fantastic H3 Prompt Builder**. Connect its `prompt` output to the
+   `prompt` input on the template's H3 node:
    - **MiniMax H3 Image to Video** for T2VA, I2VA, FL2VA, and L2VA
    - **MiniMax H3 Reference to Video** for reference mode
 
    If `prompt` shows as a widget rather than an input, right-click it and choose
    *Convert widget to input*.
-5. Set `width`, `height`, and `length` on that node. For first/last-frame modes
-   the editor shows the exact frame count to use — H3 only accepts certain
-   values, and the editor already rounds to a valid one.
-6. Wire up whatever your mode needs:
+3. Wire up whatever your mode needs:
    - **T2VA** — nothing else; the prompt is the whole input.
    - **I2VA / FL2VA / L2VA** — load your keyframe images with either ComfyUI's
      own **Load Image** nodes or this pack's **Media Loader**, then connect them
@@ -451,7 +462,13 @@ This is the same for every mode:
      on it, run its single `references` output into the Prompt Builder, and take
      the frames from the builder's `picture_1` and `picture_2` outputs.
    - **Reference mode** — see [Reference mode](#reference-mode) below.
-7. Queue it.
+4. Set `width`, `height`, and `length` on the H3 node.
+5. Click **Edit prompt…** on the builder, pick the same mode along the top, and
+   fill in the fields. The finished prompt builds live in the right-hand panel,
+   and your wired media shows up as thumbnails. For first/last-frame modes the
+   editor shows the exact frame count to use — H3 only accepts certain values,
+   and the editor already rounds to a valid one — so match `length` to it.
+6. Click **Save to node**, then queue it.
 
 The rest of the workflow — loaders, samplers, VAE decode, save — is unchanged
 from ComfyUI's built-in MiniMax H3 templates. This pack only replaces how the
@@ -678,12 +695,14 @@ H3 Reference to Video** and the `ref2va` checkpoint.
    already connected.
 2. Drop your reference files onto it, or click **Load files…**. Images, video,
    and audio can all go in at once — each lands in the right group.
-3. Open **Edit prompt…** and switch to **Reference** mode. Your media now shows
-   up as clickable thumbnails; click one to insert its tag into your text.
-4. Fill in the six sections, then **Save to node**.
-5. Connect the Prompt Builder's media outputs — `picture_1`, `video_1`, and so
+3. Connect the Prompt Builder's media outputs — `picture_1`, `video_1`, and so
    on — to the matching slots on **MiniMax H3 Reference to Video**, alongside
-   the `prompt` connection you already made.
+   the `prompt` connection you already made. With RefMods, the **RefMod Text
+   Encode** takes the builder's `references` output instead, and
+   **+ Media loader** connects it for you.
+4. Open **Edit prompt…** and switch to **Reference** mode. Your media now shows
+   up as clickable thumbnails; click one to insert its tag into your text.
+5. Fill in the six sections, then **Save to node** and queue it.
 
 ### What the media loader shows you
 
@@ -798,9 +817,52 @@ a name — say `Bob` — and two things happen:
 
 The chip bar shows the name on the subject's chip and adds a `!Bob` chip
 that inserts the shorthand. Names are one word (letters, digits, `-` and
-`_`), matched exactly; a `!Name` nobody is called, or a name on a line that
-is switched off, gets a warning rather than a silent gap in the prompt.
-Names save with the prompt.
+`_`); `!bob`, `!Bob` and `!BOB` all work and the prompt uses the spelling
+you gave the subject. Hover a `!Bob` tag and you get the same pop-up card as
+the subject itself — its picture and what it cites. A `!Name` nobody is
+called, or a name on a line that is switched off, gets a warning rather
+than a silent gap in the prompt. Names save with the prompt.
+
+Prefer a different trigger than `!`? The ⚙ menu has **Subject name prefix**,
+with `@`, `#`, `$`, `%`, `&`, `*`, `~`, `+`, `=` and `^` to choose from. It's
+a per-browser setting like the rest of that menu, and it doesn't rewrite
+shorthand already typed with the old character.
+
+A RefMod can carry a name of its own. Set **Subject name** on the Create
+tab as you make it, in edit mode, or in its library details panel, and the
+name is stored inside the `.safetensors` file's header, so it travels with the file. **◈ Draft from
+RefMods** then fills the name box on that RefMod's `<Subject N>` line.
+Pressing it again with nothing left to draft offers **Fill names and voices** for any
+name or voice box that's empty, or **Start over** to clear all of both
+sections and draft them fresh. A name you've typed yourself is never replaced. The card
+shows the name as a badge, and search finds it.
+
+A RefMod can also carry an **Appearance** and a **Voice** description, set
+in the same three places. Draft from RefMods writes the appearance straight
+into the subject's line (*…in `<Picture 1>`, with shoulder-length auburn
+hair and a green wool coat.*) and puts the voice description in the voice
+box on its `<Audio N>` line. Both are one line of up to 300 characters.
+
+### Describing a voice
+
+Every voice-timbre line in `subject_definitions`, the kind that reads
+`<Audio 1> is the voice-timbre reference for <Subject 1> (S1), …`, has a
+**voice** box beside it. Describe the voice there, like `low, husky voice
+with a slow, warm pace`, and the prompt adds *It is a low, husky voice with
+a slow, warm pace.* after the line. Singing lines don't get one.
+
+The speaker button for that ID in the dialogue row becomes a split button.
+Its arrow offers two lines:
+
+- **Just (S1)** inserts `!Ann (S1) says: <d>[English] </d>`.
+- **(S1) with voice** inserts `!Ann (S1), in the low, husky voice with a
+  slow, warm pace referenced from <Audio 1>, says: <d>[English] </d>`.
+
+Clicking the button itself repeats whichever you last picked for that
+speaker; each speaker remembers its own choice, and it saves with the prompt. Voiceover
+works the same way, with its off-screen wording and lips-closed clause. The
+`!Ann` part appears when that subject has a name. Lines you've already
+inserted keep their wording if you change the voice box later.
 
 ### Switching lines off
 
@@ -1230,7 +1292,8 @@ before you add it, and a look-and-voice pair saved as two files —
 `hero_visual` + `hero_audio`, or the H3RefMods fork's `hero_Video` +
 `hero_Audio` — appears as one card and one row. Click a card for its
 details, where you can rename it, move it to another folder, edit its
-description and concept, replace its preview image, or delete it. A
+description and concept, give it a subject name, appearance and voice
+description, replace its preview image, or delete it. A
 preview is any `.png`, `.jpg` or `.webp` saved beside the file with the
 same name.
 
@@ -1254,7 +1317,9 @@ kept. **Save changes** writes the result through the queue and the library
 reselects the file; tick **Save as a copy** and give it a name to leave the
 original alone and write the result as a new RefMod (its voice and preview
 come along). A RefMod that had no voice is renamed to the
-`_visual`/`_audio` pair when one is added. **Fantastic H3 Edit RefMod** is
+`_visual`/`_audio` pair when one is added. The **Subject name**, **Appearance** and
+**Voice** boxes in the settings pane set or clear those fields; when that's the
+only change, just the file headers are rewritten. **Fantastic H3 Edit RefMod** is
 the node behind it, should you want it in a graph.
 
 The **Create** tab makes new ones. Drop pictures, clips or audio anywhere

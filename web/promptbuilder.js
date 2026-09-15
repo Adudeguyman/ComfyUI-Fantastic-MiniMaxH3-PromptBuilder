@@ -6,7 +6,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
-  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets, setterOf, linkNodes } from "./medialoader.js";
+  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets, setterOf, linkNodes, keepNameChars } from "./medialoader.js";
 import { STACK_NAME, ENCODE_NAMES, readStack, deriveEntries, labelGroups,
   rangeText as refmodRange, previewURL as refmodPreviewURL, KIND as REFMOD_KIND,
   openStackModal } from "./refmodstack.js";
@@ -81,37 +81,75 @@ const TAG_RE = /<(?:Picture|Video|Audio|Subject) \d+>/g;
 /* One pass over a field paints three things: dialogue blocks, reference tags
    and speaker IDs. Dialogue is matched first so tags inside a spoken line
    aren't chipped out of it. */
-const PAINT_RE = new RegExp([
-  "<d>[\\s\\S]*?<\\/d>",                      // a spoken line
-  // a cut marker, with its timestamp when one follows
-  "\\[Shot \\d+\\](?:\\s+at\\s+\\d{1,2}:\\d{2}(?:\\.\\d{1,3})?)?",
-  "<(?:Picture|Video|Audio|Subject) \\d+>",     // a reference tag
-  "\\(S\\d+(?:\\s*,\\s*S\\d+)*\\)",           // (S1) or (S1,S2)
-  "![A-Za-z][\\w-]*",                          // !Name shorthand for a named subject
-].join("|"), "g");
-const NAME_TOKEN_RE = /!([A-Za-z][\w-]*)/g;
+/* The character that turns a subject's name into shorthand (!Bob). It's a
+   per-user editor preference, picked from symbols that mean nothing else in
+   an H3 prompt, so the patterns below are rebuilt when it changes. */
+const NAME_PREFIXES = ["!", "@", "#", "$", "%", "&", "*", "~", "+", "=", "^"];
+let NAME_PREFIX = "!";
+const reEsc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+let PAINT_RE, NAME_TOKEN_RE, NAME_SPLIT_RE;
+function setNamePrefix(ch) {
+  NAME_PREFIX = NAME_PREFIXES.includes(ch) ? ch : "!";
+  const p = reEsc(NAME_PREFIX);
+  PAINT_RE = new RegExp([
+    "<d>[\\s\\S]*?<\\/d>",                      // a spoken line
+    // a cut marker, with its timestamp when one follows
+    "\\[Shot \\d+\\](?:\\s+at\\s+\\d{1,2}:\\d{2}(?:\\.\\d{1,3})?)?",
+    "<(?:Picture|Video|Audio|Subject) \\d+>",     // a reference tag
+    "\\(S\\d+(?:\\s*,\\s*S\\d+)*\\)",           // (S1) or (S1,S2)
+    `${p}[A-Za-z][\\w-]*`,                        // !Name shorthand for a named subject
+  ].join("|"), "g");
+  NAME_TOKEN_RE = new RegExp(`${p}([A-Za-z][\\w-]*)`, "g");
+  NAME_SPLIT_RE = new RegExp(`(${p}[A-Za-z][\\w-]*)`);
+}
+setNamePrefix("!");
 
-/** Named subjects: { name: "<Subject N>" } from the definition lines that
- *  carry a name and are switched on. Names are matched exactly (case too). */
+/** Named subjects from the switched-on definition lines that carry a name,
+ *  keyed by the lower-cased name so !bob, !Bob and !BOB all find "Bob":
+ *  { bob: { tag: "<Subject 1>", name: "Bob" } }. */
 function subjectNames(state) {
   const out = {};
   for (const d of state?.ref?.subjectDefs || []) {
     if (d.off) continue;
     const name = (d.name || "").trim();
     const m = (d.text || "").trim().match(/^<Subject (\d+)>/);
-    if (name && m && /^[A-Za-z][\w-]*$/.test(name) && !(name in out)) out[name] = `<Subject ${m[1]}>`;
+    const key = name.toLowerCase();
+    if (name && m && /^[A-Za-z][\w-]*$/.test(name) && !(key in out)) out[key] = { tag: `<Subject ${m[1]}>`, name };
   }
   return out;
 }
+const lookupName = (names, raw) => names[String(raw || "").toLowerCase()];
+
+/** A description saved with a RefMod or typed in a voice box, as one line
+ *  (a break reads as a shot cut) with no trailing full stop. */
+const oneLine = (s) => String(s || "").replace(/\s+/g, " ").trim().replace(/[\s.]+$/, "");
+/** "low, husky voice" -> "a low, husky voice"; kept as typed with an article. */
+const withArticle = (t) => (/^(a|an|the)\s/i.test(t) ? t : (/^[aeiou]/i.test(t) ? "an " : "a ") + t);
+/** "a low, husky voice" -> "low, husky voice", for "in the … referenced from". */
+const noArticle = (t) => t.replace(/^(a|an|the)\s+/i, "");
+/** A voice-timbre line ties a speaker ID to a subject: "<Audio 1> is the
+ *  voice-timbre reference for <Subject 1> (S1), …". Singing lines don't
+ *  count. Returns { audio, subj, sx } or null. */
+function voiceBinding(text) {
+  const t = String(text || "");
+  const a = t.match(/^\s*<Audio (\d+)>/);
+  const s = t.match(/\((S\d+)\)/);
+  if (!a || !s || /singing/i.test(t)) return null;
+  const subj = t.match(/<Subject \d+>/);
+  return { audio: `<Audio ${a[1]}>`, subj: subj ? subj[0] : null, sx: s[1] };
+}
 
 /** Turn every !Name into "<Subject N> Name" — or just "Name" inside a
- *  spoken <d> line, where a label would be read aloud. Unknown names are
- *  left as typed so the warning can point at them. */
+ *  spoken <d> line, where a label would be read aloud. The name is written
+ *  as it was defined, whatever case was typed. Unknown names are left as
+ *  typed so the warning can point at them. */
 function expandNames(text, names) {
   if (!text || !Object.keys(names).length) return text;
   const parts = String(text).split(/(<d>[\s\S]*?<\/d>)/);
-  return parts.map((part, i) => part.replace(NAME_TOKEN_RE,
-    (m, name) => (names[name] ? (i % 2 ? name : `${names[name]} ${name}`) : m))).join("");
+  return parts.map((part, i) => part.replace(NAME_TOKEN_RE, (m, raw) => {
+    const hit = lookupName(names, raw);
+    return hit ? (i % 2 ? hit.name : `${hit.tag} ${hit.name}`) : m;
+  })).join("");
 }
 
 const LANG_RE = /^(\s*\[[^\]\n]+\])/;
@@ -130,10 +168,12 @@ function deliverySpans(text, names = null) {
     .flatMap((part, i) => {
       if (i % 2) return [el("span", { class: "mmh3-dtag" }, part)];
       if (!names) return [part];
-      return part.split(/(![A-Za-z][\w-]*)/).map((p, j) => (j % 2
-        ? el("span", { class: "mmh3-reftag " + (names[p.slice(1)] ? "subj" : "unknown"),
-            title: names[p.slice(1)] ? `just \u201c${p.slice(1)}\u201d when spoken` : "No subject has this name" }, p)
-        : p));
+      return part.split(NAME_SPLIT_RE).map((p, j) => {
+        if (!(j % 2)) return p;
+        const hit = lookupName(names, p.slice(1));
+        return el("span", { class: "mmh3-reftag " + (hit ? "subj" : "unknown"), dataset: { tag: p },
+          title: hit ? `just \u201c${hit.name}\u201d when spoken` : "No subject has this name" }, p);
+      });
     })
     .filter((part) => part !== "");
 }
@@ -387,7 +427,7 @@ const ROLE_HINTS = [
 const REFMOD_CONCEPTS = {
   identity: { subject: true, marker: "fully_preserved", task: "reference generation",
     text: (c) => `${c.subj} is the person in ${c.tag}.`,
-    note: (c) => `${c.subj}'s identity and appearance from ${c.tag} are retained.` },
+    note: (c) => `${c.subj}'s identity and appearance from ${c.tag} are retained. Face, facial features, body type.` },
   clothing: { subject: true, marker: "attribute_transfer", task: "reference generation",
     text: (c) => `${c.subj} is the outfit in ${c.tag}.`,
     note: (c) => `the garments, colours and fit of ${c.subj} from ${c.tag} are transferred.` },
@@ -457,6 +497,8 @@ const PREF_DEFAULTS = {
   // Chips can be switched off for a plain text field. The mirror still
   // renders (invisibly), so hover previews keep working.
   highlightTags: true,
+  // The character before a subject's name that makes it shorthand (!Bob).
+  namePrefix: "!",
 };
 const SCALE_MIN = 1.0;
 const SCALE_MAX = 3.0;          // window
@@ -474,6 +516,7 @@ function loadPrefs() {
       ...JSON.parse(localStorage.getItem(PREF_KEY) || "{}") };
     v.windowScale = clampScale(v.windowScale);
     v.textScale = clampScale(v.textScale, TEXT_SCALE_MAX);
+    if (!NAME_PREFIXES.includes(v.namePrefix)) v.namePrefix = "!";
     return v;
   } catch (e) {
     return { ...PREF_DEFAULTS };
@@ -484,6 +527,9 @@ function savePrefs(prefs) {
   try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); }
   catch (e) { /* private mode: the session's choice still applies */ }
 }
+// Apply the saved name prefix as soon as the script loads, so a prompt
+// generated before any editor opens uses it too.
+setNamePrefix(loadPrefs().namePrefix);
 
 /** Turn a failed request into something actionable.
  *
@@ -1096,6 +1142,10 @@ function genRef(state) {
       // The name rides on the definition so the model ties it to the label.
       if (line && name && /^<Subject \d+>/.test(line))
         line = line.replace(/\.?\s*$/, "") + `. Their name is ${name}.`;
+      // A voice description rides on its voice line, after the drafted wording.
+      const voice = oneLine(d.voice);
+      if (line && voice && voiceBinding(line))
+        line = line.replace(/\.?\s*$/, "") + `. It is ${withArticle(voice)}.`;
       return line;
     }).filter(Boolean).join("\n");
   const types = TASK_TYPES.filter((t) => r.summaryTypes.includes(t)).join(" + ");
@@ -1320,13 +1370,13 @@ function validate(state, slots) {
     const used = new Set([...[r.summaryText, r.styleLine, r.detail, r.soundscape, r.music,
       ...liveRet.map((x) => x.note)].join("\n").matchAll(NAME_TOKEN_RE)].map((m) => m[1]));
     for (const nm of used) {
-      if (!names[nm]) warn(`!${nm} is used, but no switched-on subject definition has the name "${nm}" \u2014 ` +
+      if (!lookupName(names, nm)) warn(`${NAME_PREFIX}${nm} is used, but no switched-on subject definition has the name "${nm}" \u2014 ` +
         "give a subject that name, or write it out.");
     }
     liveDefs.forEach((d) => {
       const nm = (d.name || "").trim();
       if (nm && !/^[A-Za-z][\w-]*$/.test(nm))
-        warn(`Subject name "${nm}" can't be used as a !tag \u2014 letters, digits, - and _ only, no spaces.`);
+        warn(`Subject name "${nm}" can't be used as a ${NAME_PREFIX}tag \u2014 letters, digits, - and _ only, no spaces.`);
       else if (nm && !/^<Subject \d+>/.test((d.text || "").trim()))
         warn(`The name "${nm}" is on a line that doesn't start with <Subject N>, so it isn't used.`);
     });
@@ -1519,6 +1569,7 @@ const CSS = `
   border-radius:6px;cursor:pointer;}
 .mmh3-prefitem:hover{background:#242a34;}
 .mmh3-prefitem input{margin-top:2px;flex-shrink:0;}
+.mmh3-prefselect select{flex:0 0 auto;margin-top:1px;}
 .mmh3-preflabel{display:block;font-size:calc(12px * var(--mmh3-fs, 1));color:#d7dbe2;}
 .mmh3-prefhint{display:block;font-size:calc(10px * var(--mmh3-fs, 1));color:#6b7484;line-height:1.35;
   margin-top:2px;}
@@ -1621,6 +1672,19 @@ const CSS = `
 .mmh3-form .mmh3-defrow textarea{flex:1 1 auto;min-width:0;}
 .mmh3-form .mmh3-defrow input[type=text].mmh3-defname{width:110px;flex:0 0 110px;min-width:0;align-self:flex-start;}
 .mmh3-form .mmh3-defrow input[type=text].mmh3-defname[hidden]{display:none;}
+.mmh3-form .mmh3-defrow input[type=text].mmh3-defname.mmh3-defvoice{width:190px;flex:0 0 190px;}
+.mmh3-spksplit{display:inline-flex;}
+.mmh3-spksplit .mmh3-spkmain{border-top-right-radius:0;border-bottom-right-radius:0;}
+.mmh3-spksplit .mmh3-spkarrow{border-top-left-radius:0;border-bottom-left-radius:0;border-left:0;padding-left:5px;padding-right:5px;}
+.mmh3-spkmenu{position:absolute;z-index:10006;min-width:300px;max-width:480px;background:#1b1f27;border:1px solid #3a4252;
+  border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,.45);}
+.mmh3-spkitem{display:block;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 9px;
+  color:#d7dbe2;cursor:pointer;font-size:calc(12px * var(--mmh3-fs, 1));}
+.mmh3-spkitem:hover{background:#262c36;}
+.mmh3-spkitem small{display:block;margin-top:3px;color:#8e97a6;font-family:ui-monospace,monospace;
+  font-size:calc(11px * var(--mmh3-fs, 1));white-space:normal;}
+.mmh3-spkitem.off{cursor:default;opacity:.6;}
+.mmh3-spkitem.off:hover{background:none;}
 .mmh3-chipname{color:#a9b2c2;font-size:calc(10px * var(--mmh3-fs, 1));}
 .mmh3-minitags{display:flex;gap:4px;flex-wrap:wrap;margin:-2px 0 8px 2px;min-height:14px;}
 .mmh3-minitag{font-size:calc(10px * var(--mmh3-fs, 1));border-radius:8px;padding:1px 7px;background:#20242d;border:1px solid #363d4a;}
@@ -2679,6 +2743,7 @@ class Editor {
     this.clearPending = false;
     this.closePending = false;
     this.prefs = loadPrefs();
+    setNamePrefix(this.prefs.namePrefix);
     this.prefsOpen = false;
     // Draft mode. "live" edits the node's prompt as ever; "draft" edits a
     // disk-backed scratch buffer that is never queued or executed. The two
@@ -3133,6 +3198,20 @@ class Editor {
       item("highlightTags", "Highlight tags and dialogue",
            "Off gives plain text fields; hovering a tag still shows its " +
            "preview."),
+      el("label", { class: "mmh3-prefitem mmh3-prefselect" },
+        el("select", { "aria-label": "Subject name prefix",
+          onchange: (e) => {
+            this.prefs.namePrefix = e.target.value;
+            savePrefs(this.prefs);
+            setNamePrefix(this.prefs.namePrefix);
+            this.render();
+          } },
+          NAME_PREFIXES.map((c) => el("option", { value: c, selected: c === this.prefs.namePrefix }, `${c}Name`))),
+        el("span", {},
+          el("span", { class: "mmh3-preflabel" }, "Subject name prefix"),
+          el("span", { class: "mmh3-prefhint" },
+            "Typed before a subject's name, it stands for \u201c<Subject N> Name\u201d. " +
+            "Changing it doesn't rewrite shorthand you've already typed."))),
       item("closeOnBackdrop", "Click outside to close",
            "Off means only \u2715, Cancel and Escape close the window."),
       item("saveOnClose", "Save to node when closing",
@@ -4131,10 +4210,10 @@ class Editor {
     if (tok.startsWith("(")) {
       return [el("span", { class: "mmh3-reftag spk", dataset: { tag: tok } }, tok)];
     }
-    if (tok.startsWith("!")) {
-      const known = subjectNames(this.state)[tok.slice(1)];
-      return [el("span", { class: "mmh3-reftag " + (known ? "subj" : "unknown"), dataset: { tag: tok },
-        title: known ? `${known} ${tok.slice(1)} in the prompt` : "No subject has this name" }, tok)];
+    if (tok.startsWith(NAME_PREFIX) && !tok.startsWith("<")) {
+      const hit = lookupName(subjectNames(this.state), tok.slice(1));
+      return [el("span", { class: "mmh3-reftag " + (hit ? "subj" : "unknown"), dataset: { tag: tok },
+        title: hit ? `${hit.tag} ${hit.name} in the prompt` : "No subject has this name" }, tok)];
     }
     let cls;
     if (tok.startsWith("<Subject")) {
@@ -4177,7 +4256,7 @@ class Editor {
     const slot = tags.map((t) => this.slotFor(t))
       .find((sl) => sl && sl.preview?.url && sl.preview.type === "img")
       || tags.map((t) => this.slotFor(t)).find((sl) => sl && sl.preview?.url);
-    return { slot, tags, voices, speakers, line };
+    return { slot, tags, voices, speakers, line, name: (line.name || "").trim() };
   }
 
   slotFor(tag) {
@@ -4199,6 +4278,17 @@ class Editor {
     this.chipLeave();
     const tag = hit.dataset.tag;
     let slot = null, subject = null;
+    if (tag.startsWith(NAME_PREFIX) && !tag.startsWith("<")) {
+      // The shorthand shows the subject it stands for.
+      const named = lookupName(subjectNames(this.state), tag.slice(1));
+      if (!named) return;
+      subject = this.subjectInfo(named.tag);
+      if (!subject) return;
+      slot = subject.slot;
+      this._chipOpenFor = tag;
+      this._chipTimer = setTimeout(() => this.openChipPeek(hit, slot, named.tag, subject), 180);
+      return;
+    }
     if (tag.startsWith("<Subject")) {
       subject = this.subjectInfo(tag);
       if (!subject) return;                  // undefined subject: nothing to show
@@ -4243,6 +4333,7 @@ class Editor {
       ? el("div", { class: "mmh3-chippeekcap col" },
           el("span", { class: "mmh3-chiprow" },
             el("span", { class: "mmh3-tagname subj" }, tag),
+            subject.name ? el("span", { class: "mmh3-chipname" }, subject.name) : null,
             subject.speakers.length
               ? el("span", { class: "mmh3-chipspk" }, subject.speakers.join(" "))
               : null),
@@ -4366,7 +4457,9 @@ class Editor {
     } catch (e) { /* the concept picker covers the gap */ }
     const infoOf = (file) => {
       const it = library.find((x) => x.visual?.file === file || x.audio?.file === file);
-      return { concept: it?.concept || "generic" };
+      const nm = String(it?.subject_name || "").trim();
+      return { concept: it?.concept || "generic", subjectName: /^[A-Za-z][\w-]{0,39}$/.test(nm) ? nm : "",
+        appearance: oneLine(it?.appearance), voiceDesc: oneLine(it?.voice_description) };
     };
     // Group each RefMod's look and voice; a voice-only RefMod has no look.
     const mods = [];
@@ -4379,13 +4472,50 @@ class Editor {
       // or the voice's when the RefMod is a voice only.
       if (s.refmod.role !== "voice" || !m.file) m.file = file;
     }
+    // A RefMod's saved subject name goes on its subject line when that line
+    // has no name of its own yet — including lines drafted before the name
+    // was set in the library. A name you typed is never replaced.
+    const nameLines = (dry = false) => {
+      let named = 0;
+      for (const m of mods) {
+        if (m.subjectName && m.look) {
+          const line = r.subjectDefs.find((d) => !(d.name || "").trim() && /^\s*<Subject \d+>/.test(d.text || "")
+            && (d.text || "").includes(m.look.tag));
+          if (line) { if (!dry) line.name = m.subjectName; named++; }
+        }
+        // A saved voice description fills the voice box on the RefMod's voice line.
+        if (m.voiceDesc && m.voice) {
+          const line = r.subjectDefs.find((d) => !oneLine(d.voice) && voiceBinding(d.text)
+            && (d.text || "").includes(m.voice.tag));
+          if (line) { if (!dry) line.voice = m.voiceDesc; named++; }
+        }
+      }
+      return named;
+    };
+    let how = null;
+    {
+      const citedNow = (tag) => r.subjectDefs.some((d) => (d.text || "").includes(tag));
+      const nothingNew = !mods.some((m) => (m.look && !citedNow(m.look.tag)) || (m.voice && !citedNow(m.voice.tag)));
+      if (nothingNew) {
+        // Every RefMod already has a line: nothing to add, but the two
+        // sections can still be drafted fresh, or blank names filled.
+        how = await this.askOverwrite({ complete: true, names: nameLines(true) });
+        if (!how) return;
+        if (how === "keep") {
+          const named = nameLines();
+          this.render();
+          toast(`Filled ${named} name or voice box${named === 1 ? "" : "es"} from the library`, 4000);
+          return;
+        }
+      }
+    }
     // Existing lines: add to them, or start the two sections over.
     const hasText = r.subjectDefs.some((d) => (d.text || "").trim()) || r.retention.some((x) => x.label);
-    if (hasText) {
-      const how = await this.askOverwrite();
+    if (hasText && !how) {
+      how = await this.askOverwrite();
       if (!how) return;
-      if (how === "replace") { r.subjectDefs = []; r.retention = []; }
     }
+    if (how === "replace") { r.subjectDefs = []; r.retention = []; }
     const defText = () => r.subjectDefs.map((d) => d.text).join("\n");
     const cited = (tag) => defText().includes(tag);
     const pending = mods.filter((m) => (m.look && !cited(m.look.tag)) || (m.voice && !cited(m.voice.tag)));
@@ -4426,7 +4556,11 @@ class Editor {
         const spec = REFMOD_CONCEPTS[m.concept] || REFMOD_CONCEPTS.identity;
         subj = spec.subject ? nextSubject() : null;
         const ctx = { subj, tag: m.look.tag };
-        r.subjectDefs.push({ text: spec.text(ctx), role: null });
+        let text = spec.text(ctx);
+        // A saved appearance goes straight into a subject's line, where it can be edited.
+        const looks = m.appearance.replace(/^with\s+/i, "");
+        if (spec.subject && looks) text = text.replace(/\.\s*$/, "") + `, with ${looks}.`;
+        r.subjectDefs.push({ text, role: null });
         ensureRet(subj || m.look.tag, spec.marker, spec.note(ctx));
         ensureTask(spec.task);
         added++;
@@ -4441,35 +4575,49 @@ class Editor {
         if (spec.speaker && !subj) {
           // A voice with no look of its own still needs someone to belong to.
           subj = nextSubject();
-          r.subjectDefs.push({ text: spec.speaker({ subj, tag: m.voice.tag }), role: null });
+          r.subjectDefs.push({ text: spec.speaker({ subj, tag: m.voice.tag }), role: null, name: m.subjectName || "" });
           ensureRet(subj, "fully_preserved", `${subj}'s identity is retained.`);
         }
         const ctx = { subj: subj || "<Subject 1>", tag: m.voice.tag, sx: nextSpeaker() };
-        r.subjectDefs.push({ text: spec.text(ctx), role: vc === "voice" ? "timbre" : null });
+        r.subjectDefs.push({ text: spec.text(ctx), role: vc === "voice" ? "timbre" : null,
+          voice: vc === "voice" ? (m.voiceDesc || "") : "" });
         ensureRet(m.voice.tag, spec.marker, spec.note(ctx));
         ensureTask(spec.task);
         added++;
       }
     }
+    nameLines();                                  // saved names onto the lines just written
     this.render();
     toast(`Drafted ${added} definition line${added === 1 ? "" : "s"} and their retention entries \u2014 read them over`, 5000);
   }
 
-  /** Lines already exist: resolves to "add", "replace" or null (cancelled). */
-  askOverwrite() {
+  /** Lines already exist: resolves to "add", "replace" or null (cancelled).
+   *  With `complete`, every RefMod already has a line, so there is nothing to
+   *  add: it offers "replace", and "keep" (fill `names` blank name boxes)
+   *  when there are names to fill. */
+  askOverwrite({ complete = false, names = 0 } = {}) {
     return new Promise((resolve) => {
       const close = (result) => { window.removeEventListener("keydown", onKey); box.remove(); resolve(result); };
       const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(null); } };
       const box = el("div", { class: "mmh3-conceptover", onmousedown: (e) => { if (e.target === box) close(null); } },
         el("div", { class: "mmh3-conceptbox", role: "dialog", "aria-label": "Definitions already exist" },
-          el("div", { class: "mmh3-concepthead" }, "You already have definitions"),
+          el("div", { class: "mmh3-concepthead" },
+            complete ? "Every RefMod already has a definition" : "You already have definitions"),
           el("div", { class: "mmh3-dim" },
-            "Add missing keeps every line you have and drafts only the RefMods that don't have one yet. " +
-            "Start over clears subject_definitions and retention_analysis and drafts them fresh from the RefMods."),
+            complete
+              ? "Start over clears ALL of subject_definitions and retention_analysis, including lines for other media, " +
+                "and drafts them fresh from the RefMods." +
+                (names ? ` Fill names and voices keeps your lines and fills ${names} empty name or voice ` +
+                         `box${names === 1 ? "" : "es"} with what's saved in the library.` : "")
+              : "Add missing keeps every line you have and drafts only the RefMods that don't have one yet. " +
+                "Start over clears ALL of subject_definitions and retention_analysis, including lines for other media, " +
+                "and drafts them fresh from the RefMods."),
           el("div", { class: "mmh3-conceptbtns" },
             el("button", { class: "mmh3-btn", onclick: () => close(null) }, "Cancel"),
             el("button", { class: "mmh3-btn danger", onclick: () => close("replace") }, "Start over"),
-            el("button", { class: "mmh3-btn primary", onclick: () => close("add") }, "Add missing"))));
+            !complete ? el("button", { class: "mmh3-btn primary", onclick: () => close("add") }, "Add missing")
+              : names ? el("button", { class: "mmh3-btn primary", onclick: () => close("keep") }, "Fill names and voices")
+              : null)));
       window.addEventListener("keydown", onKey);
       document.body.append(box);
     });
@@ -5217,6 +5365,38 @@ class Editor {
     }
   }
 
+  /** The speaker button's menu: a plain line, or one that names the voice.
+   *  Kept inside the editor, so a click in it doesn't count as outside. */
+  openSpeakerMenu(anchor, id, b, line, pick) {
+    this._spkMenu?.close();
+    const host = anchor.closest(".mmh3-modal") || document.body;
+    let menu;
+    const close = () => {
+      menu?.remove();
+      document.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+      this._spkMenu = null;
+    };
+    const onDown = (e) => { if (!menu.contains(e.target) && !anchor.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); close(); } };
+    const item = (label, text, enabled, onpick) => el("button", {
+      class: "mmh3-spkitem" + (enabled ? "" : " off"), type: "button",
+      onclick: (e) => { e.stopPropagation(); if (!enabled) return; close(); onpick(); },
+    }, el("b", {}, label), el("small", {}, text));
+    menu = el("div", { class: "mmh3-spkmenu", role: "menu" },
+      item(`Just (${id})`, line(id, false), true, () => pick(false)),
+      item(`(${id}) with voice`, b.voice ? line(id, true) : `Fill in the voice box on the ${b.audio} line first`,
+        !!b.voice, () => pick(true)));
+    host.append(menu);
+    const pr = (menu.offsetParent || document.body).getBoundingClientRect();
+    const ar = anchor.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(ar.left - pr.left, pr.width - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${ar.bottom - pr.top + 4}px`;
+    document.addEventListener("mousedown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    this._spkMenu = { close };
+  }
+
   dialogueRow(lang) {
     this.dialogueLang = lang;          // reused by refreshDialogueRow()
     const used = this.usedSpeakers();
@@ -5230,10 +5410,26 @@ class Editor {
       onclick: () => { this.voiceover = !this.voiceover; this.render(); },
     }, "\u{1F399} voiceover");
 
-    const line = (id) => {
+    // Reference mode: a voice-timbre line ties a speaker ID to its subject
+    // (and that subject's name) and, when filled in, a description of the voice.
+    const binds = {};
+    if (this.state.mode === "REF") {
+      const names = subjectNames(this.state);
+      for (const d of this.state.ref?.subjectDefs || []) {
+        const b = !d.off && voiceBinding(d.text);
+        if (!b || binds[b.sx]) continue;
+        const named = b.subj ? Object.values(names).find((n) => n.tag === b.subj) : null;
+        binds[b.sx] = { ...b, name: named ? named.name : "", voice: oneLine(d.voice) };
+      }
+    }
+
+    const line = (id, withVoice = false) => {
+      const b = binds[id];
+      const who = b?.name ? `${NAME_PREFIX}${b.name} ` : "";
+      const how = withVoice && b?.voice ? `, in the ${noArticle(b.voice)} referenced from ${b.audio},` : "";
       const said = this.voiceover
-        ? `(${id}) says in an off-screen voiceover: `
-        : `(${id}) says: `;
+        ? `${who}(${id})${how} says in an off-screen voiceover: `
+        : `${who}(${id})${how} says: `;
       const tail = this.voiceover
         ? " while their lips remain completely closed."
         : "";
@@ -5243,13 +5439,34 @@ class Editor {
       return `${said}<d>[${lang.value}] </d>${tail}`;
     };
 
-    const spkBtn = (id, isNew) => el("button", {
-      class: "mmh3-btn" + (isNew ? " ghost" : ""),
-      title: isNew
-        ? `Add ${id} \u2014 the next speaker in the video's speaking order`
-        : `Insert a line for ${id}`,
-      onclick: () => this.insert(line(id)),
-    }, isNew ? `+ (${id})` : `(${id})`);
+    const spkBtn = (id, isNew) => {
+      const b = !isNew && binds[id];
+      if (!b) return el("button", {
+        class: "mmh3-btn" + (isNew ? " ghost" : ""),
+        title: isNew
+          ? `Add ${id} \u2014 the next speaker in the video's speaking order`
+          : `Insert a line for ${id}`,
+        onclick: () => this.insert(line(id)),
+      }, isNew ? `+ (${id})` : `(${id})`);
+      // A split button: the main part repeats this speaker's last choice,
+      // the arrow offers a plain line or one that names the voice. Each
+      // speaker remembers its own choice, saved with the prompt.
+      const picks = this.state.ref.voicePick || {};
+      const withVoice = picks[id] !== false && !!b.voice;
+      const pick = (voice) => {
+        this.state.ref.voicePick = { ...(this.state.ref.voicePick || {}), [id]: voice };
+        this.insert(line(id, voice));
+        this.refreshDialogueRow();
+      };
+      const arrow = el("button", { class: "mmh3-btn mmh3-spkarrow", title: `Line options for ${id}`,
+        "aria-label": `Line options for ${id}`,
+        onclick: (e) => { e.stopPropagation(); this.openSpeakerMenu(arrow, id, b, line, pick); } }, "\u25be");
+      return el("span", { class: "mmh3-spksplit" },
+        el("button", { class: "mmh3-btn mmh3-spkmain",
+          title: withVoice ? `Insert a line for ${id} in the voice from ${b.audio}` : `Insert a line for ${id}`,
+          onclick: () => this.insert(line(id, withVoice)) }, withVoice ? `(${id}) + voice` : `(${id})`),
+        arrow);
+    };
 
     const pair = used.length >= 2
       ? el("button", { class: "mmh3-btn",
@@ -5445,7 +5662,7 @@ class Editor {
       const defText = r.subjectDefs.map((d) => d.text).join("\n");
       const ns = [...new Set([...defText.matchAll(/<Subject (\d+)>/g)].map((m) => m[1]))];
       const names = subjectNames(this.state);
-      const nameOf = (n) => Object.keys(names).find((k) => names[k] === `<Subject ${n}>`);
+      const nameOf = (n) => Object.values(names).find((v) => v.tag === `<Subject ${n}>`)?.name;
       return ns.flatMap((n) => {
         const nm = nameOf(n);
         const chips = [el("span", {
@@ -5453,9 +5670,9 @@ class Editor {
           onclick: () => this.insert(`<Subject ${n}>`),
         }, el("b", {}, `Subject ${n}`), nm ? el("span", { class: "mmh3-chipname" }, nm) : null)];
         if (nm) chips.push(el("span", {
-          class: "mmh3-chip subj", title: `Insert !${nm} \u2014 becomes "<Subject ${n}> ${nm}" in the prompt`,
-          onclick: () => this.insert(`!${nm}`),
-        }, el("b", {}, `!${nm}`)));
+          class: "mmh3-chip subj", title: `Insert ${NAME_PREFIX}${nm} \u2014 becomes "<Subject ${n}> ${nm}" in the prompt`,
+          onclick: () => this.insert(`${NAME_PREFIX}${nm}`),
+        }, el("b", {}, `${NAME_PREFIX}${nm}`)));
         return chips;
       });
     };
@@ -5560,17 +5777,24 @@ class Editor {
         };
         const ta = el("textarea", { rows: 2, value: d.text,
           placeholder: "<Subject 1> is the ... in <Picture 1>, with ...",
-          oninput: (e) => { d.text = e.target.value; d.role = null; paintMini(); nameIn.hidden = !/^\s*<Subject \d+>/.test(d.text); } });
+          oninput: (e) => { d.text = e.target.value; d.role = null; paintMini(); nameIn.hidden = !/^\s*<Subject \d+>/.test(d.text); voiceIn.hidden = !voiceBinding(d.text); } });
         // A name rides on a <Subject N> line: the prompt adds "Their name
         // is X." and !X anywhere else becomes "<Subject N> X".
         const nameIn = el("input", { class: "mmh3-defname", type: "text", value: d.name || "",
           placeholder: "name", title: "Optional name for this subject. The prompt adds \u201cTheir name is \u2026\u201d " +
-            "to the line, and typing !Name in any field stands for \u201c<Subject N> Name\u201d.",
+            `to the line, and typing ${NAME_PREFIX}Name in any field stands for \u201c<Subject N> Name\u201d.`,
           hidden: !/^\s*<Subject \d+>/.test(d.text || ""),
-          oninput: (e) => { d.name = e.target.value.trim(); this._paintSubjChips?.(); this.updatePreview(); } });
+          oninput: (e) => { keepNameChars(e); d.name = e.target.value.trim(); this._paintSubjChips?.(); this.updatePreview(); } });
+        // A voice description rides on a voice-timbre line: the prompt adds
+        // "It is a …", and the speaker button can put it into a spoken line.
+        const voiceIn = el("input", { class: "mmh3-defname mmh3-defvoice", type: "text", value: d.voice || "",
+          placeholder: "voice, like low and husky", title: "Optional description of this voice. The prompt adds " +
+            "“It is a …” to the line, and the speaker button can insert it into a spoken line.",
+          hidden: !voiceBinding(d.text || ""),
+          oninput: (e) => { d.voice = e.target.value; this.updatePreview(); this.refreshDialogueRow(); } });
         paintMini();
         const row = el("div", { class: "mmh3-defrow" + (d.off ? " off" : "") },
-          this.rowPower(d, drawDefs), ta, nameIn,
+          this.rowPower(d, drawDefs), ta, nameIn, voiceIn,
           el("button", { class: "mmh3-btn ghost", title: "Remove line",
             onclick: () => { r.subjectDefs.splice(i, 1); drawDefs(); this.updatePreview(); },
           }, "\u2715"));

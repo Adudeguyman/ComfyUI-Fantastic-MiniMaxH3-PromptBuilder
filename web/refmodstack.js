@@ -6,7 +6,7 @@
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { applyCanvasSizing, postApi, LOADER_NAME, viewURL, openCropEditor } from "./medialoader.js";
+import { applyCanvasSizing, postApi, LOADER_NAME, viewURL, openCropEditor, keepNameChars } from "./medialoader.js";
 
 export const STACK_NAME = "MiniMaxH3RefModStack";
 // Either pack's Text Encode labels a bundle the same way.
@@ -359,6 +359,14 @@ const CSS = `
 .mmr-sprevtag{position:absolute;right:5px;bottom:4px;font-size:calc(9px * var(--mmh3-fs, 1));color:#d7dbe2;
   background:rgba(8,10,14,.7);border-radius:4px;padding:1px 5px;pointer-events:none;}
 .mmr-srcmain{display:flex;flex-direction:column;gap:4px;min-width:0;}
+.mmr-subjrows{display:flex;flex-direction:column;gap:4px;}
+.mmr-subjrow{display:flex;align-items:center;gap:6px;min-width:0;}
+.mmr-subjrow span{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;letter-spacing:normal;font-weight:400;font-size:calc(12px * var(--mmh3-fs, 1));}
+.mmr-subjrow .mmr-search{flex:0 0 120px;width:120px;}
+.mmr-descfields{display:flex;flex-direction:column;gap:8px;}
+.mmr-subjitem{display:flex;flex-direction:column;gap:4px;padding:0 0 6px;border-bottom:1px solid #262b35;}
+.mmr-subjitem:last-child{border-bottom:0;padding-bottom:0;}
+.mmr-subjitem > .mmr-search{width:100%;box-sizing:border-box;}
 .mmr-form{display:flex;flex-direction:column;gap:8px;background:#191c22;border:1px solid #303642;border-radius:8px;padding:10px;}
 .mmr-grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
 .mmr-note{display:flex;flex-direction:column;gap:6px;background:#12151b;border:1px solid #23272f;border-radius:6px;
@@ -698,6 +706,14 @@ const CONCEPTS = ["generic", "identity", "pose_motion", "clothing", "background"
 const SETTINGS_KEY = "mmr-create-settings";
 const NAME_BAD = /[^A-Za-z0-9._ +()\-]+/g;
 const cleanName = (t) => String(t || "").replace(NAME_BAD, "_").replace(/^[ ._]+|[ ._]+$/g, "").slice(0, 120);
+// Appearance and voice descriptions are drafted into definition lines: one
+// line (a break reads as a shot cut), no trailing full stop.
+const oneLine = (s) => String(s || "").replace(/\s+/g, " ").trim().replace(/[\s.]+$/, "");
+const DESC_LIMIT = 300;
+const DESC_RULE = `Keep appearance and voice descriptions under ${DESC_LIMIT} characters.`;
+const APPEARANCE_TIP = "Optional. How the subject looks: Draft from RefMods writes it into their definition line. Saved inside the file.";
+const VOICE_TIP = "Optional. How the voice sounds: Draft from RefMods adds it to the voice line, and the speaker buttons use it. " +
+  "Saved inside the file.";
 const stem = (f) => cleanName(String(f || "").split("/").pop().replace(/\.[^.]+$/, ""));
 
 const SETTING_RANGES = { ref_resolution: [256, 2048], grid: [2, 64], latent_frames: [1, 1024],
@@ -1107,7 +1123,7 @@ export function openLibrary(panel, opts = {}) {
     const q = view.q.trim().toLowerCase();
     let list = items.filter((it) => (view.folder === "all" || it.folder === view.folder)
       && (view.kind === "all" || kindsOf(it).includes(view.kind))
-      && (!q || [it.label, it.name, it.folder, it.desc, filesShort(it)].join(" ").toLowerCase().includes(q)));
+      && (!q || [it.label, it.name, it.folder, it.desc, it.subject_name, it.appearance, it.voice_description, filesShort(it)].join(" ").toLowerCase().includes(q)));
     list.sort((a, b) => view.sort === "tokens" ? tokensOf(a) - tokensOf(b)
       : view.sort === "folder" ? (a.folder + a.label).localeCompare(b.folder + b.label)
       : view.sort === "new" ? (b.mtime || 0) - (a.mtime || 0) : a.label.localeCompare(b.label));
@@ -1128,6 +1144,7 @@ export function openLibrary(panel, opts = {}) {
     if (it.audio && Number(it.audio.seconds || 0) < 0.5) b.push(el("span", { class: "mmr-b warn",
       title: "This voice is shorter than half a second — effectively silent. Recreate it and check the audio's trim." }, "voice empty"));
     if (it.paired) b.push(el("span", { class: "mmr-b pair" }, "pair"));
+    if (it.subject_name) b.push(el("span", { class: "mmr-b", title: "Subject name used in prompts" }, `name \u00b7 ${it.subject_name}`));
     if (it.bundle) b.push(el("span", { class: "mmr-b pair", title: "A single-file bundle made by ComfyUI-MiniMaxH3Mod. " +
       "Its first look and first voice are used here; it can be inspected but not edited in this library." },
       `bundle · ${it.bundle} member${it.bundle === 1 ? "" : "s"}`));
@@ -1168,7 +1185,14 @@ export function openLibrary(panel, opts = {}) {
   function paintInspector() {
     const it = byName(view.selected);
     if (!it) { inspector.hidden = true; body.classList.remove("withinspector"); return; }
-    const nameIn = el("input", { class: "mmr-search", value: it.label, "aria-label": "Name" });
+    const nameIn = el("input", { class: "mmr-search", value: it.label, "aria-label": "RefMod name" });
+    const subjIn = el("input", { class: "mmr-search", value: it.subject_name || "", placeholder: "e.g. Bob",
+      "aria-label": "Subject name", oninput: keepNameChars, title: "One word used in prompts. Draft from RefMods names the subject this, " +
+        "and !Name stands for it. The RefMod's own name and description stay yours and never go into a prompt." });
+    const appIn = el("input", { class: "mmr-search", value: it.appearance || "", placeholder: "auburn hair, a freckled face and a green coat",
+      "aria-label": "Appearance", title: APPEARANCE_TIP });
+    const voiceIn = it.audio ? el("input", { class: "mmr-search", value: it.voice_description || "",
+      placeholder: "low, husky voice with a slow, warm pace", "aria-label": "Voice", title: VOICE_TIP }) : null;
     const folderIn = el("input", { class: "mmr-search", value: it.folder, placeholder: "(root)", "aria-label": "Folder" });
     const descIn = el("textarea", { class: "mmr-ta", rows: 3, "aria-label": "Description" }, it.desc || "");
     const conceptIn = el("select", { class: "mmr-sel" }, CONCEPTS.map((c) => el("option", { value: c, selected: c === it.concept }, c)));
@@ -1208,9 +1232,15 @@ export function openLibrary(panel, opts = {}) {
       const target = newFolder ? `${newFolder}/${newName}` : newName;
       try {
         let renamed = false;
-        if ((descIn.value || "") !== (it.desc || "") || conceptIn.value !== it.concept) {
+        const subj = subjIn.value.trim();
+        if (subj && !/^[A-Za-z][\w-]{0,39}$/.test(subj)) { say("A subject name is one word: letters, digits, - and _, starting with a letter.", true); return; }
+        const app = oneLine(appIn.value), voi = voiceIn ? oneLine(voiceIn.value) : (it.voice_description || "");
+        if (app.length > DESC_LIMIT || voi.length > DESC_LIMIT) { say(DESC_RULE, true); return; }
+        if ((descIn.value || "") !== (it.desc || "") || conceptIn.value !== it.concept || subj !== (it.subject_name || "")
+            || app !== (it.appearance || "") || voi !== (it.voice_description || "")) {
           const r = await postApi("/minimax_h3/refmods/meta", { headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ files: files(it), description: descIn.value, concept_type: conceptIn.value }) });
+            body: JSON.stringify({ files: files(it), description: descIn.value, concept_type: conceptIn.value, subject_name: subj,
+              appearance: app, voice_description: voi }) });
           const d = await r.json(); if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         }
         if (target !== it.name) {
@@ -1242,10 +1272,16 @@ export function openLibrary(panel, opts = {}) {
       el("div", { class: "mmr-iactions" },
         el("button", { class: "mmr-btn", onclick: () => pvInput.click() }, it.preview ? "Replace preview" : "Add preview"), pvInput,
         panel ? el("button", { class: "mmr-btn", onclick: () => { panel.add(it); drawGrid(); } }, "Add to stack") : null),
-      el("label", { class: "mmr-ilabel" }, "Name", nameIn),
+      el("label", { class: "mmr-ilabel" }, "RefMod name", nameIn),
       el("label", { class: "mmr-ilabel" }, "Folder", folderIn),
       el("label", { class: "mmr-ilabel" }, "Description", descIn),
       el("label", { class: "mmr-ilabel" }, "Concept", conceptIn),
+      el("label", { class: "mmr-ilabel" }, "Subject name", subjIn,
+        el("span", { class: "mmr-dim mmr-numhint" }, "Used in prompts \u2014 optional, one word")),
+      el("label", { class: "mmr-ilabel", title: APPEARANCE_TIP }, "Appearance", appIn,
+        el("span", { class: "mmr-dim mmr-numhint" }, "Drafted into the subject's line \u2014 optional")),
+      voiceIn ? el("label", { class: "mmr-ilabel", title: VOICE_TIP }, "Voice", voiceIn,
+        el("span", { class: "mmr-dim mmr-numhint" }, "Drafted onto the voice line \u2014 optional")) : null,
       el("div", { class: "mmr-idetails" }, chanRow("Look", it.visual), chanRow("Voice", it.audio),
         el("div", { class: "mmr-irow" }, el("span", {}, "Files"), el("span", { class: "mmr-cfiles" }, files(it).join("\n")))),
       storedSection(it),
@@ -1259,6 +1295,10 @@ export function openLibrary(panel, opts = {}) {
   const inspectResults = new Map();       // item name -> last finished job
   const inspectView = new Map();          // item name -> "frames" | "video"
   const EDIT_NAME = "MiniMaxH3FantasticRefModEdit";
+  const SUBJECT_OK = /^[A-Za-z][\w-]{0,39}$/;
+  const SUBJECT_RULE = "A subject name is one word: letters, digits, - and _, starting with a letter.";
+  const SUBJECT_TIP = "Optional one word used in prompts: Draft from RefMods names the subject this, " +
+    "and !Name stands for it. Saved inside the file.";
   let inspectStrength = 1;
   const tempURL = (f) => api.apiURL(`/view?filename=${encodeURIComponent(f.filename)}` +
     `&subfolder=${encodeURIComponent(f.subfolder || "")}&type=${f.type || "temp"}`);
@@ -1452,7 +1492,8 @@ export function openLibrary(panel, opts = {}) {
   function startEdit(it) {
     if (!it.visual && !it.audio) return;
     if (editing) cancelEdit(false);
-    editing = { name: it.name, it, visual: it.visual, audio: it.audio, decoded: false, decodeError: "",
+    editing = { name: it.name, it, visual: it.visual, audio: it.audio, decoded: false, decodeError: "", subject: it.subject_name || "",
+      appearance: it.appearance || "", voiceDesc: it.voice_description || "",
       copy: false, copyName: `${it.label} copy` };
     // The file's own shape, in pixels: what new pictures are fitted to.
     let w = (it.visual?.w || 0) * 16, h = (it.visual?.h || 0) * 16;
@@ -1508,7 +1549,16 @@ export function openLibrary(panel, opts = {}) {
     let voice = "";
     if (newVoice) voice = "new";
     else if (editing.audio && !storedVoiceKept) voice = "remove";
-    return { order, adds, same, voice, newVoice, changed: !same || !!voice, looks: looks.length };
+    const subject = (editing.subject || "").trim();
+    const nameChanged = subject !== (editing.it.subject_name || "");
+    const nameBad = !!subject && !SUBJECT_OK.test(subject);
+    const appearance = oneLine(editing.appearance), voiceDesc = oneLine(editing.voiceDesc);
+    const appearanceChanged = appearance !== (editing.it.appearance || "");
+    const voiceDescChanged = voiceDesc !== (editing.it.voice_description || "");
+    const descBad = appearance.length > DESC_LIMIT || voiceDesc.length > DESC_LIMIT;
+    return { order, adds, same, voice, newVoice, looks: looks.length,
+      changed: !same || !!voice || nameChanged || appearanceChanged || voiceDescChanged,
+      subject, nameChanged, nameBad, appearance, appearanceChanged, voiceDesc, voiceDescChanged, descBad };
   }
 
   /* ---- create tab */
@@ -1538,6 +1588,7 @@ export function openLibrary(panel, opts = {}) {
   // for turning a batch of unrelated items into separate references.
   let combine = st.combine !== false;
   let stackName = "";
+  let subjectName = "", appearanceText = "", voiceText = "";
   const isLook = (s) => s.rec.kind === "picture" || s.rec.kind === "video";
   const used = () => sources.filter((x) => x.use);
   const defaultStackName = () => {
@@ -1712,9 +1763,13 @@ export function openLibrary(panel, opts = {}) {
     let line, cls = "";
     if (editing) {
       const plan = editPlan(), e = estimate(u), t = editing.visual?.t || 0;
-      const voiceNote = plan.voice === "new" ? " · new voice" : plan.voice === "remove" ? " · voice removed" : "";
+      const voiceNote = (plan.voice === "new" ? " · new voice" : plan.voice === "remove" ? " · voice removed" : "") +
+        (plan.nameChanged ? (plan.subject ? ` · named ${plan.subject}` : " · subject name cleared") : "") +
+        (plan.appearanceChanged || plan.voiceDescChanged ? " · descriptions updated" : "");
       const copyTo = editing.copy ? copyTarget() : null;
       if (editing.decodeError) { cls = "over"; line = `Couldn't decode the stored frames: ${editing.decodeError}`; }
+      else if (plan.nameBad) { blocked = true; cls = "over"; line = SUBJECT_RULE; }
+      else if (plan.descBad) { blocked = true; cls = "over"; line = DESC_RULE; }
       else if (editing.copy && !copyTo) { blocked = true; cls = "over"; line = "Give the copy a name."; }
       else if (editing.copy && byName(copyTo)) { blocked = true; cls = "over"; line = `"${copyTo}" already exists — pick another name.`; }
       else if (!plan.changed && !editing.copy) line = `${t} frame${t === 1 ? "" : "s"} · ${fmt(editing.visual?.tokens || 0)} tokens · nothing changed yet`;
@@ -1881,10 +1936,48 @@ export function openLibrary(panel, opts = {}) {
         el("select", { class: "mmr-sel", onchange: (e) => { st[key] = e.target.value; saveSettings(st); } },
           el("option", { value: "" }, "(choose)"), vaes.map((v) => el("option", { value: v, selected: v === st[key] }, v))));
     };
+    /** Subject name, appearance and voice in the settings pane, away from the
+     *  RefMod file names. Appearance only with a look, voice only with a voice. */
+    const subjectField = () => {
+      const descInput = (label, value, hint, onset) => el("input", { class: "mmr-search", value: value || "",
+        placeholder: hint, "aria-label": label, oninput: (e) => onset(e.target.value) });
+      if (editing || combine) {
+        const u = used();
+        const hasLook = editing ? !!editing.visual || u.some((x) => isLook(x) && !isStored(x)) : u.some(isLook);
+        const hasVoice = editing ? !!editing.audio || u.some((x) => x.voice && !isStored(x)) : u.some((x) => x.voice);
+        const set = (key, v) => {
+          if (editing) { editing[key] = v; paintBudget(); return; }
+          if (key === "subject") subjectName = v; else if (key === "appearance") appearanceText = v; else voiceText = v;
+        };
+        return el("div", { class: "mmr-descfields" },
+          el("label", { class: "mmr-ilabel", title: SUBJECT_TIP }, "Subject name",
+            el("input", { class: "mmr-search", value: editing ? editing.subject : subjectName, placeholder: "optional, e.g. Bob",
+              "aria-label": "Subject name", oninput: (e) => { keepNameChars(e); set("subject", e.target.value.trim()); } })),
+          hasLook ? el("label", { class: "mmr-ilabel", title: APPEARANCE_TIP }, "Appearance",
+            descInput("Appearance", editing ? editing.appearance : appearanceText, "optional, like auburn hair and a green coat",
+              (v) => set("appearance", v))) : null,
+          hasVoice ? el("label", { class: "mmr-ilabel", title: VOICE_TIP }, "Voice",
+            descInput("Voice", editing ? editing.voiceDesc : voiceText, "optional, like low, husky voice",
+              (v) => set("voiceDesc", v))) : null);
+      }
+      const rows = used();
+      if (!rows.length) return null;
+      return el("div", { class: "mmr-ilabel", title: SUBJECT_TIP }, "Subject names and descriptions",
+        el("div", { class: "mmr-subjrows" }, rows.map((x) => {
+          x._subjLabel = el("span", { title: x.name }, x.name);
+          return el("div", { class: "mmr-subjitem" },
+            el("label", { class: "mmr-subjrow" }, x._subjLabel,
+              el("input", { class: "mmr-search", value: x.subject || "", placeholder: "subject name", "aria-label": `Subject name for ${x.name}`,
+                oninput: (e) => { keepNameChars(e); x.subject = e.target.value.trim(); } })),
+            isLook(x) ? descInput(`Appearance for ${x.name}`, x.appearance, "appearance, optional", (v) => { x.appearance = v; }) : null,
+            x.voice ? descInput(`Voice for ${x.name}`, x.voiceDesc, "voice, optional", (v) => { x.voiceDesc = v; }) : null);
+        })));
+    };
     const needVoice = used().some((x) => x.voice && !isStored(x)), needLook = used().some((x) => isLook(x) && !isStored(x));
     if (editing) {
       setChildren(form,
         el("div", { class: "mmr-fh" }, "Settings"),
+        subjectField(),
         el("div", { class: "mmr-grid2" },
           num("max_tokens", "Max tokens", 0, 1048576, 256, "Refuses to save anything bigger than this. 0 = no limit."),
           num("latent_frames", "Clip frames", 1, 1024, 1, "Frames taken from the start of each added clip, after its trim.", clipFramesHint),
@@ -1902,6 +1995,7 @@ export function openLibrary(panel, opts = {}) {
       el("div", { class: "mmr-fh" }, "Settings"),
       el("label", { class: "mmr-ilabel" }, "Folder", el("input", { class: "mmr-search", value: st.subfolder, placeholder: "(root)",
         onchange: (e) => { st.subfolder = e.target.value.trim(); saveSettings(st); } })),
+      subjectField(),
       el("label", { class: "mmr-ilabel" }, "Mode", el("select", { class: "mmr-sel", onchange: (e) => { st.mode = e.target.value; saveSettings(st); paintCreate(); } },
         ["Full Reference", "Compressed Reference"].map((m) => el("option", { value: m, selected: st.mode === m }, m)))),
       modeNote(),
@@ -1985,7 +2079,8 @@ export function openLibrary(panel, opts = {}) {
                 title: "Every photo in this RefMod is made this size and shape (portrait, landscape or square). " +
                   (st.mode === "Full Reference" ? "The others have their edges trimmed to match." : "The others are squeezed to match.") },
                 "Sets dataset size and aspect ratio") : null)
-          : el("input", { class: "mmr-search", value: x.name, "aria-label": "RefMod name", onchange: (e) => { x.name = cleanName(e.target.value); e.target.value = x.name; } }),
+          : el("input", { class: "mmr-search", value: x.name, "aria-label": "RefMod name", onchange: (e) => {
+              x.name = cleanName(e.target.value); e.target.value = x.name; if (x._subjLabel) x._subjLabel.textContent = x.name; } }),
         el("div", { class: "mmr-dim" }, [x.origin, ...bits].filter(Boolean).join(" · ")),
         f != null ? el("div", { class: "mmr-dim" }, x.rec.kind === "video"
           ? (() => { const n = clipFrames(x), take = h3Take(Math.min(st.latent_frames, n));
@@ -2032,10 +2127,13 @@ export function openLibrary(panel, opts = {}) {
     // Create's resolution decides size, so a loader's size cap doesn't ride along.
     const recOf = (x) => { const r = { ...x.rec }; delete r.resize; if (r.kind === "video") r.audio_mode = x.voice ? "paired" : "off"; return r; };
     const groups = combine
-      ? [{ name: stackName || defaultStackName(), members: use }]
-      : use.map((x) => ({ name: x.name, members: [x] }));
+      ? [{ name: stackName || defaultStackName(), members: use, subject: subjectName, appearance: appearanceText, voiceDesc: voiceText }]
+      : use.map((x) => ({ name: x.name, members: [x], subject: x.subject || "", appearance: x.appearance || "", voiceDesc: x.voiceDesc || "" }));
     const names = groups.map((g) => g.name);
     if (names.some((n) => !n)) { toast("Every RefMod needs a name", 4000); return; }
+    if (groups.some((g) => g.subject && !SUBJECT_OK.test(g.subject))) { toast(SUBJECT_RULE, 5000); return; }
+    if (groups.some((g) => oneLine(g.appearance).length > DESC_LIMIT || oneLine(g.voiceDesc).length > DESC_LIMIT)) {
+      toast(DESC_RULE, 5000); return; }
     if (new Set(names).size !== names.length) { toast("Two sources have the same name", 4000); return; }
     const prompt = {}; let id = 1;
     const vid = needLook ? String(id++) : null;
@@ -2046,6 +2144,9 @@ export function openLibrary(panel, opts = {}) {
       const inputs = { name: g.name, subfolder: st.subfolder || "", mode: st.mode, ref_resolution: st.ref_resolution,
         grid: st.grid, latent_frames: st.latent_frames, refinement_steps: st.refinement_steps, max_tokens: st.max_tokens,
         audio_max_seconds: st.audio_max_seconds, concept_type: st.concept_type, description: "",
+        subject_name: g.subject || "",
+        appearance: g.members.some(isLook) ? oneLine(g.appearance) : "",
+        voice_description: g.members.some((x) => x.voice) ? oneLine(g.voiceDesc) : "",
         write_preview: !!st.write_preview, source: JSON.stringify(g.members.map(recOf)) };
       if (vid && g.members.some(isLook)) inputs.vae = [vid, 0];
       if (aid && g.members.some((x) => x.voice)) inputs.audio_vae = [aid, 0];
@@ -2064,6 +2165,7 @@ export function openLibrary(panel, opts = {}) {
       }
       jobs.unshift({ prompt_id: d.prompt_id, names, status: "queued", msg: `#${d.number} in the queue`, progress: 0, saved: [] });
       hook(); watchJob(d.prompt_id); paintJobs();
+      subjectName = appearanceText = voiceText = "";   // these belong to the RefMod just made
       toast(`Queued ${names.length === 1 ? names[0] : `${names.length} RefMods`}`);
     } catch (err) {
       toast(`Couldn't queue: ${err.message}`, 6000);
@@ -2089,7 +2191,10 @@ export function openLibrary(panel, opts = {}) {
     const file = (editing.visual || editing.audio).file;
     const inputs = { file, frames: editing.visual && !plan.same ? JSON.stringify(plan.order) : "",
       add: JSON.stringify(plan.adds.map(recOf)), latent_frames: st.latent_frames, audio_max_seconds: st.audio_max_seconds,
-      voice: plan.voice === "new" ? JSON.stringify(recOf(plan.newVoice)) : plan.voice, save_as: saveAs };
+      voice: plan.voice === "new" ? JSON.stringify(recOf(plan.newVoice)) : plan.voice, save_as: saveAs,
+      subject_name: plan.nameChanged ? (plan.subject || "-") : "",
+      appearance: plan.appearanceChanged ? (plan.appearance || "-") : "",
+      voice_description: plan.voiceDescChanged ? (plan.voiceDesc || "-") : "" };
     if (vid) inputs.vae = [vid, 0];
     if (aid) inputs.audio_vae = [aid, 0];
     prompt[String(id++)] = { class_type: EDIT_NAME, inputs };

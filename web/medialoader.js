@@ -100,6 +100,21 @@ function fmtDur(s) {
 
 /** Tag numbering, mirroring comfy_extras/nodes_minimax_h3.py ordering. */
 /** An item counts unless it has been switched off. */
+/** Subject names are one word (letters, digits, - and _, up to 40). Call
+ *  first thing in a name field's input handler: anything else — a space
+ *  typed, or text pasted — is dropped as it arrives, keeping the caret. */
+export function keepNameChars(e) {
+  const inp = e?.target;
+  if (!inp) return;
+  const v = inp.value, bad = /[^A-Za-z0-9_-]/g;
+  const clean = v.replace(bad, "").slice(0, 40);
+  if (clean === v) return;
+  const caret = inp.selectionStart ?? v.length;
+  const pos = Math.min(clean.length, v.slice(0, caret).replace(bad, "").length);
+  inp.value = clean;
+  try { inp.setSelectionRange(pos, pos); } catch (err) { /* not focusable */ }
+}
+
 export function isOn(item) {
   return item && item.enabled !== false;
 }
