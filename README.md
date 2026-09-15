@@ -1371,16 +1371,38 @@ lighter; it suits settings, styles and moods, or using many references at
 once. If you're not sure, make one of each and try them with the same
 prompt.
 
-### Weights and labels
+### The stack node
 
-Each stack row has a weight per channel. Up to 1 is plain strength. Above
-1 adds copies: 2.7 sends two full copies and a third at 0.7, and the
-readout next to the slider spells that out along with the token cost.
-Switch a channel to **S × C** for several copies at the same reduced
-strength. Rows can be switched off without removing them, and dragged to
-reorder, which matters because order sets the label numbers. The footer
-shows the bundle's total, an optional `max_total_tokens` limit that the
-queue will enforce, and the labels the next node will assign.
+The stack is a grid of twelve slots, two to a row, and it never resizes
+itself: adding or removing RefMods fills or empties slots, and only
+**⤢ Size** or the resize handle changes the node. Click an empty slot to
+open the library.
+
+Each card shows the RefMod's thumbnail and name, an on/off switch, **⋯**
+and **×**, and a slider per channel labelled with the tag it will get —
+`<Video 1>` for the look, `<Audio 1>` for the voice. Up to 1 is plain
+strength. Above 1 adds copies: 2.7 sends two full copies and a third at
+0.7, and hovering the tag spells that out along with the token cost. The
+card's **⋯** menu switches a channel to **S × C** for several copies at the
+same reduced strength. Drag the grip to reorder, which matters because
+order sets the label numbers.
+
+The header shows how many slots are used and the token total, and **⋯**
+there holds `max_total_tokens`, a limit the queue enforces. **⤢ Size** sets
+the node and text scale, remembered for new nodes the way the Media
+Loader's is. The footer lists every label the next node will assign.
+
+**Chaining.** Wire one stack's `mods` output into another's `mods` input
+and the second stack sends both sets on. The header then reads
+*stack 2 / 2*, and the footer lists the upstream labels first, dimmed, so
+you can see the numbering the Text Encode will use across the chain.
+
+**Presets.** The preset row saves the stack — picks, weights and switches —
+under a name and an optional category, and loads it back into any stack
+node. The picker searches and filters by category like the media preset
+picker. The prompt library's save form can link a prompt to the RefMod
+preset the stack currently matches, the way it links media presets, and
+loading that prompt offers to load the RefMods too.
 
 To use RefMods with this builder, click **+ RefMods** on the node. It adds
 a RefMod Stack wired into the builder's `mods` input (or connects the stack

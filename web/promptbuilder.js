@@ -2117,6 +2117,17 @@ function draftIdFor(node) {
   return node.properties.mmh3_draft_id;
 }
 
+/** RefMod presets: a saved stack, kept by the same routes shape. */
+async function refmodPresetApi(path, body) {
+  const resp = await postApi("/minimax_h3/refmod_presets" + path, {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error || `request failed (${resp.status})`);
+  return data;
+}
+
 async function presetApi(path, body) {
   const resp = await postApi("/minimax_h3/presets" + path, {
     headers: { "Content-Type": "application/json" },
@@ -2338,17 +2349,78 @@ class Library {
       }
     })();
 
-    /** Returns { media_preset, media_digest } for the save body, creating
-     *  the preset first when the user asked for a new one. */
-    const resolveLink = async () => {
-      if (!linkBox.checked || link.mode === "none") return {};
-      if (link.mode === "existing") {
-        return { media_preset: link.preset, media_digest: link.digest };
+    // RefMod link, the same way: decided by what the stack holds (or the
+    // draft's own picks), matched against the saved RefMod presets.
+    const rlinkBox = el("input", { type: "checkbox" });
+    const rlinkNew = el("input", { type: "text", class: "mmh3-linkname",
+      placeholder: "new preset name\u2026" });
+    const rlinkRow = el("label", { class: "mmh3-linkrow" },
+      el("span", { class: "mmh3-linktext" }, "checking RefMods\u2026"));
+    const rlink = { mode: "none", preset: null, digest: null, picks: null };
+
+    (async () => {
+      let picks = [];
+      try {
+        if (ed.bufferMode === "draft") picks = ed.draftRefmodsView() || [];
+        else { const { stack } = refmodStackFor(ed.node); picks = stack ? readStack(stack).picks : []; }
+      } catch (e2) { picks = []; }
+      const live = picks.filter((p) => p && p.on !== false);
+      if (!live.length) { rlinkRow.style.display = "none"; return; }
+      let match;
+      try { match = await refmodPresetApi("/match", { picks }); }
+      catch (e2) { rlinkRow.style.display = "none"; return; }
+      rlink.picks = picks;
+      rlink.digest = match.digest;
+      const count = `${live.length} RefMod${live.length === 1 ? "" : "s"}`;
+      if (match.name) {
+        rlink.mode = "existing";
+        rlink.preset = match.name;
+        rlinkBox.checked = true;
+        rlinkRow.replaceChildren(rlinkBox,
+          el("span", { class: "mmh3-linktext" },
+            el("b", {}, "Linked to RefMods \u2014 " + match.name),
+            el("span", { class: "mmh3-linknote" },
+              `The stack (${count}, with weights) is saved as this preset. ` +
+              "Loading this prompt will offer to load it too.")));
+      } else {
+        rlink.mode = "new";
+        rlinkNew.value = (name.value || "").trim();
+        rlinkRow.replaceChildren(rlinkBox,
+          el("span", { class: "mmh3-linktext" },
+            el("b", {}, "Link to RefMods \u2014 new preset"),
+            el("span", { class: "mmh3-linknote" },
+              `The stack (${count}, with weights) isn't saved as a preset yet. ` +
+              "Name it and it will be saved and linked to this prompt.")),
+          rlinkNew);
       }
-      const pname = linkNew.value.trim();
-      if (!pname) throw new Error("Give the media preset a name, or untick it.");
-      const res = await presetApi("/save", { name: pname, items: link.items });
-      return { media_preset: res.name, media_digest: link.digest };
+    })();
+
+    /** Returns the link fields for the save body — media_preset and
+     *  refmod_preset with their digests — creating a preset first when the
+     *  user asked for a new one. */
+    const resolveLink = async () => {
+      const out = {};
+      if (linkBox.checked && link.mode !== "none") {
+        if (link.mode === "existing") {
+          out.media_preset = link.preset; out.media_digest = link.digest;
+        } else {
+          const pname = linkNew.value.trim();
+          if (!pname) throw new Error("Give the media preset a name, or untick it.");
+          const res = await presetApi("/save", { name: pname, items: link.items });
+          out.media_preset = res.name; out.media_digest = link.digest;
+        }
+      }
+      if (rlinkBox.checked && rlink.mode !== "none") {
+        if (rlink.mode === "existing") {
+          out.refmod_preset = rlink.preset; out.refmod_digest = rlink.digest;
+        } else {
+          const pname = rlinkNew.value.trim();
+          if (!pname) throw new Error("Give the RefMod preset a name, or untick it.");
+          const res = await refmodPresetApi("/save", { name: pname, picks: rlink.picks });
+          out.refmod_preset = res.name; out.refmod_digest = res.digest || rlink.digest;
+        }
+      }
+      return out;
     };
 
     // Saving under a different name used to be treated as a rename, which
@@ -2428,6 +2500,7 @@ class Library {
         el("button", { class: "mmh3-btn",
           onclick: () => { this.saveOpen = false; this.paint(); } }, "Cancel")),
       linkRow,
+      rlinkRow,
       err);
   }
 
@@ -2558,6 +2631,12 @@ class Library {
           e.media_preset
             ? this.mediaBadge(e.media_preset, e.media_counts)
             : null,
+          e.refmod_preset
+            ? el("span", { class: "mmh3-libmedia", title: "Linked RefMod preset: loading this prompt offers to load it too" },
+                el("span", { class: "mmh3-libkind" }, "\u25c8", e.refmod_count != null ? String(e.refmod_count) : ""),
+                el("span", { class: "mmh3-libsep" }, "\u00b7"),
+                el("span", { class: "mmh3-libpname" }, e.refmod_preset))
+            : null,
           el("span", { class: "mmh3-libage" }, ago(e.updated))),
         el("div", { class: "mmh3-libprev" }, e.preview || "(empty)")),
       el("div", { class: "mmh3-libacts" },
@@ -2592,6 +2671,9 @@ class Library {
       this.editor.noteLibraryIdentity();
       if (data.media_preset) {
         this.editor.offerLinkedMedia(data.media_preset, data.media_digest);
+      }
+      if (data.refmod_preset) {
+        this.editor.offerLinkedRefmods(data.refmod_preset, data.refmod_digest);
       }
       this.editor.render();
       toast(`Loaded "${entry.name}"`);
@@ -3767,6 +3849,78 @@ class Editor {
       changed: !!(savedDigest && info.digest && savedDigest !== info.digest),
     };
     this.render();
+  }
+
+  async offerLinkedRefmods(presetName, savedDigest) {
+    let info = null;
+    try {
+      info = await refmodPresetApi("/load", { name: presetName });
+    } catch (e) {
+      toast(`This prompt is linked to RefMod preset \u201c${presetName}\u201d, which no longer exists.`, 7000);
+      return;
+    }
+    this.refmodOffer = {
+      name: presetName,
+      picks: info.picks || [],
+      missing: info.missing || [],
+      changed: !!(savedDigest && info.digest && savedDigest !== info.digest),
+    };
+    this.render();
+  }
+
+  refmodLinkStrip() {
+    const o = this.refmodOffer;
+    if (!o) return null;
+    const drafting = this.bufferMode === "draft";
+    let current = 0;
+    try {
+      if (drafting) current = (this.draftRefmodsView() || []).length;
+      else { const { stack } = refmodStackFor(this.node); current = stack ? readStack(stack).picks.length : 0; }
+    } catch (e) { current = 0; }
+    const target = drafting ? "this draft's RefMods" : "the RefMod Stack";
+    const n = o.picks.filter((p) => p.on !== false).length;
+    return el("div", { class: "mmh3-commitstrip" },
+      el("span", { class: "mmh3-commitmsg" },
+        `This prompt is linked to RefMod preset \u201c${o.name}\u201d ` +
+        `(${n} RefMod${n === 1 ? "" : "s"}, with weights). ` +
+        `Loading it replaces ${current} in ${target}.`,
+        o.changed
+          ? el("span", { class: "mmh3-linkwarn" },
+              " \u26a0 That preset has changed since this prompt was saved, " +
+              "so its labels may no longer line up with the tags in the text.")
+          : null,
+        o.missing.length
+          ? el("span", { class: "mmh3-linkwarn" },
+              ` \u26a0 ${o.missing.length} file(s) in the preset are missing from the library.`)
+          : null),
+      el("div", { class: "mmh3-commitrow" },
+        el("button", { class: "mmh3-btn primary",
+          onclick: () => this.applyLinkedRefmods() }, "Load the RefMods too"),
+        el("button", { class: "mmh3-btn",
+          onclick: () => { this.refmodOffer = null; this.render(); } },
+          "Prompt only")));
+  }
+
+  applyLinkedRefmods() {
+    const o = this.refmodOffer;
+    this.refmodOffer = null;
+    if (!o) return;
+    const picks = JSON.parse(JSON.stringify(o.picks));
+    if (this.bufferMode === "draft") {
+      // The draft takes the set as its own; it reaches the stack on commit.
+      if (this.draftEntry) {
+        const v = validateDraftRefmods(picks);
+        this.draftEntry.refmods = v.items || [];
+        if (v.dropped) this.draftDropped = (this.draftDropped || 0) + v.dropped;
+        this.draftRefmodsStale = this._refmodsDiverged();
+        this.flushDraftSave();
+      }
+    } else {
+      this._applyRefmodSnapshot(picks);
+    }
+    this.refreshSlots();
+    this.render();
+    toast(`Loaded RefMod preset \u201c${o.name}\u201d`);
   }
 
   linkStrip() {
@@ -5565,6 +5719,7 @@ class Editor {
     // you're looking at. Drawing it last made it the first casualty.
     this.draftSlot.replaceChildren(
       this.linkOffer ? this.linkStrip()
+        : this.refmodOffer ? this.refmodLinkStrip()
         : this.commitPending === "guard" ? this.commitStrip()
         : this.pullPending ? this.pullStrip()
         : (this.bufferMode === "draft" ? this.draftBar() : null) || "");

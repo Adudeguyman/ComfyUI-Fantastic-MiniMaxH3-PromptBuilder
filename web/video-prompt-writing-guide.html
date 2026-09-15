@@ -1057,7 +1057,7 @@ Sent to the model:
 <p>RefMods are saved in <code>ComfyUI/models/refmods</code>. You never have to go there yourself, but it's handy for backups and sharing.</p>
 <p>Two ready-made workflows are in the pack's <code>example_workflows</code> folder. <strong>MMH3_RefMod_Vanilla_Stack_Example</strong> uses only this pack and ComfyUI's own nodes. <strong>MMH3_RefMod_Fully_Fantastic_Example</strong> adds the Fantastic LoRA loader and seed nodes from the comfyui-fantastic-loras pack.</p></section>
 <section class="chunk lvl2" id="d-2-setting-up" data-toc="d-2-setting-up"><h2 class="head"><span class="num">2</span><span class="htext">Setting Up</span><a class="anchor" href="#d-2-setting-up" aria-label="Link to this section">#</a></h2><p>On the Prompt Builder, click <strong>+ RefMods</strong>. That adds a RefMod Stack next to the builder and wires it in. If the workflow already has a RefMod Text Encode, the button connects that too.</p>
-<p>The stack has three buttons at the top: <strong>Browse library…</strong> opens your saved RefMods, <strong>Create…</strong> opens the library on the Create tab, and <strong>Refresh</strong> re-reads the folder if you added files by hand. Inside the prompt editor, <strong>◈ RefMods</strong> opens the same stack.</p></section>
+<p>The stack has three buttons at the top: <strong>Browse library…</strong> opens your saved RefMods, <strong>Create…</strong> opens the library on the Create tab, and <strong>Refresh</strong> re-reads the folder if you added files by hand. <strong>⤢ Size</strong> sets the node and text size, remembered for new nodes. The node has twelve fixed slots and never resizes itself. Inside the prompt editor, <strong>◈ RefMods</strong> opens the same stack.</p></section>
 <section class="chunk lvl3" id="d-2-1-the-three-nodes" data-toc="d-2-1-the-three-nodes"><h3 class="head"><span class="num">2.1</span><span class="htext">The Three Nodes</span><a class="anchor" href="#d-2-1-the-three-nodes" aria-label="Link to this section">#</a></h3><table>
 <thead><tr><th>Node</th><th>Role</th></tr></thead>
 <tbody>
@@ -1145,13 +1145,15 @@ Sent to the model:
 <li><strong>Cancel</strong> leaves without changing anything.</li>
 </ul></section>
 <section class="chunk lvl2" id="d-6-using-refmods-in-a-prompt" data-toc="d-6-using-refmods-in-a-prompt"><h2 class="head"><span class="num">6</span><span class="htext">Using RefMods in a Prompt</span><a class="anchor" href="#d-6-using-refmods-in-a-prompt" aria-label="Link to this section">#</a></h2></section>
-<section class="chunk lvl3" id="d-6-1-the-stack" data-toc="d-6-1-the-stack"><h3 class="head"><span class="num">6.1</span><span class="htext">The Stack</span><a class="anchor" href="#d-6-1-the-stack" aria-label="Link to this section">#</a></h3><p>In the library, click <strong>Add</strong> on a card. Cards already in the stack show <strong>✓ Add again</strong>. Close the library and they're listed on the stack, each with:</p>
+<section class="chunk lvl3" id="d-6-1-the-stack" data-toc="d-6-1-the-stack"><h3 class="head"><span class="num">6.1</span><span class="htext">The Stack</span><a class="anchor" href="#d-6-1-the-stack" aria-label="Link to this section">#</a></h3><p>In the library, click <strong>Add</strong> on a card. Cards already in the stack show <strong>✓ Add again</strong>. Close the library and each one fills a slot on the stack. Clicking an empty slot opens the library too. Each card has:</p>
 <ul>
-<li><strong>A weight slider.</strong> 1 is normal strength. Below 1 is softer. Above 1 adds copies: 2 means two copies, which pushes the model harder toward that reference and makes generation heavier.</li>
+<li><strong>A weight slider per channel</strong>, labelled with the tag it gets, like <code>&lt;Video 1&gt;</code> for the look and <code>&lt;Audio 1&gt;</code> for the voice. 1 is normal strength. Below 1 is softer. Above 1 adds copies: 2 means two copies, which pushes the model harder toward that reference and makes generation heavier.</li>
 <li><strong>An on/off switch</strong> to leave a RefMod out without removing it.</li>
-<li><strong>×</strong> to remove it, and a handle to drag it up or down.</li>
+<li><strong>⋯</strong> for strength-times-copies mode and details, and <strong>×</strong> to remove it. Drag the handle to reorder.</li>
 </ul>
-<p>The bottom of the stack shows the total size and the labels the prompt should use.</p></section>
+<p>The header shows how many of the twelve slots are used and the token total. The footer lists the labels the prompt should use.</p>
+<p><strong>Presets</strong> save the whole stack, weights and switches included, and load it back into any stack node. A prompt saved to the library can be linked to the preset its stack matches, and loading the prompt offers to load the RefMods too.</p>
+<p><strong>Chaining.</strong> Wire one stack's <code>mods</code> output into another's <code>mods</code> input for more than twelve RefMods or a shared set. The second stack sends both on, reads <em>stack 2 / 2</em>, and lists the first stack's labels first, dimmed.</p></section>
 <section class="chunk lvl3" id="d-6-2-citing-the-labels" data-toc="d-6-2-citing-the-labels"><h3 class="head"><span class="num">6.2</span><span class="htext">Citing the Labels</span><a class="anchor" href="#d-6-2-citing-the-labels" aria-label="Link to this section">#</a></h3><p>In <strong>Edit prompt…</strong>, your RefMods show up as chips with their labels, like <code>&lt;Video 1&gt;</code> and <code>&lt;Audio 1&gt;</code>. Click a chip to insert its label.</p>
 <ul>
 <li><strong>Several photos combined into one RefMod appear as a <code>&lt;Video&gt;</code></strong>. A single photo appears as a <code>&lt;Picture&gt;</code>.</li>

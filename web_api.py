@@ -89,6 +89,16 @@ def _preset_dir():
     return path
 
 
+def _refmod_preset_dir():
+    """Saved RefMod stacks (picks with their weights), beside the media presets."""
+    base = _storage_base()
+    if not base:
+        base = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "minimax_h3_refmod_presets")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def _prompt_dir():
     base = _storage_base()
     if not base:
@@ -324,6 +334,53 @@ def _preset_path(name):
     if not _contained(path, directory):
         return None, None
     return safe[:80], path
+
+
+def _refmod_preset_path(name):
+    safe = re.sub(r"[^A-Za-z0-9 ._-]+", "_", str(name or "")).strip(" ._-")
+    if not safe:
+        return None, None
+    directory = _refmod_preset_dir()
+    path = os.path.join(directory, safe[:80] + ".json")
+    if not _contained(path, directory):
+        return None, None
+    return safe[:80], path
+
+
+def _clean_picks(picks):
+    """The parts of a RefMod stack a preset keeps: what the Prompt Builder
+    and the stack node read. Previews and ids are re-derived on load."""
+    from . import refmods
+    out = []
+    for p in picks if isinstance(picks, list) else []:
+        if not isinstance(p, dict):
+            continue
+        item = {"name": str(p.get("name") or "")[:300], "label": str(p.get("label") or "")[:200],
+                "on": p.get("on") is not False}
+        for key in ("visual", "audio"):
+            ch = p.get(key)
+            if not isinstance(ch, dict) or not ch.get("file"):
+                continue
+            keep = {"file": str(ch["file"])[:300], "kind": str(ch.get("kind") or "")[:16],
+                    "mode": "sc" if ch.get("mode") == "sc" else "weight"}
+            for k in ("w", "s", "c", "tokens", "seconds"):
+                if ch.get(k) is not None:
+                    try:
+                        keep[k] = float(ch[k])
+                    except (TypeError, ValueError):
+                        pass
+            item[key] = keep
+        if "visual" in item or "audio" in item:
+            out.append(item)
+    return out
+
+
+def _picks_digest(picks):
+    """What the model would receive: files and strengths in send order."""
+    from . import refmods
+    canon = [refmods.pick_channels(p) for p in _clean_picks(picks) if p.get("on") is not False]
+    blob = json.dumps(canon, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def _unique(directory, name):
@@ -1044,6 +1101,189 @@ if PromptServer is not None and web is not None:
             return web.json_response({"error": f"delete failed: {exc}"}, status=500)
         return web.json_response({"deleted": name})
 
+    # -- RefMod presets ---------------------------------------------------
+    # A saved stack: picks with weights and switches. Same shape of routes
+    # as the media presets, one flat namespace, categories as a view.
+
+    def _refmod_names():
+        base = _refmod_preset_dir()
+        try:
+            return sorted((f[:-5] for f in os.listdir(base) if f.endswith(".json")), key=str.lower)
+        except Exception:
+            return []
+
+    @routes.get("/minimax_h3/refmod_presets")
+    async def list_refmod_presets(request):
+        entries, categories = [], set()
+        base = _refmod_preset_dir()
+        for n in _refmod_names():
+            data = _read_prompt(os.path.join(base, n + ".json")) or {}
+            cat = (data.get("category") or "").strip()
+            if cat:
+                categories.add(cat)
+            picks = [p for p in (data.get("picks") or []) if isinstance(p, dict)]
+            entries.append({"name": n, "category": cat, "count": len(picks),
+                            "on": sum(1 for p in picks if p.get("on") is not False)})
+        return web.json_response({"presets": entries, "categories": sorted(categories, key=str.lower)})
+
+    @routes.post("/minimax_h3/refmod_presets/save")
+    @_guard()
+    async def save_refmod_preset(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name, path = _refmod_preset_path(body.get("name"))
+        if not path:
+            return web.json_response({"error": "give the preset a name"}, status=400)
+        if not isinstance(body.get("picks"), list):
+            return web.json_response({"error": "picks must be a list"}, status=400)
+        picks = _clean_picks(body["picks"])
+        previous = _read_prompt(path) or {}
+        category = body.get("category")
+        if category is None:
+            category = previous.get("category") or ""
+        record = {"version": 1, "picks": picks, "category": str(category).strip()}
+        try:
+            _write_json(path, record)
+        except Exception as exc:
+            return web.json_response({"error": f"save failed: {exc}"}, status=500)
+        return web.json_response({"name": name, "count": len(picks), "category": record["category"],
+                                  "digest": _picks_digest(picks)})
+
+    @routes.post("/minimax_h3/refmod_presets/meta")
+    @_guard()
+    async def refmod_preset_meta(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name, path = _refmod_preset_path(body.get("name"))
+        if not path or not os.path.exists(path):
+            return web.json_response({"error": "preset not found"}, status=404)
+        data = _read_prompt(path)
+        if not data:
+            return web.json_response({"error": "preset unreadable"}, status=500)
+        data["category"] = str(body.get("category") or "").strip()
+        try:
+            _write_json(path, data)
+        except Exception as exc:
+            return web.json_response({"error": f"save failed: {exc}"}, status=500)
+        return web.json_response({"name": name, "category": data["category"]})
+
+    @routes.post("/minimax_h3/refmod_presets/category")
+    @_guard()
+    async def refmod_preset_category(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        src_cat = (body.get("from") or "").strip()
+        dst_cat = (body.get("to") or "").strip()
+        if not src_cat:
+            return web.json_response({"error": "missing category"}, status=400)
+        base = _refmod_preset_dir()
+        changed = 0
+        for n in _refmod_names():
+            p = os.path.join(base, n + ".json")
+            data = _read_prompt(p)
+            if not data or (data.get("category") or "").strip() != src_cat:
+                continue
+            data["category"] = dst_cat
+            try:
+                _write_json(p, data)
+                changed += 1
+            except Exception:
+                pass
+        return web.json_response({"changed": changed})
+
+    @routes.post("/minimax_h3/refmod_presets/match")
+    @_guard()
+    async def match_refmod_preset(request):
+        """Which saved preset, if any, IS this stack? Compared on what the
+        model receives, so weights count and switched-off picks don't."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        if not isinstance(body.get("picks"), list):
+            return web.json_response({"error": "picks must be a list"}, status=400)
+        want = _picks_digest(body["picks"])
+        base = _refmod_preset_dir()
+        for n in _refmod_names():
+            data = _read_prompt(os.path.join(base, n + ".json")) or {}
+            if _picks_digest(data.get("picks")) == want:
+                return web.json_response({"name": n, "digest": want})
+        return web.json_response({"name": None, "digest": want})
+
+    @routes.post("/minimax_h3/refmod_presets/load")
+    @_guard()
+    async def load_refmod_preset(request):
+        from . import refmods
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name, path = _refmod_preset_path(body.get("name"))
+        if not path or not os.path.exists(path):
+            return web.json_response({"error": "preset not found"}, status=404)
+        data = _read_prompt(path)
+        picks = data.get("picks") if isinstance(data, dict) else None
+        if not isinstance(picks, list):
+            return web.json_response({"error": "preset has no picks"}, status=500)
+        # Previews and token costs come from the library as it stands now;
+        # files that have gone are reported rather than failing at queue time.
+        library = {}
+        try:
+            for it in refmods.scan_library()["items"]:
+                for k in ("visual", "audio"):
+                    if it.get(k):
+                        library[it[k]["file"]] = (it, it[k])
+        except Exception:
+            library = {}
+        kept, missing = [], []
+        for p in _clean_picks(picks):
+            gone = []
+            for k in ("visual", "audio"):
+                ch = p.get(k)
+                if not ch:
+                    continue
+                hit = library.get(ch["file"])
+                if hit:
+                    it, lc = hit
+                    ch["kind"] = lc.get("kind") or ch.get("kind")
+                    ch["tokens"] = lc.get("tokens", 0)
+                    if lc.get("seconds") is not None:
+                        ch["seconds"] = lc["seconds"]
+                    p["preview"] = it.get("preview")
+                elif not refmods.resolve_file(ch["file"], (".safetensors",)):
+                    gone.append(ch["file"])
+            if gone:
+                missing.extend(gone)
+                p["missing"] = gone
+            kept.append(p)
+        return web.json_response({"name": name, "picks": kept, "missing": missing,
+                                 "category": (data.get("category") or "").strip(),
+                                 "digest": _picks_digest(picks)})
+
+    @routes.post("/minimax_h3/refmod_presets/delete")
+    @_guard()
+    async def delete_refmod_preset(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        name, path = _refmod_preset_path(body.get("name"))
+        if not path or not os.path.exists(path):
+            return web.json_response({"error": "preset not found"}, status=404)
+        if not _contained(path, _refmod_preset_dir()):
+            return web.json_response({"error": "refused"}, status=400)
+        try:
+            os.remove(path)
+        except Exception as exc:
+            return web.json_response({"error": f"delete failed: {exc}"}, status=500)
+        return web.json_response({"deleted": name})
+
     # -- drafts -----------------------------------------------------------
     # Scratch space for the editor's Draft mode. One file, a keyed map, an
     # LRU cap. The client never sends the whole map — each save replaces one
@@ -1193,6 +1433,19 @@ if PromptServer is not None and web is not None:
         # distinct preset is read once per request.
         preset_counts = {}
 
+        refmod_counts = {}
+
+        def refmod_count_for(preset_name):
+            if not preset_name:
+                return None
+            if preset_name not in refmod_counts:
+                _n, p = _refmod_preset_path(preset_name)
+                data = _read_prompt(p) if p else None
+                picks = [x for x in ((data or {}).get("picks") or []) if isinstance(x, dict)]
+                refmod_counts[preset_name] = (sum(1 for x in picks if x.get("on") is not False)
+                                              if data else None)
+            return refmod_counts[preset_name]
+
         def counts_for(preset_name):
             if preset_name in preset_counts:
                 return preset_counts[preset_name]
@@ -1233,6 +1486,8 @@ if PromptServer is not None and web is not None:
                 "media_preset": data.get("media_preset") or None,
                 "media_counts": (counts_for(data["media_preset"])
                                  if data.get("media_preset") else None),
+                "refmod_preset": data.get("refmod_preset") or None,
+                "refmod_count": refmod_count_for(data.get("refmod_preset")),
                 "preview": " ".join(text.split())[:150],
             })
         entries.sort(key=lambda e: (not e["favorite"], -float(e["updated"] or 0),
@@ -1278,6 +1533,8 @@ if PromptServer is not None and web is not None:
             # the digest is what lets the load path say so.
             "media_preset": (body.get("media_preset") or "").strip() or None,
             "media_digest": (body.get("media_digest") or "").strip() or None,
+            "refmod_preset": (body.get("refmod_preset") or "").strip() or None,
+            "refmod_digest": (body.get("refmod_digest") or "").strip() or None,
             "prompt": body.get("prompt") or "",
             "state": body["state"],
             "created": previous.get("created") or time.time(),

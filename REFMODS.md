@@ -104,6 +104,10 @@ The RefMod Stack has three buttons at the top:
 - **Create…** opens the library straight on the Create tab.
 - **Refresh** re-reads the folder if you added files by hand.
 
+Next to them, **⤢ Size** sets how big the node and its text are. The
+setting is remembered for new stack nodes. The node itself never changes
+size on its own: it has twelve fixed slots, and adding RefMods fills them.
+
 You can also open the stack from inside the prompt editor with the
 **◈ RefMods** button in the header.
 
@@ -296,20 +300,34 @@ always safe.
 ### Add them to the stack
 
 In the library, click **Add** on a card. Cards already in the stack show
-**✓ Add again**. Close the library and they're listed on the RefMod Stack.
+**✓ Add again**. Close the library and each one fills a slot on the RefMod
+Stack. Clicking an empty slot opens the library too.
 
 ![Two RefMods in the stack with their weights and labels](docs/refmods/06-stack.png)
 
-Each row has:
+Each card has:
 
-- **A weight slider.** 1 is normal strength. Below 1 is softer. Above 1
-  adds extra copies: 2 means two copies, which pushes the model harder
-  toward that reference. Each extra copy makes generation heavier.
+- **A weight slider per channel**, labelled with the tag it gets, like
+  `<Video 1>` for the look and `<Audio 1>` for the voice. 1 is normal
+  strength. Below 1 is softer. Above 1 adds extra copies: 2 means two
+  copies, which pushes the model harder toward that reference. Each extra
+  copy makes generation heavier.
 - **An on/off switch** to leave a RefMod out without removing it.
-- **×** to remove it, and a handle to **drag** it up or down.
+- **⋯** for strength-times-copies mode and the card's details, and **×**
+  to remove it. Drag the handle at the left to reorder.
 
-The bottom of the stack shows the total size and the labels the prompt
-should use.
+The header shows how many of the twelve slots are used and the token
+total. The footer lists the labels the prompt should use.
+
+**Presets.** The preset row saves the whole stack, weights and switches
+included, under a name, and loads it back into any stack node. When you
+save a prompt to the library, it can be linked to the preset your stack
+matches, and loading that prompt offers to load the RefMods too.
+
+**More than twelve, or a shared set.** Wire one stack's `mods` output into
+another's `mods` input. The second stack sends both sets on, its header
+reads *stack 2 / 2*, and its footer lists the first stack's labels first,
+dimmed, so the numbering is clear.
 
 ### Cite them in the prompt
 
