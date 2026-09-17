@@ -321,7 +321,7 @@ def save_mod(mod, path_no_ext):
     }
     if mod.config:
         meta["refmod_config"] = json.dumps(mod.config)
-    for key in ("subject_name", "appearance", "voice_description"):
+    for key in ("subject_name", "appearance", "voice_description", "retained_attributes"):
         if getattr(mod, key, ""):
             meta[key] = getattr(mod, key)
     dest = path_no_ext + ".safetensors"
@@ -476,6 +476,9 @@ class MiniMaxH3FantasticRefModCreate:
                     "into the subject's definition line. Kept in the file's header."}),
                 "voice_description": ("STRING", {"default": "", "tooltip": "Optional: how the voice sounds. Draft from RefMods adds it to "
                     "the voice line, and the speaker buttons use it. Kept in the file's header."}),
+                "retained_attributes": ("STRING", {"default": "", "tooltip": "Optional: specific small details that should be kept, "
+                    "such as tattoos or a scar. Draft from RefMods adds them to the end of the subject's retention note. "
+                    "Kept in the file's header."}),
                 "image": ("IMAGE", {"tooltip": "Look: one image, or a clip's frames at 24 fps. Replaces the source's pictures and clips."}),
                 "audio": ("AUDIO", {"tooltip": "Voice. Replaces the source's audio."}),
                 "vae": ("VAE", {"tooltip": "MiniMax H3 video VAE."}),
@@ -488,7 +491,8 @@ class MiniMaxH3FantasticRefModCreate:
         return float("nan")            # a save is a side effect: always run
 
     @classmethod
-    def VALIDATE_INPUTS(cls, name="", subfolder="", subject_name="", appearance="", voice_description=""):
+    def VALIDATE_INPUTS(cls, name="", subfolder="", subject_name="", appearance="", voice_description="",
+                        retained_attributes=""):
         # No **kwargs here on purpose: ComfyUI skips every input's min/max
         # check for a node whose validator takes **kwargs, which is how a
         # cleared "Voice seconds" box once reached the encoder as 0.
@@ -501,6 +505,7 @@ class MiniMaxH3FantasticRefModCreate:
             clean_subject_name(subject_name)
             clean_description(appearance, "appearance")
             clean_description(voice_description, "voice description")
+            clean_description(retained_attributes, "retained attributes")
         except ValueError as exc:
             return str(exc)
         return True
@@ -508,11 +513,13 @@ class MiniMaxH3FantasticRefModCreate:
     def create(self, name, subfolder, mode, ref_resolution, grid, latent_frames,
                refinement_steps, max_tokens, audio_max_seconds, concept_type,
                description, write_preview, source, image=None, audio=None,
-               vae=None, audio_vae=None, subject_name="", appearance="", voice_description=""):
+               vae=None, audio_vae=None, subject_name="", appearance="", voice_description="",
+               retained_attributes=""):
         subject_name = clean_subject_name(subject_name)
         described = {"subject_name": subject_name,
                      "appearance": clean_description(appearance, "appearance"),
-                     "voice_description": clean_description(voice_description, "voice description")}
+                     "voice_description": clean_description(voice_description, "voice description"),
+                     "retained_attributes": clean_description(retained_attributes, "retained attributes")}
         mode_key = MODES.get(mode, "training")
         audio_max_seconds = max(0.5, min(600.0, float(audio_max_seconds or 0) or 30.0))
         items = parse_sources(source)

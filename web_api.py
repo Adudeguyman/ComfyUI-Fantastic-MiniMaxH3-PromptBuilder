@@ -394,7 +394,7 @@ if PromptServer is not None and web is not None:
 
     routes = PromptServer.instance.routes
 
-    def _cross_site(request):
+    def _cross_origin(request):
         """Is this request provably from another web origin?
 
         ComfyUI core's origin_only_middleware rejects Sec-Fetch-Site:
@@ -404,26 +404,51 @@ if PromptServer is not None and web is not None:
         own guard rather than inheriting one from core.
 
         Modern browsers always send Sec-Fetch-Site; when it is present it is
-        authoritative. The Origin/Host comparison is the fallback for older
-        browsers that omit it. Requests with neither header (curl, scripts,
-        the queue itself) are not browser-mediated and pass.
+        authoritative, and only `same-origin` (this pack's own frontend) and
+        `none` (the user typing the URL) pass. `same-site` is refused too: it
+        is still another origin — another port on the same host, another
+        service on the same LAN address, a sibling subdomain — and under
+        `--enable-cors-header` such a page could otherwise read the token.
+        That matches the fallback for older browsers that omit the header,
+        where Origin must name this exact host and port. Requests with
+        neither header (curl, scripts, the queue itself) are not
+        browser-mediated and pass.
         """
         sfs = (request.headers.get("Sec-Fetch-Site") or "").strip().lower()
         if sfs:
-            return sfs == "cross-site"
+            return sfs not in ("same-origin", "none")
         origin = (request.headers.get("Origin") or "").strip()
         if not origin:
             return False
         return not _same_authority(origin, request.headers.get("Host"))
 
+    # A refused request only ever reached the browser, so a user reporting
+    # "missing or stale session token" left nothing in the ComfyUI log to go
+    # on. Each refusal now prints one line naming the route and which check
+    # failed — never the token — at most once a minute per route and reason,
+    # so a page retrying in a loop can't flood the console.
+    _REFUSAL_WINDOW = 60.0
+    _refusals = {}
+
+    def _log_refusal(request, kind, reason):
+        key = (request.method, request.path, kind)
+        now = time.monotonic()
+        last, quiet = _refusals.get(key, (None, 0))
+        if last is not None and now - last < _REFUSAL_WINDOW:
+            _refusals[key] = (last, quiet + 1)
+            return
+        _refusals[key] = (now, 0)
+        more = f" ({quiet} more like it in the last minute)" if quiet else ""
+        print(f"[MiniMaxH3] refused {request.method} {request.path}: {reason}{more}", flush=True)
+
     def _guard(json_only=True):
-        """Route decorator: refuse cross-site or token-less requests before
+        """Route decorator: refuse cross-origin or token-less requests before
         the handler runs.
 
         Three checks, cheapest first. The Sec-Fetch-Site/Origin test rejects
-        anything a browser marks as another site. The token check rejects
+        anything a browser marks as another origin. The token check rejects
         anything that did not first read /minimax_h3/token from this origin
-        — which is every cross-site page, and every request that simply
+        — which is every other origin's page, and every request that simply
         omits browser headers. `json_only` additionally requires
         Content-Type: application/json, which makes the request non-"simple"
         under CORS so a cross-origin page cannot send it without a preflight
@@ -431,11 +456,21 @@ if PromptServer is not None and web is not None:
         """
         def wrap(handler):
             async def inner(request):
-                if _cross_site(request):
+                if _cross_origin(request):
+                    _log_refusal(request, "cross-origin", "cross-origin request (Sec-Fetch-Site "
+                                 f"{request.headers.get('Sec-Fetch-Site') or 'absent'}, Origin "
+                                 f"{(request.headers.get('Origin') or 'absent')[:80]}, Host "
+                                 f"{(request.headers.get('Host') or 'absent')[:80]})")
                     return web.json_response(
-                        {"error": "cross-site request refused"}, status=403)
+                        {"error": "cross-origin request refused"}, status=403)
                 sent = request.headers.get(TOKEN_HEADER) or ""
                 if not hmac.compare_digest(sent, _TOKEN):
+                    _log_refusal(request, "token-absent" if not sent else "token-mismatch", (
+                        f"session token: the {TOKEN_HEADER} header never arrived — a proxy, "
+                        "tunnel or another custom node may be removing it" if not sent else
+                        f"session token: {TOKEN_HEADER} does not match this server's — expected once "
+                        "from a page left open across a restart (it fetches a fresh token and retries); "
+                        "if it repeats, requests are reaching a different ComfyUI process"))
                     return web.json_response(
                         {"error": "missing or stale session token",
                          "token_required": True}, status=403)
@@ -443,6 +478,8 @@ if PromptServer is not None and web is not None:
                     ctype = (request.headers.get("Content-Type") or "") \
                         .split(";")[0].strip().lower()
                     if ctype != "application/json":
+                        _log_refusal(request, "content-type", f"content type: expected application/json, got "
+                                              f"{ctype[:60] or 'none'}")
                         return web.json_response(
                             {"error": "expected Content-Type: application/json"},
                             status=415)
@@ -456,13 +493,16 @@ if PromptServer is not None and web is not None:
     async def token(request):
         """Hand the session token to same-origin callers only.
 
-        The cross-site check matters here even though this is a GET: with
+        The cross-origin check matters here even though this is a GET: with
         `--enable-cors-header` a permissive CORS policy would otherwise let
         another origin read this response and defeat the token.
         """
-        if _cross_site(request):
+        if _cross_origin(request):
+            _log_refusal(request, "cross-origin", "cross-origin token request (Sec-Fetch-Site "
+                         f"{request.headers.get('Sec-Fetch-Site') or 'absent'}, Origin "
+                         f"{(request.headers.get('Origin') or 'absent')[:80]})")
             return web.json_response(
-                {"error": "cross-site request refused"}, status=403)
+                {"error": "cross-origin request refused"}, status=403)
         return web.json_response({"token": _TOKEN},
                                  headers={"Cache-Control": "no-store"})
 
@@ -810,7 +850,7 @@ if PromptServer is not None and web is not None:
                 fields["concept_type"] = str(body.get("concept_type") or "generic")[:40]
             if "subject_name" in body:
                 fields["subject_name"] = refmods.clean_subject_name(body.get("subject_name"))
-            for key in ("appearance", "voice_description"):
+            for key in ("appearance", "voice_description", "retained_attributes"):
                 if key in body:
                     fields[key] = refmods.clean_description(body.get(key), key.replace("_", " "))
             refmods.rewrite_meta(body.get("files"), **fields)

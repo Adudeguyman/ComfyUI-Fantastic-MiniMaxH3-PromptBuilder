@@ -210,6 +210,13 @@ source.
 Creating runs in the ComfyUI queue like any other job, so you can watch
 it there. When it's done, the new RefMod appears in the library.
 
+Closing the library part-way through doesn't lose the work. Whether you
+click outside the window, press Escape or hit **Close**, your sources,
+names, descriptions and any edit in progress are kept, and the next time
+you open the library — **Browse library…**, **Create…** or an empty slot —
+it comes back where you left it. **Start fresh** on the Create tab clears
+it. A page reload starts clean.
+
 ---
 
 ## Saving and organising
@@ -236,8 +243,8 @@ Click **Details** on a card to open its panel. From there you can:
   file, and drafting fills it in for you (see
   [Give the subject a name](#let-the-editor-write-them-for-you)). You can
   also set it on the Create tab as you make one, or in edit mode.
-- Describe its **Appearance** and **Voice**. Both are saved inside the file,
-  and drafting puts them into the prompt.
+- Describe its **Appearance**, **Retained attributes** and **Voice**. All
+  three are saved inside the file, and drafting puts them into the prompt.
 - **Replace preview** to set a nicer thumbnail.
 - **Delete** it. You'll be asked to click twice.
 
@@ -271,7 +278,8 @@ jobs already running in your ComfyUI queue have finished.
 - **Replace the voice**: drop in a new audio file.
 - **Remove the voice**: untick the stored voice row.
 - **Name and describe the subject**: fill in or clear **Subject name**,
-  **Appearance** and **Voice** in the settings on the right. If that's all
+  **Appearance**, **Retained attributes** and **Voice** in the settings on
+  the right. If that's all
   you change, only the file's header is rewritten.
 
 Editing never re-encodes what's already in a RefMod. Frames you keep are
@@ -314,7 +322,14 @@ Each card has:
   copy makes generation heavier.
 - **An on/off switch** to leave a RefMod out without removing it.
 - **⋯** for strength-times-copies mode and the card's details, and **×**
-  to remove it. Drag the handle at the left to reorder.
+  to remove it.
+- **The thumbnail and the name** open the library on that RefMod's details
+  pane, where you can rename it, describe it, look at what's stored or
+  edit it.
+
+**Reordering.** Drag a card by its handle, thumbnail or name and drop it on
+another card to take that place, or on an empty slot to go last. Escape
+part-way through puts it back. The handle also takes arrow keys.
 
 The header shows how many of the twelve slots are used and the token
 total. The footer lists the labels the prompt should use.
@@ -426,6 +441,9 @@ A name you've typed yourself stays.
 **Describe them, too.** A RefMod's saved **Appearance** is drafted straight
 into its subject line:
 `<Subject 1> is the person in <Video 1>, with shoulder-length auburn hair and a green wool coat.`
+Its **Retained attributes**, for the small details the model should hold on
+to, close the subject's `retention_analysis` note:
+`<Subject 1>'s identity and appearance from <Video 1> are retained. Face, facial features, body type. A small rose tattoo on her left wrist.`
 Its **Voice** goes in the small voice box beside its `<Audio N>` line, and
 the prompt adds *It is a low, husky voice with a slow, warm pace.*
 

@@ -2065,8 +2065,24 @@ export async function postApi(path, init = {}) {
     const data = await resp.clone().json().catch(() => ({}));
     if (data.token_required) resp = await send(await sessionToken(true));
   }
+  if (resp.status === 403) {
+    // Refused again with a token fetched a moment ago: the header isn't getting
+    // through, or the request reached another server. Say what to look at
+    // instead of "missing or stale session token", which reads like a step
+    // the user skipped. The ComfyUI console has a line saying which it was.
+    const data = await resp.clone().json().catch(() => ({}));
+    if (data.token_required) {
+      console.warn(`[Fantastic H3] ${path} refused the session token twice; see the ComfyUI console ` +
+        `for whether the ${TOKEN_HEADER} header arrived.`);
+      return new Response(JSON.stringify({ ...data, error: TOKEN_REFUSED }),
+        { status: 403, headers: { "Content-Type": "application/json" } });
+    }
+  }
   return resp;
 }
+const TOKEN_REFUSED = "ComfyUI refused this pack's session token even after fetching a fresh one. " +
+  "If ComfyUI runs behind a proxy, tunnel or login page, or another custom node changes requests, " +
+  `the ${TOKEN_HEADER} header may be removed on the way. The ComfyUI console says which.`;
 
 async function presetApi(path, body) {
   const resp = body

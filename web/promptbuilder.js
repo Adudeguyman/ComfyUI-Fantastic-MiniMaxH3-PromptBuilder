@@ -4830,7 +4830,7 @@ class Editor {
       const it = library.find((x) => x.visual?.file === file || x.audio?.file === file);
       const nm = String(it?.subject_name || "").trim();
       return { concept: it?.concept || "generic", subjectName: /^[A-Za-z][\w-]{0,39}$/.test(nm) ? nm : "",
-        appearance: oneLine(it?.appearance), voiceDesc: oneLine(it?.voice_description) };
+        appearance: oneLine(it?.appearance), voiceDesc: oneLine(it?.voice_description), retained: oneLine(it?.retained_attributes) };
     };
     // Group each RefMod's look and voice; a voice-only RefMod has no look.
     const mods = [];
@@ -4932,7 +4932,10 @@ class Editor {
         const looks = m.appearance.replace(/^with\s+/i, "");
         if (spec.subject && looks) text = text.replace(/\.\s*$/, "") + `, with ${looks}.`;
         r.subjectDefs.push({ text, role: null });
-        ensureRet(subj || m.look.tag, spec.marker, spec.note(ctx));
+        // Saved retained attributes close the retention note, as their own sentence.
+        let note = spec.note(ctx);
+        if (spec.subject && m.retained) note = `${note} ${m.retained.charAt(0).toUpperCase()}${m.retained.slice(1)}.`;
+        ensureRet(subj || m.look.tag, spec.marker, note);
         ensureTask(spec.task);
         added++;
       } else if (m.look) {

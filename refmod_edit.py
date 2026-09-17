@@ -77,13 +77,14 @@ def encode_like(vae, mod, sources, latent_frames=16, progress=None):
 # Header fields the prompt builder reads, and how each one is checked.
 PROMPT_FIELDS = (("subject_name", clean_subject_name),
                  ("appearance", lambda v: clean_description(v, "appearance")),
-                 ("voice_description", lambda v: clean_description(v, "voice description")))
+                 ("voice_description", lambda v: clean_description(v, "voice description")),
+                 ("retained_attributes", lambda v: clean_description(v, "retained attributes")))
 
 
-def _changes(subject_name="", appearance="", voice_description=""):
+def _changes(subject_name="", appearance="", voice_description="", retained_attributes=""):
     """The header fields to change: empty keeps a field, '-' clears it."""
     out = {}
-    for (key, clean), raw in zip(PROMPT_FIELDS, (subject_name, appearance, voice_description)):
+    for (key, clean), raw in zip(PROMPT_FIELDS, (subject_name, appearance, voice_description, retained_attributes)):
         text = (raw or "").strip()
         if text:
             out[key] = "" if text == "-" else clean(text)
@@ -97,7 +98,7 @@ class MiniMaxH3FantasticRefModEdit:
         "is a JSON list of frame indices and \"a<k>\" entries in the new order), "
         "add pictures or clips encoded to the same shape ('add' is a JSON list "
         "of Media Loader items), replace or remove its voice, and set its "
-        "subject name, appearance and voice description. Nothing already stored is re-encoded. Overwrites the file unless 'save_as' "
+        "subject name, appearance, voice description and retained attributes. Nothing already stored is re-encoded. Overwrites the file unless 'save_as' "
         "names a copy. Queued by the RefMod library's edit mode; the VAEs are "
         "only needed for additions."
     )
@@ -128,6 +129,9 @@ class MiniMaxH3FantasticRefModEdit:
                                           "Empty keeps the stored text; '-' clears it."}),
                 "voice_description": ("STRING", {"default": "", "tooltip": "How the voice sounds, drafted onto the voice line and "
                                                  "the speaker buttons. Empty keeps the stored text; '-' clears it."}),
+                "retained_attributes": ("STRING", {"default": "", "tooltip": "Specific small details that should be kept, drafted "
+                                                   "onto the end of the subject's retention note. Empty keeps the stored text; "
+                                                   "'-' clears it."}),
             },
         }
 
@@ -136,19 +140,19 @@ class MiniMaxH3FantasticRefModEdit:
         return float("nan")
 
     @classmethod
-    def VALIDATE_INPUTS(cls, file="", subject_name="", appearance="", voice_description=""):
+    def VALIDATE_INPUTS(cls, file="", subject_name="", appearance="", voice_description="", retained_attributes=""):
         if not (file or "").strip():
             return "Give the RefMod's file name."
         try:
-            _changes(subject_name, appearance, voice_description)
+            _changes(subject_name, appearance, voice_description, retained_attributes)
         except ValueError as exc:
             return str(exc)
         return True
 
     def edit(self, file, frames, add, voice, latent_frames, audio_max_seconds, save_as="", vae=None, audio_vae=None,
-             subject_name="", appearance="", voice_description=""):
+             subject_name="", appearance="", voice_description="", retained_attributes=""):
         # Header fields: empty keeps what's stored, '-' clears, anything else sets it.
-        changes = _changes(subject_name, appearance, voice_description)
+        changes = _changes(subject_name, appearance, voice_description, retained_attributes)
         audio_max_seconds = max(0.5, min(600.0, float(audio_max_seconds or 0) or 30.0))
         latent_frames = max(1, int(latent_frames or 16))
         rel = file.strip().replace("\\", "/")

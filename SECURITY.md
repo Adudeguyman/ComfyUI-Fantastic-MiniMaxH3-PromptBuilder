@@ -13,8 +13,8 @@ refuses before the handler runs:
 
 | Check | Refusal | What it stops |
 |---|---|---|
-| Cross-site: `Sec-Fetch-Site` is authoritative when a browser sends it — only `same-origin` and `none` pass; otherwise `Origin` must name the same host and port as `Host` (`_same_authority`), and `Origin: null` is refused | `403` | CSRF from any other origin, including under `--enable-cors-header` |
-| Session token: `X-MiniMaxH3-Token` must equal a token minted once per server process with `secrets.token_urlsafe` and compared with `hmac.compare_digest` | `403` with `token_required` | any caller that did not first read the token from this origin — every cross-site page, curl without the header, and a stale editor after a server restart (the frontend re-fetches and retries once) |
+| Cross-origin: `Sec-Fetch-Site` is authoritative when a browser sends it — only `same-origin` and `none` pass, so `same-site` (another port on the same host, another service on the same address, a sibling subdomain) is refused; otherwise `Origin` must name the same host and port as `Host` (`_same_authority`), and `Origin: null` is refused | `403` | CSRF from any other origin, including under `--enable-cors-header` |
+| Session token: `X-MiniMaxH3-Token` must equal a token minted once per server process with `secrets.token_urlsafe` and compared with `hmac.compare_digest` | `403` with `token_required` | any caller that did not first read the token from this origin — every other origin's page, curl without the header, and a stale editor after a server restart (the frontend re-fetches and retries once) |
 | Content type: JSON routes require `Content-Type: application/json` | `415` | "simple" cross-origin requests; the header forces a CORS preflight that these routes never approve |
 
 The multipart routes (`/minimax_h3/upload`, `/minimax_h3/refmods/set_preview`)
@@ -23,9 +23,17 @@ cannot carry the content-type requirement, which is exactly why the other
 two checks are there.
 
 The token is handed out only by `GET /minimax_h3/token`, which applies the
-same cross-site check and answers with `Cache-Control: no-store`. It appears
+same cross-origin check and answers with `Cache-Control: no-store`. It appears
 in exactly three places: minted, compared, and that GET. It is never logged
 and never included in any other response.
+
+A refusal prints one line to the ComfyUI console naming the method, route
+and failed check: for the token, whether the header was absent or present
+but different, never its value. Header values echoed for a cross-origin
+refusal are truncated. Each route and check logs at most once a minute, with
+a count of the repeats, so a page retrying in a loop can't flood the log.
+When the frontend's retry with a freshly fetched token is also refused, the
+error it shows points at a proxy or another extension removing the header.
 
 Core's `create_origin_only_middleware` exists but is bypassed under
 `--enable-cors-header` and does nothing without an `Origin` header, so the
