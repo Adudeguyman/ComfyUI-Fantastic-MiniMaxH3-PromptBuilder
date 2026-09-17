@@ -50,6 +50,33 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.7.4
+
+- **Compressed RefMods no longer squash faces.** A photo of a different
+  shape from the first one was squeezed to fit in Compressed mode; it is now
+  trimmed to the first one's shape, as Full always was, and the Create tab's
+  previews show the trim. If Compressed seemed to lose likeness on
+  characters, try it again.
+- **The RefMod library keeps unfinished work.** Close it mid-way (Close,
+  Escape or a click outside) and the Create tab's sources, names,
+  descriptions and any edit in progress are kept. Browse library…, Create…
+  or an empty slot brings you back where you left off; Start fresh clears it.
+- **Retained attributes.** A new RefMod field for the small details the
+  model should keep — a tattoo, a scar. Set it on the Create tab, in edit
+  mode or in the details panel; Draft from RefMods adds it to the end of the
+  subject's retention_analysis note.
+- **Stack cards.** Click a card's thumbnail or name to open the library on
+  that RefMod's details. Drag to reorder works again, from the handle,
+  thumbnail or name, and can drop onto an empty slot to go last. Create tab
+  source rows are numbered, like Image 3/7.
+- **Clearer refusals.** A refused request prints one line to the ComfyUI
+  console naming the failed check (never the token). "Missing or stale
+  session token" after a fresh retry now explains that a proxy, tunnel or
+  another extension may be removing the `X-MiniMaxH3-Token` header. The
+  origin check also refuses same-site requests, as SECURITY.md described.
+- Release notes have moved to [CHANGELOG.md](CHANGELOG.md); the README keeps
+  the recent ones.
+
 ## What's new in 1.7.3
 
 - **A new RefMod Stack node.** Twelve fixed slots that never resize the
@@ -1192,7 +1219,7 @@ looks like. **Fantastic H3 Inspect RefMod** does the same in a graph.
 the Create tab. Its stored frames are listed first as sources — untick or
 remove the ones you don't want, drag to reorder, and drop new pictures or
 clips in to add them; they're encoded to the file's own size and style and
-the previews show how each one is trimmed or squeezed to fit. Frames you
+the previews show how each one is trimmed to fit. Frames you
 keep are copied exactly as they are, never decoded and re-encoded. The
 voice is a source too: untick it to remove it, or add an audio file (or
 tick a clip's soundtrack) to replace it — the first *Voice seconds* are
@@ -1213,10 +1240,9 @@ default everything becomes **one RefMod**: six photos of a character are
 stacked into a single reference, one frame per photo, and any voices —
 audio files, or clips whose soundtrack you keep — are joined into one voice
 saved beside it. Every photo in it takes the first one's shape (portrait,
-landscape or square): in Full the others have their edges trimmed to fit,
-in Compressed they are squeezed to fit. Each photo's preview shows exactly
-what will be trimmed or how it will be squeezed, so drag your best-framed
-one to the top. Rather than accept the automatic trim, click **Crop to
+landscape or square): the others have their edges trimmed to fit, in Full
+and Compressed alike. Each photo's preview shows exactly what will be
+trimmed, so drag your best-framed one to the top. Rather than accept the automatic trim, click **Crop to
 fit…** on any other photo: the crop editor opens locked to the first
 photo's shape, and you drag the box over the part you want to keep. Every
 row also has **Crop…** (or **Crop / trim…** for a clip) for rotating,

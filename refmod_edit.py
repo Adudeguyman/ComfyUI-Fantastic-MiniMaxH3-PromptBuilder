@@ -37,6 +37,19 @@ def _first_source_px(mod):
         return 1024
 
 
+def _first_source_canvas(mod):
+    """The first source's own encode canvas in pixels, (w, h), from
+    source_shape; None when the header doesn't say. Compressed files pool
+    each source to one grid, so an added picture is cover-cropped to this
+    canvas first — trimmed to the file's shape, never squeezed into it."""
+    try:
+        first = str(mod.source_shape or "").split("+")[0].strip()
+        _t, h, w = (int(v) for v in first.split("x"))
+        return (w * 16, h * 16) if h > 0 and w > 0 else None
+    except Exception:
+        return None
+
+
 def encode_like(vae, mod, sources, latent_frames=16, progress=None):
     """Encode pictures/clips to match `mod`'s stored latent: same H x W, same
     mode, same refinement. Returns [1, 24, T_new, H, W] fp16 and the shapes."""
@@ -44,6 +57,7 @@ def encode_like(vae, mod, sources, latent_frames=16, progress=None):
     full = mod.mode == "encode"
     steps = int(mod.optimize_steps or 0)
     res = _first_source_px(mod)
+    canvas = None if full else _first_source_canvas(mod)
     parts, shapes = [], []
     for i, (src, is_video) in enumerate(sources):
         src = src if is_video else src[:1]
@@ -51,6 +65,8 @@ def encode_like(vae, mod, sources, latent_frames=16, progress=None):
             src = src[:snap_to_h3_grid(min(latent_frames, src.shape[0]))]
         if full:
             src = _cover(src, W * 16, H * 16)          # exact canvas: latent H x W
+        elif canvas:
+            src = _cover(src, *canvas)                  # the first source's shape, edges trimmed
         else:
             src = resize_ref(src, res)
         src = ensure_min_size(src)

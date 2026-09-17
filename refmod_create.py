@@ -158,9 +158,10 @@ def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
     `sources` is [(frames [N,H,W,3], is_video)]. Each is encoded on its own
     and the results are joined, one latent frame per picture and a short
     sequence per clip. They must share a frame size, so the first source
-    sets it: Full cover-crops the others to its canvas, Compressed pools
-    every one to a grid shaped like it — the same rules as
-    ComfyUI-MiniMaxH3Mod's Create node."""
+    sets it and the others are cover-cropped to its canvas — edges trimmed,
+    never squeezed — in both modes. (Compressed used to pool each photo to
+    the first one's grid as it was, which squashed anything of a different
+    shape; a distorted face is a worse reference than a cropped one.)"""
     try:
         from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
         if not isinstance(vae.first_stage_model, MiniMaxH3VideoVAE):
@@ -174,7 +175,7 @@ def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
             raise ValueError(f"{label}: expected an IMAGE batch, got {tuple(frames.shape)}")
     h0, w0 = sources[0][0].shape[1], sources[0][0].shape[2]
     canvas = None
-    if mode == "encode" and len(sources) > 1:
+    if len(sources) > 1:
         scale = min(1.0, ref_resolution / min(h0, w0))
         canvas = (max(32, round(w0 * scale / 32) * 32), max(32, round(h0 * scale / 32) * 32))
     gh, gw = aspect_grid(grid, h0 / w0)

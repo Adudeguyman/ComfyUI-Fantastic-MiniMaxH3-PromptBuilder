@@ -1522,7 +1522,7 @@ function compressedTokens(w, h, res, grid) {
 /* ---- stack fit preview --------------------------------------------------
  * In a stack every frame takes the first source's shape. Full cover-crops
  * the others to it (edges cut off); Compressed pools them to the same grid
- * (squeezed, nothing cut). These draw exactly that, from the picture the
+ * (edges trimmed to the first photo's shape). These draw exactly that, from the picture the
  * encoder will get: the loader's turn, mirror and crop applied first. */
 
 const frameCache = new Map();
@@ -1571,27 +1571,23 @@ function effectiveCanvas(src, rec, cap = 480) {
 }
 
 /** How a source fits the stack's frame: what share is cut (Full) or how
- *  much it is squeezed (Compressed), along which axis. */
+ *  along which axis. Both modes trim. */
 function fitOf(aspect, target) {
   if (!target) return null;
   const A = target.aspect;
-  if (target.mode === "full") {
-    return aspect > A ? { kind: "trim", axis: "width", keep: A / aspect }
-                      : { kind: "trim", axis: "height", keep: aspect / A };
-  }
-  return aspect > A ? { kind: "squeeze", axis: "width", keep: A / aspect }
-                    : { kind: "squeeze", axis: "height", keep: aspect / A };
+  // Both modes trim: the photo is scaled to cover the first one's frame and
+  // the overhang is cut off. Nothing is squeezed any more.
+  return aspect > A ? { kind: "trim", axis: "width", keep: A / aspect }
+                    : { kind: "trim", axis: "height", keep: aspect / A };
 }
 function fitCaption(fit) {
   if (!fit || fit.keep > 0.97) return "Fits the frame";
-  const pct = Math.round((1 - fit.keep) * 100);
-  return fit.kind === "trim" ? `Edges trimmed: ${pct}% of the ${fit.axis}`
-                             : `Squeezed: ${Math.round(fit.keep * 100)}% of its ${fit.axis}`;
+  return `Edges trimmed: ${Math.round((1 - fit.keep) * 100)}% of the ${fit.axis}`;
 }
 
 /** Draw a source onto a canvas of any size. With a stack target the
- *  picture is shown as the stack will use it (Full: trimmed parts shaded;
- *  Compressed: squeezed); without one, or for the first photo, it is shown
+ *  picture is shown as the stack will use it (trimmed parts shaded);
+ *  without one, or for the first photo, it is shown
  *  whole. Always the encoder's view: turn, mirror and crop applied. */
 function drawFit(cv, rec, target, isFirst) {
   return loadDrawable(rec).then((src) => {
@@ -1611,20 +1607,14 @@ function drawFit(cv, rec, target, isFirst) {
       return;
     }
     const fit = fitOf(aspect, target);
-    if (target.mode === "full") {
-      const [x, y, w, h] = fitBox(aspect);
-      g.drawImage(img, x, y, w, h);
-      const kw = fit.axis === "width" ? w * fit.keep : w, kh = fit.axis === "height" ? h * fit.keep : h;
-      const kx = x + (w - kw) / 2, ky = y + (h - kh) / 2;
-      g.fillStyle = "rgba(8,10,14,.72)";
-      if (fit.axis === "width") { g.fillRect(x, y, kx - x, h); g.fillRect(kx + kw, y, x + w - (kx + kw), h); }
-      else { g.fillRect(x, y, w, ky - y); g.fillRect(x, ky + kh, w, y + h - (ky + kh)); }
-      outline(kx, ky, kw, kh);
-    } else {
-      const [x, y, w, h] = fitBox(target.aspect);
-      g.drawImage(img, x, y, w, h);
-      outline(x, y, w, h);
-    }
+    const [x, y, w, h] = fitBox(aspect);
+    g.drawImage(img, x, y, w, h);
+    const kw = fit.axis === "width" ? w * fit.keep : w, kh = fit.axis === "height" ? h * fit.keep : h;
+    const kx = x + (w - kw) / 2, ky = y + (h - kh) / 2;
+    g.fillStyle = "rgba(8,10,14,.72)";
+    if (fit.axis === "width") { g.fillRect(x, y, kx - x, h); g.fillRect(kx + kw, y, x + w - (kx + kw), h); }
+    else { g.fillRect(x, y, w, ky - y); g.fillRect(x, ky + kh, w, y + h - (ky + kh)); }
+    outline(kx, ky, kw, kh);
   }).catch(() => {
     const g = cv.getContext("2d"); g.fillStyle = "#6b7484"; g.font = `${Math.round(cv.width / 14)}px ui-monospace,monospace`;
     g.textAlign = "center"; g.fillText("no preview", cv.width / 2, cv.height / 2);
@@ -2642,7 +2632,7 @@ export function openLibrary(panel, opts = {}) {
         el("div", { class: "mmr-srchint" },
           "The stored frames are listed first. Untick or remove the ones you don't want, drag to reorder, and drop new " +
           "pictures or clips in to add them — they're encoded to this file's size and shape (" +
-          (fullMode() ? "edges trimmed" : "squeezed") + " to fit). Frames you keep are copied as they are, never re-encoded." +
+          "edges trimmed to fit). Frames you keep are copied as they are, never re-encoded." +
           (editing.audio ? " Adding an audio file, or ticking a clip's soundtrack, replaces the voice; untick the stored voice to remove it."
                          : " Add an audio file, or tick a clip's soundtrack, to give it a voice.")),
         resumed ? el("div", { class: "mmr-srchint" }, "Picked up where you left off when the library was closed.") : null,
@@ -2677,7 +2667,7 @@ export function openLibrary(panel, opts = {}) {
         const full = st.mode === "Full Reference";
         kids.push(el("div", { class: "mmr-srchint" },
           `The ${looks} pictures and clips become one reference, one frame each. They all take the first one's ` +
-          `shape, and the others ${full ? "have their edges trimmed" : "are squeezed"} to fit, so put your ` +
+          `shape, and the others have their edges trimmed to fit, so put your ` +
           "best-framed photo first. Drag to reorder. In prompts it's cited as one video, like <Video 1>."));
         const t = stackTarget();
         if (t) {
@@ -2685,7 +2675,7 @@ export function openLibrary(panel, opts = {}) {
             .filter((x) => { const [w, h] = effDims(x); return fitOf(w / h, t).keep < 0.8; }).length;
           if (bad) kids.push(el("div", { class: "mmr-srchint warn" },
             `${bad === 1 ? "1 photo is" : `${bad} photos are`} a very different shape from the first and will be ` +
-            `${full ? "trimmed" : "squeezed"} noticeably — see the previews.`));
+            `trimmed noticeably — see the previews.`));
         }
       }
     }
@@ -2871,7 +2861,7 @@ export function openLibrary(panel, opts = {}) {
           ? el("div", { class: "mmr-srctitle" }, el("b", {}, x.name),
               combine && setsFrame && used().filter(isLook).length > 1 ? el("span", { class: "mmr-framechip",
                 title: "Every photo in this RefMod is made this size and shape (portrait, landscape or square). " +
-                  (st.mode === "Full Reference" ? "The others have their edges trimmed to match." : "The others are squeezed to match.") },
+                  "The others have their edges trimmed to match." },
                 "Sets dataset size and aspect ratio") : null)
           : el("input", { class: "mmr-search", value: x.name, "aria-label": "RefMod name", onchange: (e) => {
               x.name = cleanName(e.target.value); e.target.value = x.name; if (x._subjLabel) x._subjLabel.textContent = x.name; } }),

@@ -3,6 +3,33 @@
 Every release of **ComfyUI Fantastic H3 Prompt Builder**, newest first. The
 [README](README.md) keeps the recent ones; everything older lives here.
 
+## 1.7.4
+
+- **Compressed RefMods no longer squash faces.** A photo of a different
+  shape from the first one was squeezed to fit in Compressed mode; it is now
+  trimmed to the first one's shape, as Full always was, and the Create tab's
+  previews show the trim. If Compressed seemed to lose likeness on
+  characters, try it again.
+- **The RefMod library keeps unfinished work.** Close it mid-way (Close,
+  Escape or a click outside) and the Create tab's sources, names,
+  descriptions and any edit in progress are kept. Browse library…, Create…
+  or an empty slot brings you back where you left off; Start fresh clears it.
+- **Retained attributes.** A new RefMod field for the small details the
+  model should keep — a tattoo, a scar. Set it on the Create tab, in edit
+  mode or in the details panel; Draft from RefMods adds it to the end of the
+  subject's retention_analysis note.
+- **Stack cards.** Click a card's thumbnail or name to open the library on
+  that RefMod's details. Drag to reorder works again, from the handle,
+  thumbnail or name, and can drop onto an empty slot to go last. Create tab
+  source rows are numbered, like Image 3/7.
+- **Clearer refusals.** A refused request prints one line to the ComfyUI
+  console naming the failed check (never the token). "Missing or stale
+  session token" after a fresh retry now explains that a proxy, tunnel or
+  another extension may be removing the `X-MiniMaxH3-Token` header. The
+  origin check also refuses same-site requests, as SECURITY.md described.
+- Release notes have moved to [CHANGELOG.md](CHANGELOG.md); the README keeps
+  the recent ones.
+
 ## 1.7.3
 
 - **A new RefMod Stack node.** Twelve fixed slots that never resize the

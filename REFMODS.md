@@ -153,7 +153,7 @@ portrait, landscape or square. The first photo is marked *Sets dataset
 size and aspect ratio*.
 
 - Put your best-framed photo at the top. Drag rows to reorder.
-- Each preview shows what will be cut off, or how the photo gets squeezed
+- Each preview shows what will be cut off
   to fit.
 - To choose which part is kept instead of taking the middle, click
   **Crop to fit…** on a photo. The box is locked to the right aspect ratio, so
