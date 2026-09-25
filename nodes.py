@@ -312,6 +312,15 @@ class MiniMaxH3PromptBuilder:
             "video_audios": media[b:c],
             "audios": media[c:],
         }
+        if isinstance(references, dict):
+            if references.get("edit") is not None:
+                out_bundle["edit"] = references["edit"]
+            # A video wired straight into video_N replaces the loader's there,
+            # so the loader's settings no longer describe it.
+            specs = list(references.get("video_specs") or [])
+            out_bundle["video_specs"] = [
+                specs[i] if i < len(specs) and kwargs.get(f"video_{i + 1}") is None else None
+                for i in range(VIDEOS)]
         # An unwired mods input passes an empty bundle, which Text Encode
         # treats as "no RefMods" rather than an error.
         out_mods = mods if mods is not None else []
@@ -450,6 +459,29 @@ class MiniMaxH3MediaLoader:
             "audios": aud_t,
             "items": items,
         }
+        # The clip being edited travels as its settings, not frames: the Text
+        # Encode builds it once (at the generation's pixel budget) and saves
+        # it, and Edit Composite reads the original frames at the end.
+        edit = next((i for i in items if isinstance(i, dict) and i.get("edit") and i.get("mask")
+                     and i.get("enabled") is not False and i.get("kind") == "video"), None)
+        if edit is not None:
+            bundle["edit"] = {k: edit.get(k) for k in ("name", "file", "trim", "crop", "mirror", "resize",
+                                                       "mask", "has_audio")}
+            bundle["edit"]["grow"] = int(edit.get("mask_grow", 16))
+            bundle["edit"]["keep_audio"] = edit.get("keep_audio", True)
+            bundle["edit"]["feather"] = int(edit.get("mask_feather") or 0)
+            bundle["edit"]["invert"] = bool(edit.get("mask_invert"))
+            # crop to mask: how much surroundings to keep; 0 samples the whole frame
+            bundle["edit"]["context"] = (float(edit.get("mask_context") or 1.75)
+                                         if edit.get("mask_crop") and not edit.get("mask_invert") else 0.0)
+            bundle["edit"]["ref_strength"] = float(edit.get("mask_ref_strength") or 1.0)
+            print(f"[MiniMaxH3 Loader] editing {edit.get('name') or edit['file']} (also cited as a reference)")
+        # Each video's settings, index for index with "videos": what the Text
+        # Encode keys its saved reference latents on.
+        bundle["video_specs"] = [
+            {k: i.get(k) for k in ("name", "file", "trim", "crop", "mirror", "resize", "audio_mode")}
+            | {"edit": bool(i.get("edit"))}
+            for i in videos[:VIDEOS]]
 
         def _brief(a):
             if a is None:

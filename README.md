@@ -209,6 +209,7 @@ Older releases are in the [changelog](CHANGELOG.md).
 - [Reference mode](#reference-mode)
 - [FAQ: wiring reference media](#faq-wiring-reference-media)
 - [RefMods](#refmods) (step-by-step: [RefMods how-to guide](REFMODS.md))
+- [Editing a clip with a mask](#editing-a-clip-with-a-mask)
 - [Dated output folders](#dated-output-folders)
 - [Troubleshooting](#troubleshooting)
 - [Credits](#credits)
@@ -225,6 +226,8 @@ Four nodes, all under **conditioning → video_models**:
 | **Fantastic H3 Media Loader** | Drag-and-drop your reference images, videos, and audio. Shows exactly which tag each one will get. |
 | **Fantastic H3 Reference Splitter** | Optional. Fans media out into individual slots when you want it to skip the Prompt Builder. |
 | **Fantastic H3 Filename Prefix** | Optional. Builds a save prefix with the date already filled in, for dated output folders. |
+| **Fantastic H3 Edit Composite** | For masked edits. Pastes the regenerated area into the original frames, so the rest is the source untouched. See [Editing a clip with a mask](#editing-a-clip-with-a-mask). |
+| **Fantastic H3 Video Edit Latent** | Optional. Builds a masked-edit latent from frames and a mask made elsewhere. |
 
 Highlights:
 
@@ -1346,6 +1349,12 @@ send. The stack's `labels` output carries the same map as text, and its
 optional `mods` input appends to another stack or loader, whose entries are
 numbered first.
 
+`voice_description_at_label` (off by default) doesn't change whether your
+voices are used — they always are. On, each voice RefMod's saved Voice
+description is also written right after its `<Audio n>:` label, where the
+encoder is introduced to the reference, instead of only in the prompt body.
+Off, the encoder sees exactly what core's node gives it.
+
 **Fantastic H3 RefMod Apply** appends the references to conditioning encoded
 elsewhere, with a `retention` multiplier on every entry. The model sees them,
 but the prompt cannot name them — use it when a workflow already has its
@@ -1361,6 +1370,87 @@ inspected, renamed, described and deleted here, but not edited — use that
 pack's Save H3 RefMods node to split one into standalone files first.
 
 ---
+
+## Editing a clip with a mask
+
+Replace, change or remove part of a clip and keep the rest as filmed. The
+mask decides where H3 may change anything; the prompt decides what that area
+becomes.
+
+**What you need:** the SAM 3.1 checkpoint,
+[`sam3.1_multiplex_fp16.safetensors`](https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors),
+in `models/checkpoints`. The pack never downloads it.
+
+**Masking.** Right-click a video on the Media Loader → **◐ Mask for
+editing…** (or the **◐ Mask** tab in its trim editor). It works on the clip
+as you've trimmed, cropped and mirrored it there. Click what you want to
+change on a frame where it's clear; right-click a spot that isn't part of
+it. A click alone can grab a whole person, so type what it is as well —
+"green jacket" — and just that part under your dots is masked; a name with
+no dots masks every match. **▶ Run masking** runs SAM through the queue on
+its own, over the kept range only, and the result plays over the clip in
+cyan (an approximate preview; hide it from the right-click menu). **grow**
+widens it so edges and shadows go too. **Use this mask** saves it on the
+clip; the card then reads **Video 1 · editing**.
+
+**Fixing a mask.** Dots can go on several frames: each marked frame seeds
+the tracking from there to the next one, so when a mask drifts, scrub to
+where it goes wrong, add a dot and run again (a frame needs a green dot; the
+chips above the name box list the frames with dots). **add** and
+**subtract** run SAM and merge the result into the current mask or take it
+out — green-dot the shirt under the jacket, type "shirt", run with add.
+**Brush** paints onto the mask by hand (add or erase, on this frame, from
+here to the end or the whole clip) for what SAM can't get. Each of these
+saves a new mask; **Use this mask** keeps it.
+
+**Shaping it.** **grow** widens the mask; **feather** fades the regenerated
+area into the kept footage so there's no hard seam (its inside stays fully
+regenerated; the fade is rounded up to whole 16-pixel latent cells at the
+sampling size); **invert** keeps what's masked and regenerates everything
+else — grow then protects a margin around it. **crop to mask** samples only
+the area around the mask, enlarged up to 4× at your pixel budget, for far
+more detail in small edits; **context** sets how much surroundings it keeps,
+the dashed box shows it, and it turns itself off when the mask covers most of
+the frame or is inverted. The overlay draws the mask grown and inverted as
+the edit uses it, and **▦ regenerated** shows the area H3 really
+regenerates — rounded out to the latent's 16-pixel cells at the sampling size.
+
+**Citing it.** The clip is always sent as a reference too, so the prompt
+can cite it the way H3's editing prompts do: `<Video 1> is the source video
+for the target video edit.` and `[video editing] The target video is an
+edited version of <Video 1>.` That costs a clip's worth of
+reference tokens — the builder and the mask panel show an estimate and warn
+past about 30,000. With crop to mask, only the cropped box is cited, which
+matches what's generated and costs far less. If an edit comes back as the
+clip unchanged, lower **reference strength** in the mask settings: the cited clip is
+then mixed toward a blurred copy, so it still gives the model the colours
+and placement but not detail it can copy back. Describe the
+finished clip, including what the masked area becomes; when removing
+something, describe what's there instead and don't name it.
+
+**Generating.** The RefMod Text Encode builds the edit from the loader's
+settings: the clip at your width × height pixel budget (keeping its own
+shape, never enlarged), encoded, with the mask on H3's latent grid. It's
+saved the first time and loaded on later runs until a setting that changes
+it does — the prompt, seed and sampler don't. Cited reference clips are
+saved the same way. Wire the Text Encode's `latent` into the sampler, and
+put **Fantastic H3 Edit Composite** between VAE Decode and Create Video with
+the same references: it pastes exactly the area H3 regenerated, the cells
+the ▦ overlay shows plus any feather (scaled back into place when crop to
+mask is on), into your original frames through a soft edge, so everything
+else is the source file's own pixels, not a VAE copy of them. Its `max_size` caps the output's
+long edge. The example workflows are wired this way.
+
+**Clearing and tidying.** Clearing a mask asks for a second click and
+offers Undo. Masks are stored one bit per pixel. Masking again leaves the
+old mask file behind, and changed
+settings leave old saved latents; the loader's **Clean up…** deletes mask
+files no Media Loader in the open workflow uses, plus saved latents (they're
+rebuilt when needed).
+
+Masks made elsewhere work too: **Fantastic H3 Video Edit Latent** takes
+frames, a MASK and a megapixel budget and outputs the latent, width, height
+and length.
 
 ## Dated output folders
 
@@ -1438,6 +1528,16 @@ old slots, so delete and re-add them after an update.
 this almost always means another pack downgraded or broke it (a known culprit:
 `aiortc` pins `av<17`, which ComfyUI's own code can't run with).
 `pip install 'av>=17'` into your ComfyUI environment restores it.
+
+**"Couldn't upload … missing or stale session token" when dropping a file
+into Create, or drag-and-drop into the RefMod library doing nothing.** You are
+most likely using ComfyUI through another front-end's embedded tab —
+**SwarmUI** is the one reported. Its proxy rewrites the requests and drops the
+`X-MiniMaxH3-Token` header the pack's routes require, so uploads are refused
+(the ComfyUI console prints one line naming the failed check). Open ComfyUI's
+own interface directly in a browser tab — the address and port ComfyUI itself
+prints at startup — and the same workflow works. The nodes still run fine
+from SwarmUI's queue; only the library's uploads need the direct page.
 
 **A button does nothing.** Open the browser console (F12) and click it again —
 any failure prints there. The Media Loader also has an **Open loader…** button

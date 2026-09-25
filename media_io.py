@@ -381,12 +381,14 @@ def _apply_crop(frames, crop):
 
 
 def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None,
-                      crop=None, mirror=False, resize=None):
+                      crop=None, mirror=False, resize=None, as_uint8=False):
     """Decode to an IMAGE batch [N, H, W, 3] resampled to `fps`.
 
     `start`/`end` (seconds) trim the source before sampling; only the trimmed
     span is decoded, so trimming a long file is cheap. `crop` is a normalised
-    {x, y, w, h} rect applied after decode.
+    {x, y, w, h} rect applied after decode. `as_uint8` keeps the decoder's
+    own 8-bit values (a quarter of the memory); dividing them by 255 later
+    gives exactly the floats the default returns.
     """
     path = resolve(annotated)
     try:
@@ -400,7 +402,7 @@ def load_video_frames(annotated, fps=FPS, max_frames=None, start=None, end=None,
     # turn every decode failure into a misleading "PyAV missing" story.
     return _apply_crop(
         _apply_mirror(
-            _frames_via_av(path, fps, max_frames, start, end, cap),
+            _frames_via_av(path, fps, max_frames, start, end, cap, as_uint8),
             mirror), crop)
 
 
@@ -440,7 +442,7 @@ def _frames_to_tensor(frames):
     return torch.from_numpy(out)
 
 
-def _frames_via_av(path, fps, max_frames, start=None, end=None, cap=0):
+def _frames_via_av(path, fps, max_frames, start=None, end=None, cap=0, as_uint8=False):
     """Sample frames on the target-fps time grid using frame timestamps.
 
     Timestamp-based sampling handles variable-frame-rate sources correctly
@@ -473,16 +475,21 @@ def _frames_via_av(path, fps, max_frames, start=None, end=None, cap=0):
                 continue
             # Scale inside the decoder: the full-size frame is never turned
             # into a numpy array, so peak memory follows the target size.
-            out.append(frame.to_ndarray(format="rgb24", width=target[0],
-                                        height=target[1])
-                       if target else frame.to_ndarray(format="rgb24"))
-            want += grid
+            px = (frame.to_ndarray(format="rgb24", width=target[0], height=target[1])
+                  if target else frame.to_ndarray(format="rgb24"))
+            # A source slower than `fps` fills every grid slot up to this
+            # frame with it, so the clip keeps its length and its sync.
+            while t >= want - grid / 2 and not (max_frames and len(out) >= max_frames):
+                out.append(px)
+                want += grid
             if max_frames and len(out) >= max_frames:
                 break
     if not out:
         raise RuntimeError(
             "No video frames decoded"
             + (f" in {t0:.2f}-{end:.2f}s" if (start or end) else "") + ".")
+    if as_uint8:
+        return torch.from_numpy(np.stack(out))
     return _frames_to_tensor(out)
 
 

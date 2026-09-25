@@ -6,7 +6,8 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
-  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets, setterOf, linkNodes, keepNameChars } from "./medialoader.js";
+  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets, setterOf, linkNodes, keepNameChars,
+  overlayOn, maskOverlay, refTokenEstimate, itemLook } from "./medialoader.js";
 import { STACK_NAME, ENCODE_NAMES, readStack, deriveEntries, labelGroups,
   rangeText as refmodRange, previewURL as refmodPreviewURL, KIND as REFMOD_KIND,
   openStackModal } from "./refmodstack.js";
@@ -924,7 +925,7 @@ function slotsFromItems(rawItems, sourceLabel) {
   const push = (tag, kind, item, note, previewKind) => {
     const n = +(tag.match(/(\d+)>/) || [])[1];
     out.push({
-      tag, kind, idx: n, cls: TAG_CLASS[kind], note,
+      tag, kind, idx: n, cls: TAG_CLASS[kind], note, edit: !!item.edit,
       slotName: `loader:${item.name}`,
       source: `${sourceLabel} \u2022 ${item.name}`,
       preview: { type: previewKind, url: loaderViewURL(item.file) },
@@ -1071,7 +1072,12 @@ function refmodSlots(node, opts = {}) {
   // A draft can stand in for what the nearest stack holds (its own picks, or
   // the ones frozen when it started) and for the loader's media.
   const nearest = chain[chain.length - 1];
-  const picksOf = (st) => (st === nearest && opts.picks ? opts.picks : readStack(st).picks);
+  // A pick's saved uid only counts within its own stack node: a pasted node
+  // keeps its copy's numbers, so two stacks in a chain can hold the same
+  // uid, and the draft would then fold one RefMod's look and voice into
+  // another's. Key each pick by node and position instead.
+  const picksOf = (st) => (st === nearest && opts.picks ? opts.picks : readStack(st).picks)
+    .map((p, i) => (p && typeof p === "object" ? { ...p, uid: `${st.id}:${i}` } : p));
   const sourceLabel = opts.picks ? (opts.picksLabel || "Draft RefMods") : "RefMod Stack";
   const media = opts.media ? slotsFromItems(opts.media, opts.mediaLabel || "Media Loader") : mediaSlots(node);
 
@@ -1614,6 +1620,14 @@ const CSS = `
 .mmh3-cardvoice{position:absolute;top:22px;right:4px;color:#b48ce8;font-size:calc(12px * var(--mmh3-fs, 1));
   text-shadow:0 0 3px #000,0 0 2px #000;pointer-events:none;}
 .mmh3-cardgroup{display:flex;flex-direction:column;gap:3px;flex:0 0 auto;}
+.mmh3-editthumb{position:relative;line-height:0;}
+.mmh3-editthumb .mml-mkoverlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+.mmh3-card.mmh3-editsrc{border-color:#7a3d52 !important;}
+.mmh3-editbadge{color:#e86a8a !important;}
+.mmh3-editsrc .mmh3-thumb{object-fit:contain;background:#000;}
+.mmh3-card.mmh3-editsrc{position:relative;}
+.mmh3-maskmissing{position:absolute;right:3px;bottom:18px;color:#ffcf5a;text-shadow:0 0 3px #000;cursor:help;
+  font-size:calc(12px * var(--mmh3-fs, 1));}
 .mmh3-cardgroupcards{display:flex;gap:6px;}
 .mmh3-cardstrip{box-sizing:border-box;width:0;min-width:100%;font-size:calc(9px * var(--mmh3-fs, 1));
   color:#8a93a3;border:1px solid #2e3440;border-radius:4px;padding:0 5px;white-space:nowrap;
@@ -5155,6 +5169,12 @@ class Editor {
 
   /* --- the rail ---------------------------------------------------- */
 
+  /** The loader clip marked for editing, if any. */
+  editItem() {
+    const items = (this.bufferMode === "draft" ? this.draftView() : null) || loaderItems(this.node) || [];
+    return items.find((i) => i && i.edit && i.mask && i.enabled !== false) || null;
+  }
+
   refChips() {
     const live = this.slots.filter((s) => s.tag);
     if (!live.length) {
@@ -5214,6 +5234,25 @@ class Editor {
           ? el("span", { class: "mmh3-cardnote" },
               "\u266a\u2192V" + (s.note.match(/\d+/) || [""])[0])
           : null);
+      if (s.edit && s.kind === "Video") {
+        const it = this.editItem();
+        const thumb = card.querySelector("video.mmh3-thumb");
+        const sprite = it?.mask_info?.sprite;
+        if (thumb && sprite && overlayOn()) {
+          const wrap = el("div", { class: "mmh3-editthumb" });
+          thumb.replaceWith(wrap);
+          wrap.append(thumb);
+          maskOverlay(thumb, wrap, sprite, "contain", { append: true, look: itemLook(it), onMissing: () => card.append(
+            el("span", { class: "mmh3-maskmissing", title: "This clip's mask files are missing: mask it again in " +
+              "the Media Loader, or clear its mask. The next run stops with an error until you do." }, "\u26a0")) })
+            .mirror(!!it.mirror);
+        }
+        card.classList.add("mmh3-editsrc");
+        card.title = `${s.tag} is the clip being edited: only its masked area is regenerated. Cite it the way ` +
+          `H3's editing prompts do: "${s.tag} is the source video for the target video edit." and ` +
+          `"The target video is an edited version of ${s.tag}."`;
+        card.append(el("span", { class: "mmh3-cardbadge mmh3-editbadge" }, "\u25d0"));
+      }
       if (s.refmod) {
         card.classList.add("refmod");
         card.append(el("span", { class: "mmh3-cardbadge", title: `From the RefMod \u201c${s.refmod.name}\u201d` }, "\u25c8"));
@@ -6691,8 +6730,19 @@ class Editor {
 
     const rank = { error: 0, warn: 1, info: 2 };
     const icon = { error: "\u26d4 ", warn: "\u26a0 ", info: "\u2139 " };
-    const issues = validate(this.state, this.slots)
-      .sort((a, b) => rank[a.level] - rank[b.level]);
+    const issues = validate(this.state, this.slots);
+    if (this.state.mode === "REF") {
+      const edit = this.editItem();
+      if (!edit && this.state.ref.summaryTypes.includes("video editing"))
+        issues.push({ level: "warn", msg: "\u201cvideo editing\u201d is ticked but no clip has a mask, so the whole " +
+          "video will be regenerated. Mask the clip in the Media Loader (right-click \u2192 Mask for editing)." });
+      const cost = edit ? Math.round(refTokenEstimate(edit)) : 0;
+      if (cost > 30000)
+        issues.push({ level: "warn", msg: `Citing the clip being edited adds about ${cost.toLocaleString()} ` +
+          "reference tokens to every sampling step. Trim it, or turn on crop to mask in its mask settings to cite only " +
+          "the area around the mask." });
+    }
+    issues.sort((a, b) => rank[a.level] - rank[b.level]);
     this.issuesEl.replaceChildren(...(issues.length
       ? issues.map((i) => el("div", { class: i.level }, icon[i.level] + i.msg))
       : [el("div", { class: "ok" }, "\u2713 No issues found")]));

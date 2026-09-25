@@ -20,8 +20,12 @@ import time
 
 import comfy.model_management as mm
 
-from .refmod_core import check_bundle
+from .refmod_core import check_bundle, _blur_latent
 from .refmods import KIND_LABEL
+from . import latent_cache
+from .video_edit import bundle_edit, shape, spec_mask, usable_frames
+
+REF_TOKEN_WARN = 30000      # a cited clip being edited past this many tokens gets a warning
 
 MEDIA_LABEL = {"pictures": "picture", "videos": "video", "video_audios": "video_audio", "audios": "audio"}
 
@@ -78,11 +82,25 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
 
     tracks = seq("video_audios")
     videos = references.get("videos") or []
+    specs = references.get("video_specs") or []
+    edit = references.get("edit")
     for n, frames in enumerate(videos, 1):
         if frames is None:
             continue
         soundtrack = tracks[n - 1] if n - 1 < len(tracks) else None
+        spec = specs[n - 1] if n - 1 < len(specs) else None
+        source_shape = list(frames.shape)
         vh, vw = frames.shape[1], frames.shape[2]
+        # With crop to mask the edit samples only a box around the mask, so
+        # the cited clip is that same box.
+        box = None
+        if spec and spec.get("edit") and edit and edit.get("context"):
+            used = usable_frames(frames.shape[0])
+            _obj, box = shape(spec_mask(edit, used), used, vw, vh, int(edit.get("grow", 16)),
+                              bool(edit.get("invert")), float(edit["context"]))
+            if box:
+                x, y, vw, vh = box
+                frames = frames[:, y:y + vh, x:x + vw]
         cw, ch = adapt_canvas(vw, vh)
         if vw * vh < cw * ch:
             cw = max(CANVAS_MULTIPLE, round(vw / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)
@@ -108,10 +126,38 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
         if vae is None:
             continue
         t0 = time.perf_counter()
-        z = vae.encode(frames)
-        audio_latent, ref_audio_t = None, 0
-        if soundtrack is not None and audio_vae is not None:
-            audio_latent, ref_audio_t = _encode_ref_audio(audio_vae, soundtrack)
+        # A loader clip's encode is saved under its settings: the prompt
+        # changes far more often than the clip does.
+        with_audio = soundtrack is not None and audio_vae is not None
+        path = None
+        if spec and spec.get("file"):
+            try:
+                path = latent_cache.path_for("ref", {
+                    "v": 1, "clip": latent_cache.file_stamp(spec["file"]), "trim": spec.get("trim"),
+                    "crop": spec.get("crop"), "mirror": bool(spec.get("mirror")), "resize": spec.get("resize"),
+                    "audio_mode": spec.get("audio_mode"), "shape": source_shape, "box": box, "size": [cw, ch, k],
+                    "audio": with_audio, "vae": latent_cache.vae_tag(vae),
+                    "audio_vae": latent_cache.vae_tag(audio_vae) if with_audio else None})
+            except (OSError, ValueError):
+                path = None
+        saved = latent_cache.load(path) if path else None
+        if saved is not None:
+            z = saved["video"].to(mm.intermediate_device())
+            audio_latent = saved.get("audio")
+            ref_audio_t = audio_latent.shape[-1] if audio_latent is not None else 0
+        else:
+            z = vae.encode(frames)
+            audio_latent, ref_audio_t = None, 0
+            if with_audio:
+                audio_latent, ref_audio_t = _encode_ref_audio(audio_vae, soundtrack)
+            if path:
+                latent_cache.save(path, {"video": z, "audio": audio_latent})
+        # The clip being edited sits at the target's own positions, and at
+        # full strength the model can copy it back instead of editing. Mixed
+        # toward a blur it still gives colour and placement, not the detail.
+        soft = float(edit.get("ref_strength") or 1.0) if spec and spec.get("edit") and edit else 1.0
+        if soft < 1.0:
+            z = soft * z + (1.0 - soft) * _blur_latent(z)
         blocks.append({"kind": "video_audio" if ref_audio_t else "video",
                        "latent_t": z.shape[2], "latent_h": ch // 16, "latent_w": cw // 16,
                        "ref_audio_t": ref_audio_t, "latent": z, "audio_latent": audio_latent})
@@ -120,9 +166,16 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
         print(f"[MiniMaxH3FantasticRefModTextEncode] media video {n}: {k} frames at {cw}x{ch} -> "
               f"{tokens_of(blocks[-1])} reference tokens"
               + (f" + {2 * ref_audio_t} audio" if ref_audio_t else "")
-              + f" ({time.perf_counter() - t0:.1f}s to encode)"
+              + (" (the crop to mask box)" if box else "")
+              + (f"; reference strength {soft:.2f}" if soft < 1.0 else "")
+              + (f" (loaded the saved encode, {time.perf_counter() - t0:.1f}s)" if saved is not None
+                 else f" ({time.perf_counter() - t0:.1f}s to encode)")
               + ("; trim the clip in the Media Loader if only a moment of it is the reference"
                  if tokens_of(blocks[-1]) > 12000 else ""))
+        if spec and spec.get("edit") and tokens_of(blocks[-1]) > REF_TOKEN_WARN:
+            print(f"[MiniMaxH3FantasticRefModTextEncode] citing the clip being edited adds "
+                  f"{tokens_of(blocks[-1])} reference tokens to every sampling step. Trim it, or turn on "
+                  "crop to mask in its mask settings to cite only the area around the mask.")
 
     for n, audio in enumerate(seq("audios"), 1):
         counters["audio"] += 1
@@ -132,6 +185,65 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
             audio_latent, ref_audio_t = _encode_ref_audio(audio_vae, audio)
             blocks.append({"kind": "audio", "ref_audio_t": ref_audio_t, "audio_latent": audio_latent})
     return items, blocks, mapping
+
+
+def build_entries(tokenizer, prompt, items):
+    """H3's token stream, built exactly as core's MiniMaxH3Tokenizer builds it
+    (comfy/text_encoders/minimax.py), plus one thing: an audio item may carry
+    a `caption`, written right after its "<Audio j>: " label. Used for
+    voice_description_at_label; with no captions the stream is core's to the token."""
+    from comfy.text_encoders.minimax import MiniMaxH3Tokenizer, VISION_START, VISION_END
+    import torch
+    if not isinstance(tokenizer, MiniMaxH3Tokenizer):
+        raise ValueError("Connect an H3 CLIP.")
+    sub = tokenizer.qwen3vl_32b
+    entries = []
+
+    def add_text(text):
+        if not text:
+            return
+        batches = sub.tokenize_with_weights(text, return_word_ids=False, disable_weights=True)
+        if len(batches) != 1:
+            raise ValueError("MiniMax H3 text segment exceeds the supported prompt length.")
+        entries.extend(batches[0])
+
+    def add_vision(data, video_block=False):
+        entries.append((VISION_START, 1.0))
+        entries.append((tokenizer._vision_entry(data, video_block), 1.0))
+        entries.append((VISION_END, 1.0))
+
+    counters = {"image": 0, "audio": 0, "video": 0}
+    for item in items:
+        kind = item["type"]
+        if kind == "image":
+            counters["image"] += 1
+            add_text("<Picture %d>: " % counters["image"])
+            add_vision(item["data"])
+        elif kind == "audio":
+            counters["audio"] += 1
+            add_text("<Audio %d>: " % counters["audio"])
+            cap = " ".join(str(item.get("caption") or "").split())
+            if cap:
+                add_text(f"{cap} ")
+        elif kind == "video":
+            frames = item["data"]
+            timestamps = item.get("timestamps")
+            if timestamps is None:
+                timestamps = [i / 2.0 for i in range(frames.shape[0])]
+            if frames.shape[0] % 2 == 1:
+                frames = torch.cat([frames, frames[-1:]], dim=0)
+                timestamps = list(timestamps) + [timestamps[-1]]
+            counters["video"] += 1
+            add_text("<Video %d>: " % counters["video"])
+            for i in range(0, frames.shape[0], 2):
+                add_text("<%.1f seconds>" % ((timestamps[i] + timestamps[i + 1]) / 2.0))
+                add_vision(frames[i:i + 2], video_block=True)
+        else:
+            raise ValueError(f"Unknown reference kind {kind!r}.")
+    add_text(prompt)
+    if not entries:
+        entries.append((151643, 1.0))
+    return {"qwen3vl_32b": [entries]}
 
 
 class MiniMaxH3FantasticRefModTextEncode:
@@ -177,10 +289,16 @@ class MiniMaxH3FantasticRefModTextEncode:
                                        "visual RefMods for the encoder. Not needed for audio-only references."}),
             "audio_vae": ("VAE", {"tooltip": "H3 audio VAE: encodes media voices and soundtracks. "
                                              "RefMod voices are already encoded."}),
-        }}
+            "voice_description_at_label": ("BOOLEAN", {"default": False,
+                "tooltip": "Your voice references are used either way; this only decides where their descriptions "
+                           "go. On: each voice RefMod's saved Voice description is also written right after its "
+                           "<Audio N>: label, where H3's encoder is introduced to the reference. Off: the bare "
+                           "label, exactly as core writes it."}),
+        }, "hidden": {"extra_pnginfo": "EXTRA_PNGINFO"}}
 
     def encode(self, clip, prompt, width=1344, height=768, length=124, ref_image_size="match",
-               reference_fps=24.0, max_total_tokens=0, mods=None, references=None, vae=None, audio_vae=None):
+               reference_fps=24.0, max_total_tokens=0, mods=None, references=None, vae=None, audio_vae=None,
+               voice_description_at_label=False, extra_pnginfo=None):
         try:
             from comfy.text_encoders.minimax import MiniMaxH3Tokenizer
             from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
@@ -204,6 +322,25 @@ class MiniMaxH3FantasticRefModTextEncode:
         if (visual or media_visual) and not isinstance(vae.first_stage_model, MiniMaxH3VideoVAE):
             raise ValueError("Visual references need the MiniMax H3 video VAE.")
 
+        # A clip marked for editing in the Media Loader sets the size and
+        # length, and its latent (with the mask) replaces the empty one.
+        edit = bundle_edit(references, vae, audio_vae, width, height)
+        if edit is not None:
+            budget = width * height
+            width, height, length = edit[1], edit[2], edit[3]
+            print(f"[MiniMaxH3FantasticRefModTextEncode] editing {references['edit']['name']}: sampling "
+                  f"{width}x{height} (at most {budget / 1e6:.2f} MP, from width x height), {length} frames "
+                  "(the clip's length and shape)")
+            nodes = ((extra_pnginfo or {}).get("workflow") or {}).get("nodes") or []
+            if references["edit"].get("context") and any(n.get("type") == "MiniMaxH3AddGuide" for n in nodes):
+                print("[MiniMaxH3FantasticRefModTextEncode] crop to mask is on and this workflow has Add Guide: a "
+                      "guide frame is placed on the generated view, which is now the crop, not the whole frame. "
+                      "Crop the guide image to match, or turn crop to mask off.")
+            if nodes and not any(n.get("type") == "MiniMaxH3FantasticEditComposite" for n in nodes):
+                print("[MiniMaxH3FantasticRefModTextEncode] no Fantastic H3 Edit Composite in this workflow: "
+                      "outside the mask you'll get the VAE's copy of the footage, not the original pixels. "
+                      "Add it between VAE Decode and Create Video.")
+
         counters = {"image": 0, "video": 0, "audio": 0}
         items, blocks, mapping = [], [], []
         t_start = time.perf_counter()
@@ -216,6 +353,9 @@ class MiniMaxH3FantasticRefModTextEncode:
         # A copy is the same latent again: decode each one once and reuse the
         # pixels for every label it gets.
         decoded = {}
+        voiced = 0
+        if voice_description_at_label and not native:
+            print("[MiniMaxH3FantasticRefModTextEncode] voice_description_at_label needs the native H3 CLIP; ignored")
         for mod, strength in active:
             block = mod.ref_block(strength)
             if block is None:
@@ -226,8 +366,13 @@ class MiniMaxH3FantasticRefModTextEncode:
                 raise ValueError(f"Reference '{mod.name}' has kind '{kind}', which this "
                                  "node cannot label (expected image, video or audio).")
             counters[kind] += 1
-            mapping.append(f"<{KIND_LABEL[kind]} {counters[kind]}> = {mod.name}")
             item = {"type": kind}
+            voice = " ".join(str(getattr(mod, "voice_description", "") or "").split()) \
+                if kind == "audio" and voice_description_at_label and native else ""
+            if voice:
+                item["caption"] = voice
+                voiced += 1
+            mapping.append(f"<{KIND_LABEL[kind]} {counters[kind]}> = {mod.name}" + (" \u00b7 voice description at label" if voice else ""))
             if kind != "audio":
                 key = (id(mod), round(float(strength), 4))
                 if key not in decoded:
@@ -264,7 +409,11 @@ class MiniMaxH3FantasticRefModTextEncode:
                   f"media {media_tokens} tokens + RefMods {refmod_tokens} tokens = {media_tokens + refmod_tokens}"
                   " riding through every sampling step")
 
-        tokens = clip.tokenize(prompt, minimax_ref_items=items)
+        if voiced:
+            tokens = build_entries(clip.tokenizer, prompt, items)
+            print(f"[MiniMaxH3FantasticRefModTextEncode] voice descriptions at their labels: {voiced}")
+        else:
+            tokens = clip.tokenize(prompt, minimax_ref_items=items)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
         out = []
         for embedding, metadata in conditioning:
@@ -274,7 +423,9 @@ class MiniMaxH3FantasticRefModTextEncode:
             if blocks:
                 metadata["minimax_refs"] = list(metadata.get("minimax_refs", [])) + blocks
             out.append([embedding, metadata])
-        latent, _frames = _empty_av_latent(width, height, length)
+        latent = edit[0] if edit is not None else _empty_av_latent(width, height, length)[0]
+        if edit is not None:
+            mapping.append(f"Editing {references['edit']['name']} (masked area regenerated)")
         return out, "\n".join(mapping) or "No references.", latent
 
 

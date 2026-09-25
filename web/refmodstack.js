@@ -640,12 +640,26 @@ function injectCSS() {
 
 /* ------------------------------------------------------ the panel */
 
+/** Give every pick a uid no other pick on the page has. Saved picks keep
+ *  theirs; one that has none, or repeats another's (a workflow edited by
+ *  hand, a pick pasted in), gets the next number. */
+function fixUids(picks) {
+  StackPanel.seq = Math.max(StackPanel.seq, ...picks.map((p) => +p.uid || 0));
+  const seen = new Set();
+  let changed = false;
+  for (const p of picks) {
+    if (!p || typeof p !== "object") continue;
+    if (p.uid == null || seen.has(p.uid)) { p.uid = ++StackPanel.seq; changed = true; }
+    seen.add(p.uid);
+  }
+  return changed;
+}
+
 class StackPanel {
   constructor(node) {
     this.node = node;
     this.state = readStack(node);
-    this.state.picks.forEach((p) => { if (p.uid == null) p.uid = ++StackPanel.seq; });
-    StackPanel.seq = Math.max(StackPanel.seq, ...this.state.picks.map((p) => +p.uid || 0));
+    const renumbered = fixUids(this.state.picks);
     injectCSS();
     this.root = el("div", { class: "mmr-panel" });
     this.dragUid = null;
@@ -672,6 +686,7 @@ class StackPanel {
     window.addEventListener("pointerdown", this._outside, true);
     applyStackText(this, loadStackScale().text);
     StackPanel.all.add(this);
+    if (renumbered) this.write();
     this.render();
     this.refreshPresets();
   }
@@ -699,7 +714,7 @@ class StackPanel {
 
   reload() {
     this.state = readStack(this.node);
-    this.state.picks.forEach((p) => { if (p.uid == null) p.uid = ++StackPanel.seq; });
+    fixUids(this.state.picks);
     this.render();
   }
 
@@ -2544,7 +2559,8 @@ export function openLibrary(panel, opts = {}) {
       else if (!plan.changed && !editing.copy) line = `${t} frame${t === 1 ? "" : "s"} · ${fmt(editing.visual?.tokens || 0)} tokens · nothing changed yet`;
       else if (editing.visual && !plan.looks) { blocked = true; cls = "over"; line = "That would leave no frames — delete the RefMod instead."; }
       else if (!e.known) line = `${t} → ${e.frames}+ frames${voiceNote} · working out the size…`;
-      else if (st.max_tokens > 0 && e.tokens > st.max_tokens) {
+      // Only growth is held to the limit: dropping frames from a big file must still save.
+      else if (st.max_tokens > 0 && e.tokens > st.max_tokens && e.tokens > (editing.visual?.tokens || 0)) {
         blocked = true; cls = "over";
         line = `About ${fmt(e.tokens)} tokens — over the ${fmt(st.max_tokens)} limit. Raise the limit or untick some frames.`;
       } else line = `${t} → ${e.frames} frame${e.frames === 1 ? "" : "s"}${voiceNote} · about ${fmt(e.tokens)} tokens (${limitText()})` +
@@ -2759,7 +2775,8 @@ export function openLibrary(panel, opts = {}) {
         el("div", { class: "mmr-fh" }, "Settings"),
         subjectField(),
         el("div", { class: "mmr-grid2" },
-          num("max_tokens", "Max tokens", 0, 1048576, 256, "Refuses to save anything bigger than this. 0 = no limit."),
+          num("max_tokens", "Max tokens", 0, 1048576, 256, "Refuses to save anything bigger than this, unless it's no " +
+            "bigger than the file already is. 0 = no limit."),
           num("latent_frames", "Clip frames", 1, 1024, 1, "Frames taken from the start of each added clip, after its trim.", clipFramesHint),
           num("audio_max_seconds", "Voice seconds", 0.5, 600, 0.5, "Seconds of a new voice kept from the start.")),
         el("div", { class: "mmr-fh", style: { marginTop: "8px" } }, "Models"),

@@ -115,6 +115,7 @@ export function keepNameChars(e) {
   try { inp.setSelectionRange(pos, pos); } catch (err) { /* not focusable */ }
 }
 
+/** Sent to the model as a reference. The clip being edited is one too. */
 export function isOn(item) {
   return item && item.enabled !== false;
 }
@@ -324,6 +325,31 @@ export function applyNodeSize(node, factor) {
  *  want here is bigger type in the same boxes. Set on the document so the
  *  trim editor and other overlays (which live on <body>) inherit it. */
 /** Size an overlay in step with the node scale, so the editors grow too. */
+const EDITOR_SIZE_KEY = "mmh3.editorSize";
+const EDITOR_SIZE_DEFAULT = { window: 1.3, text: 1.1 };
+
+function loadEditorSize() {
+  try {
+    const v = JSON.parse(localStorage.getItem(EDITOR_SIZE_KEY) || "null");
+    if (v && v.window > 0 && v.text > 0) return { window: +v.window, text: +v.text };
+  } catch (e) { /* defaults */ }
+  return { ...EDITOR_SIZE_DEFAULT };
+}
+
+function saveEditorSize(v) {
+  try { localStorage.setItem(EDITOR_SIZE_KEY, JSON.stringify(v)); } catch (e) { /* this session only */ }
+}
+
+/** Size the trim/mask editor: its width and picture height follow `window`,
+ *  and its own text size overrides the loader's inside it. */
+function applyEditorSize(modal) {
+  if (!modal?.style) return;
+  const { window: w, text } = loadEditorSize();
+  modal.style.width = `min(${Math.round(640 * w)}px, 96vw)`;
+  modal.style.setProperty("--mml-tmw", String(w));
+  modal.style.setProperty("--mml-fs", String(text));
+}
+
 export function scaleOverlay(node, boxes) {
   let f = 1;
   try { f = clampScale(loadScalePrefs().node); } catch (e) { f = 1; }
@@ -531,6 +557,66 @@ const CSS = `
 .mml-picbar .mml-trimbtn{font-size:calc(12px * var(--mml-fs, 1));}
 .mml-tag{font-family:ui-monospace,monospace;font-size:calc(9px * var(--mml-fs, 1));white-space:nowrap;}
 .mml-tag.pic{color:#e0a94c;} .mml-tag.vid{color:#4cc3e0;} .mml-tag.aud{color:#b48ce8;}
+.mml-tag.vid.edit{color:#e86a8a;}
+.mml-editbadge{cursor:pointer;color:#e86a8a;font-size:calc(14px * var(--mml-fs, 1));line-height:1;flex-shrink:0;
+  user-select:none;text-shadow:0 0 6px rgba(232,106,138,.5);}
+.mml-ctxmenu{position:fixed;z-index:10060;min-width:180px;background:#1b1f27;border:1px solid #303642;
+  border-radius:7px;box-shadow:0 12px 32px rgba(0,0,0,.5);padding:4px;font-family:system-ui,sans-serif;}
+.mml-ctxitem{padding:6px 10px;border-radius:5px;cursor:pointer;color:#dde2ea;font-size:calc(12px * var(--mml-fs, 1));}
+.mml-ctxitem:hover{background:#262c37;}
+.mml-ctxsep{height:1px;margin:4px 6px;background:#2e3440;}
+.mml-ctxitem.mml-ctxdanger{color:#e0848a;}
+.mml-ctxitem.armed,.mml-btn.armed{background:#5a2328 !important;color:#ffd5d8 !important;}
+.mml-msgact{margin-left:8px;background:none;border:1px solid #4a5568;border-radius:4px;color:#9fe9f2;
+  cursor:pointer;padding:0 6px;font-size:calc(10px * var(--mml-fs, 1));}
+.mml-maskmissing{position:absolute;right:1px;top:1px;color:#ffcf5a;font-size:calc(11px * var(--mml-fs, 1));
+  line-height:1;text-shadow:0 0 3px #000;cursor:help;}
+.mml-mkdim.err{color:#e0848a;}
+.mml-tmmodal [hidden]{display:none !important;}
+.mml-mkui .mml-tmfoot{flex-wrap:wrap;row-gap:6px;}
+.mml-mkgo{background:#2b5f8a;border-color:#3b77a8;color:#fff;font-weight:600;padding:5px 14px;
+  font-size:calc(12px * var(--mml-fs, 1));}
+.mml-mkgo:hover{background:#34709f;}
+.mml-mkgo:disabled{opacity:.55;cursor:default;}
+.mml-mkdots{position:absolute;inset:0;cursor:crosshair;pointer-events:auto;}
+.mml-mktab.on{border-color:#e86a8a;color:#f3b3c4;}
+.mml-mkmarks{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 12px 0;}
+.mml-mkmarks:empty{display:none;}
+.mml-mkmark{display:inline-flex;align-items:center;gap:1px;padding:1px 5px;border:1px solid #2e3440;border-radius:9px;
+  cursor:pointer;color:#c9cfda;font-family:ui-monospace,monospace;font-size:calc(10px * var(--mml-fs, 1));}
+.mml-mkmark.here{border-color:#4cc3e0;}
+.mml-mkmark.bad{border-color:#7a3a3a;}
+.mml-mkmark b{font-weight:400;} .mml-mkmark b.pos{color:#3ec46d;} .mml-mkmark b.neg{color:#e0484f;}
+.mml-mkmarkx{margin-left:4px;color:#6b7484;} .mml-mkmarkx:hover{color:#e0848a;}
+.mml-mkdots.brush{cursor:cell;}
+.mml-mkbrush{pointer-events:none;}
+.mml-mkmode{display:inline-flex;gap:4px;}
+.mml-mkhint{font-size:calc(11px * var(--mml-fs, 1));color:#8b93a1;font-family:system-ui,sans-serif;}
+.mml-mkmode .mml-btn{font-size:calc(11px * var(--mml-fs, 1));padding:3px 10px;}
+.mml-mkmode .mml-btn.on{border-color:#e86a8a;color:#fff;background:#4a2331;}
+.mml-mkmode .mml-btn:disabled{opacity:.4;cursor:default;}
+.mml-seg button:disabled{opacity:.4;cursor:default;}
+.mml-mkoverlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+.mml-mknote{position:absolute;left:8px;bottom:8px;line-height:1.3;padding:2px 7px;border-radius:4px;
+  background:rgba(8,10,14,.72);color:#9fe9f2;font-size:calc(10px * var(--mml-fs, 1));pointer-events:auto;
+  cursor:help;font-family:system-ui,sans-serif;}
+.mml-vthumbwrap{position:relative;display:inline-block;width:60px;height:34px;min-width:60px;flex-shrink:0;
+  line-height:0;border-radius:4px;overflow:hidden;}
+.mml-mkdot{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;cursor:pointer;
+  border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.6);}
+.mml-mkdot.positive{background:#3ec46d;} .mml-mkdot.negative{background:#e0484f;}
+.mml-mkdim{font-size:calc(11px * var(--mml-fs, 1));color:#8b93a1;font-family:ui-monospace,monospace;}
+.mml-mkhelp{padding:6px 12px 0;font-size:calc(11px * var(--mml-fs, 1));color:#8b93a1;line-height:1.4;}
+.mml-mktext{flex:1 1 auto;min-width:0;background:#12151b;color:#dde2ea;border:1px solid #2e3440;border-radius:6px;
+  padding:4px 7px;font-size:calc(12px * var(--mml-fs, 1));}
+.mml-mkckpt{flex:0 1 200px;min-width:0;background:#12151b;color:#c9cfda;border:1px solid #2e3440;border-radius:6px;
+  padding:3px 5px;font-size:calc(11px * var(--mml-fs, 1));}
+.mml-mkstatus{padding:6px 12px 0;min-height:1.4em;font-size:calc(11px * var(--mml-fs, 1));color:#9fb4c8;line-height:1.4;}
+.mml-mkstatus.err{color:#e0848a;}
+.mml-mkstatus a{color:#4cc3e0;}
+.mml-mklbl{display:flex;align-items:center;gap:5px;font-size:calc(11px * var(--mml-fs, 1));color:#c9cfda;}
+.mml-mklbl input[type=range]{width:90px;}
+.mml-mkui > .mml-mkhelp:last-child{padding-bottom:12px;}
 .mml-x{cursor:pointer;color:#7a8393;font-size:calc(11px * var(--mml-fs, 1));line-height:1;}
 .mml-x:hover{color:#e05a5a;}
 
@@ -575,7 +661,7 @@ const CSS = `
 .mml-tmmodal{width:min(640px,92vw);background:#191c22;border:1px solid #303642;
   border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.55);display:flex;
   flex-direction:column;overflow:hidden;font-family:system-ui,sans-serif;}
-.mml-tmhead{display:flex;align-items:center;gap:8px;padding:8px 12px;
+.mml-tmhead{display:flex;flex-wrap:wrap;row-gap:6px;align-items:center;gap:8px;padding:8px 12px;
   border-bottom:1px solid #2a2f3a;background:#1b1f27;}
 .mml-tmtitle{flex:1;min-width:0;font-size:calc(12px * var(--mml-fs, 1));color:#dde2ea;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
@@ -586,7 +672,9 @@ const CSS = `
    and this clip guarantees a mis-measure can never reach the header again. */
 .mml-tmstage{position:relative;background:#000;line-height:0;overflow:hidden;
   display:flex;align-items:center;justify-content:center;}
-.mml-tmvideo{width:100%;max-height:340px;object-fit:contain;display:block;}
+.mml-tmvideo{width:100%;max-height:min(calc(340px * var(--mml-tmw, 1)), 60vh);object-fit:contain;display:block;}
+.mml-tmover .mml-tmmodal{max-height:96vh;overflow-y:auto;position:relative;}
+
 /* Turned: sizeMedia() sets an explicit width, so the percentage rules that
    assume an upright box must stand down. */
 .mml-tmvideo.turned{width:auto;max-height:none;}
@@ -834,25 +922,83 @@ class TrimModal {
       if (!this.crop) this.crop = coverRect(item.width, item.height, opts.aspect);
     }
     this.drag = null;
+    this.canMask = item.kind === "video" && !opts.refmod && !opts.noAdd && Array.isArray(panel?.items);
     injectCSS();
     this.build();
     document.body.append(this.overlay);
     // Overlays live on <body>, so they don't inherit the node's size; scale
     // them to match, or a 200% node still opens a 640px editor.
-    scaleOverlay(this.panel?.node, [
-      [this.overlay.querySelector(".mml-tmmodal"), 640, 0],
-    ]);
-    window.addEventListener("keydown", this.onKey = (e) => this.key(e));
+    this.modal = this.overlay.querySelector(".mml-tmmodal");
+    applyEditorSize(this.modal);
+    this.modal.addEventListener("mousedown", (e) => {
+      if (!e.target.closest(".mml-scalewrap")) { this.sizeMenuEl?.classList.remove("on"); this.sizeBtnEl?.classList.remove("on"); }
+    });
+    // Capture phase: the editor sees keys before ComfyUI's shortcuts do.
+    window.addEventListener("keydown", this.onKey = (e) => this.key(e), true);
   }
 
-  /** Keyboard control. Typing in a field always wins. */
+  /** The editor's own window and text size — the loader's Size control, for
+   *  this editor: sliders and typeable numbers set pending values, and
+   *  nothing moves until Apply (resizing while dragging pulls the slider out
+   *  from under the cursor). Kept for every clip, apart from the node's scale. */
+  sizeControl() {
+    const prefs = loadEditorSize();
+    const pending = { ...prefs };
+    const limits = { window: [60, 260], text: [70, 220] };
+    const inputs = {}, outs = {};
+    const dirty = () => applyBtn.classList.toggle("primary",
+      pending.window !== prefs.window || pending.text !== prefs.text);
+    const clamp = (key, v) => Math.min(limits[key][1], Math.max(limits[key][0], Math.round(v / 5) * 5)) / 100;
+    const slider = (key, label) => {
+      const out = el("input", { type: "number", class: "mml-scaleval", min: String(limits[key][0]),
+        max: String(limits[key][1]), step: "5", value: String(Math.round(pending[key] * 100)),
+        onchange: (e) => { pending[key] = clamp(key, Number(e.target.value));
+          e.target.value = input.value = String(Math.round(pending[key] * 100)); dirty(); },
+        onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } });
+      const input = el("input", { type: "range", class: "mml-scalerange", min: String(limits[key][0]),
+        max: String(limits[key][1]), step: "5", value: String(Math.round(pending[key] * 100)),
+        oninput: (e) => { pending[key] = clamp(key, Number(e.target.value));
+          out.value = String(Math.round(pending[key] * 100)); dirty(); } });
+      inputs[key] = input; outs[key] = out;
+      return el("label", { class: "mml-scalerow" }, el("span", { class: "mml-scalelabel" }, label), input, out,
+        el("span", { class: "mml-scalepct" }, "%"));
+    };
+    const commit = (v) => {
+      Object.assign(prefs, v); Object.assign(pending, v);
+      for (const key of ["window", "text"]) {
+        inputs[key].value = outs[key].value = String(Math.round(v[key] * 100));
+      }
+      saveEditorSize(prefs);
+      applyEditorSize(this.modal);
+      applyBtn.classList.remove("primary");
+    };
+    const applyBtn = el("button", { class: "mml-btn mml-sm",
+      onclick: (e) => { e.stopPropagation(); commit({ ...pending }); } }, "Apply");
+    const menu = el("div", { class: "mml-scalemenu", onmousedown: (e) => e.stopPropagation() },
+      slider("window", "Window size"),
+      slider("text", "Text size"),
+      el("div", { class: "mml-scalefoot" },
+        el("span", {}, "Remembered for this editor"),
+        el("button", { class: "mml-btn mml-sm",
+          onclick: (e) => { e.stopPropagation(); commit({ ...EDITOR_SIZE_DEFAULT }); } }, "Reset"),
+        applyBtn));
+    const btn = el("button", { class: "mml-btn mml-sm", title: "Editor window and text size",
+      onclick: (e) => { e.stopPropagation(); btn.classList.toggle("on", menu.classList.toggle("on")); } },
+      "\u2921 Size");
+    this.sizeMenuEl = menu; this.sizeBtnEl = btn;
+    return el("span", { class: "mml-scalewrap" }, btn, menu);
+  }
+
+  /** Keyboard control. Typing in a field always wins; every other key stays
+   *  in the editor, so the graph behind it never moves or edits. A focused
+   *  checkbox, slider or button isn't typing: arrows still step frames. */
   key(e) {
+    const typing = !!e.target?.closest?.("textarea, select, input:not([type=checkbox]):not([type=range]):not([type=button])");
+    if (!typing) e.stopPropagation();
     if (this.isStill) {
-      if (e.key === "Escape" && !(e.target && /^(INPUT|TEXTAREA|SELECT)$/
-          .test(e.target.tagName))) this.close();
+      if (e.key === "Escape" && !typing) this.close();
       return;
     }
-    const typing = e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     if (e.key === "Escape") {
       if (!typing) this.close();
       return;
@@ -896,14 +1042,18 @@ class TrimModal {
   }
 
   close() {
+    if (this.masker) this.masker.closed = true;
+    this.maskLayer?.detach();
     if (this.stopFit) this.stopFit();
     if (this.raf) cancelAnimationFrame(this.raf);
-    window.removeEventListener("keydown", this.onKey);
+    window.removeEventListener("keydown", this.onKey, true);
     try { this.media?.pause?.(); } catch (e) {}
     this.overlay.remove();
   }
 
-  apply() {
+  /** Write the edits to the item. `keepOpen` stays in the editor (mask
+   *  mode's Use this mask), following the item through the commit. */
+  apply(keepOpen = false) {
     // Resolve to whichever object the panel currently holds: a sync can have
     // replaced it since the modal opened, and writing to the old one would
     // drop the edit on the floor without any error.
@@ -927,8 +1077,15 @@ class TrimModal {
     else delete it.rotate;
     if (this.resize && visual) it.resize = this.resize;
     else delete it.resize;
-    this.close();
+    // The mask was made for one span: say so if the trim now reaches past it.
+    const range = it.mask_range;
+    const past = range && ((it.trim?.start || 0) < range.start - 0.05 ||
+      (it.trim?.end ?? this.dur) > range.end + 0.05);
+    if (past) this.panel.say(`${it.name}'s mask covers ${range.start.toFixed(1)}\u2013${range.end.toFixed(1)} s; ` +
+      "the trim now goes past that, and frames outside it won't change. Mask it again to cover them.", true);
+    if (!keepOpen) this.close();
     this.panel.commit();
+    if (keepOpen) this.item = this.panel.live?.(it) || it;
   }
 
   /* ---- media preview ---------------------------------------------- */
@@ -1429,6 +1586,7 @@ class TrimModal {
       this.media.style.transform =
         `${this.mirror ? "scaleX(-1) " : ""}rotate(${this.rotate || 0}deg)`;
     }
+    this.maskLayer?.mirror(this.mirror);
     if (this.mirrorBtn) this.mirrorBtn.classList.toggle("on", this.mirror);
   }
 
@@ -1487,10 +1645,11 @@ class TrimModal {
     if (!this.cropWrap) return;
     // The rect stays on screen whenever a crop exists — only editing is
     // toggled — so you can always see what the frame will be cut to.
-    const show = this.cropMode || !!this.crop;
+    const show = this.cropMode || !!this.crop || !!this.maskOn || !!(this.maskLayer && this.maskShown);
     this.cropWrap.style.display = show ? "" : "none";
     this.cropWrap.style.pointerEvents = this.cropMode ? "" : "none";
     this.cropRect.classList.toggle("locked", !this.cropMode);
+    this.cropRect.style.visibility = this.crop || this.cropMode ? "" : "hidden";
     this.cropBtn.classList.toggle("on", !!this.crop);
     this.aspectEl.style.display = this.cropMode && !(this.opts.aspect > 0) ? "" : "none";
     if (this.crop && this.cropRect) {
@@ -1669,13 +1828,27 @@ class TrimModal {
       onmousedown: (e) => { if (e.target === this.overlay) this.close(); } },
       el("div", { class: "mml-tmmodal" + (isVid || still ? "" : " audio") },
         el("div", { class: "mml-tmhead" },
-          el("span", { class: "mml-tmtitle" },
+          this.titleEl = el("span", { class: "mml-tmtitle" },
             `${still ? "\u25a3" : "\u2702"} ${this.item.name}`),
           (isVid || still) ? this.cropUI : null,
+          this.sizeControl(),
+          this.canMask ? (this.maskViewBtn = el("button", { class: "mml-btn mml-sm mml-mktab on",
+            title: "Show the clip's saved mask over the picture",
+            onclick: () => { this.maskShown = !this.maskShown; setOverlay(this.maskShown); this.refreshMaskLayer(); } },
+            "\u25d0 show mask")) : null,
+          this.canMask ? (this.maskRegenBtn = el("button", { class: "mml-btn mml-sm mml-mktab",
+            title: "Show the area H3 actually regenerates: the mask grown and rounded out to the latent's 16-pixel " +
+                   "cells at the sampling size (read from the Text Encode's width \u00d7 height)",
+            onclick: () => { this.showRegen = !this.showRegen; this.refreshMaskLayer(); } }, "\u25a6 regenerated")) : null,
+          this.canMask ? (this.maskTab = el("button", { class: "mml-btn mml-sm mml-mktab",
+            title: "Mask part of this clip for editing, on the trim and crop set here",
+            onclick: () => this.setMaskMode(!this.maskOn) }, "\u25d0 Mask")) : null,
           el("button", { class: "mml-x", onclick: () => this.close() }, "\u2715")),
         stage,
         still ? null : this.buildTimeline(),
         still ? null : el("div", { class: "mml-tmfoot" },
+          el("button", { class: "mml-btn mml-sm", title: "Jump the playhead to the trim start (Home)",
+            onclick: () => this.seek(this.start) }, "\u25c2 to start"),
           el("button", { class: "mml-btn mml-sm", title: "Previous frame (\u2190)",
             onclick: () => this.seek((this.media?.currentTime || 0) -
               1 / (this.item.fps || TRIM_FPS)) }, "\u25c0|"),
@@ -1684,6 +1857,8 @@ class TrimModal {
           el("button", { class: "mml-btn mml-sm", title: "Next frame (\u2192)",
             onclick: () => this.seek((this.media?.currentTime || 0) +
               1 / (this.item.fps || TRIM_FPS)) }, "|\u25b6"),
+          el("button", { class: "mml-btn mml-sm", title: "Jump the playhead to the last kept frame (End)",
+            onclick: () => this.seek(Math.max(this.start, this.end - 1 / (this.item.fps || TRIM_FPS))) }, "to end \u25b8"),
           el("span", { class: "mml-tmgap" }),
           el("button", { class: "mml-btn mml-sm",
             title: "Set start to the playhead  ( [ )",
@@ -1708,7 +1883,7 @@ class TrimModal {
             onclick: () => this.seek(Math.max(0,
               this.dur - 1 / (this.item.fps || TRIM_FPS))) },
             "Last \u23ed")),
-        el("div", { class: "mml-tmfoot act" },
+        this.actRow = el("div", { class: "mml-tmfoot act" },
           ...(still ? [] : chips),
           (isVid && !still && !this.opts.noAdd) ? el("button", { class: "mml-btn mml-sm",
             title: "Add the frame shown above as a picture reference  ( C )",
@@ -1741,6 +1916,7 @@ class TrimModal {
             onclick: () => this.apply() }, "Apply"),
           el("button", { class: "mml-btn mml-sm",
             onclick: () => this.close() }, "Cancel")),
+        this.maskSlot = el("div", {}),
         this.note,
         still ? el("div", { class: "mml-tmkeys" }, this.opts.aspect > 0
           ? "Drag the box over the part to keep \u00b7 drag a corner to resize \u00b7 esc closes"
@@ -1759,7 +1935,919 @@ class TrimModal {
     this.syncMirror();
     this.syncRotate();
     if (!still) this.seek(this.start, false);
+    this.maskShown = overlayOn();
+    this.refreshMaskLayer();
+    if (this.opts.mask && this.canMask) this.setMaskMode(true);
   }
+
+  /** The saved mask drawn over the picture, synced to the playhead. */
+  refreshMaskLayer() {
+    if (!this.canMask) return;
+    const sprite = (this.maskOn && this.masker?.found?.sprite) || (this.item.mask && this.item.mask_info?.sprite);
+    if (this.maskLayer && this.maskLayer.file !== sprite?.file) { this.maskLayer.detach(); this.maskLayer = null; }
+    if (sprite && !this.maskLayer) {
+      this.maskLayer = maskOverlay(this.media, this.cropBox, sprite, "fill");
+      this.maskLayer.file = sprite.file;
+    }
+    this.maskViewBtn.hidden = !sprite;
+    this.maskViewBtn.classList.toggle("on", !!this.maskShown);
+    this.maskRegenBtn.hidden = !sprite || !this.maskShown;
+    this.maskRegenBtn.classList.toggle("on", !!this.showRegen);
+    if (this.maskLayer) {
+      const look = this.maskOn && this.masker ? this.masker.look()
+        : { ...itemLook(this.item, this.crop, this.resize), block: this.showRegen ? regenBlock(this.item, this.crop, this.resize) : 0 };
+      this.maskLayer.setLook(look);
+      this.maskLayer.show(!!this.maskShown);
+      this.maskLayer.mirror(this.mirror);
+    }
+    if (!this.maskNote) {
+      this.maskNote = el("div", { class: "mml-mknote", title: OVERLAY_NOTE }, "\u25d0 mask preview \u2014 approximate");
+      this.stageEl.append(this.maskNote);
+    }
+    this.maskNote.hidden = !(this.maskLayer && this.maskShown);
+    this.syncCrop();
+  }
+
+  /** Mask mode: the same clip, trim and crop, with SAM 3.1 marking what to
+   *  change. Crop editing is set aside while it's on. */
+  setMaskMode(on) {
+    if (!this.canMask) return;
+    if (on && !this.masker) {
+      this.masker = new MaskMode(this);
+      this.maskSlot.append(this.masker.ui);
+    }
+    this.maskOn = on;
+    if (on) this.cropMode = false;
+    this.cropUI.style.display = on ? "none" : "";
+    this.actRow.hidden = on;
+    this.masker.ui.hidden = !on;
+    this.maskTab.classList.toggle("on", on);
+    this.maskTab.textContent = on ? "\u2702 Trim & crop" : "\u25d0 Mask";
+    this.titleEl.textContent = `${on ? "\u25d0 Mask for editing \u2014" : "\u2702"} ${this.item.name}`;
+    this.syncCrop();
+    this.masker.show(on);
+    this.refreshMaskLayer();
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Mask for editing: the editor's mask mode, with SAM 3.1              */
+/* ------------------------------------------------------------------ */
+
+const MASK_NODE = "MiniMaxH3FantasticObjectMask";
+const MASK_KEYS = ["edit", "mask_box", "mask", "mask_info", "mask_grow", "mask_range", "keep_audio",
+  "mask_feather", "mask_invert", "mask_crop", "mask_context", "mask_ref_strength"];
+const REF_TOKEN_WARN = 30000;   // matches the Text Encode's warning
+
+/** Reference tokens a loader clip costs when cited, as the Text Encode will
+ *  size it: its kept span and frame (crop, size cap) on H3's reference
+ *  canvas (768 short edge, 768 x 1344 area cap, never enlarged), cut to
+ *  17k + 5 frames. `over` overrides the item's trim/crop/resize (the editor's
+ *  unapplied values). */
+export function refTokenEstimate(item, over = {}) {
+  const crop = "crop" in over ? over.crop : item.crop;
+  const resize = "resize" in over ? over.resize : item.resize;
+  const box = "box" in over ? over.box : item.mask_crop && item.mask_box;
+  let w = (item.width || 0) * (crop?.w ?? 1), h = (item.height || 0) * (crop?.h ?? 1);
+  if (!w || !h) return 0;
+  if (resize && Math.max(w, h) > resize) { const k = resize / Math.max(w, h); w *= k; h *= k; }
+  // crop to mask cites just its box
+  if (box) { w *= box.w / (crop?.w ?? 1); h *= box.h / (crop?.h ?? 1); }
+  const r = w / h;
+  let nw = r >= 1 ? 768 * r : 768, nh = r >= 1 ? 768 : 768 / r;
+  if (nw * nh > 768 * 1344) { const k = Math.sqrt(768 * 1344 / (nw * nh)); nw *= k; nh *= k; }
+  let cw = Math.max(32, Math.round(nw / 32) * 32), ch = Math.max(32, Math.round(nh / 32) * 32);
+  if (w * h < cw * ch) { cw = Math.max(32, Math.round(w / 32) * 32); ch = Math.max(32, Math.round(h / 32) * 32); }
+  const start = "start" in over ? over.start : (item.trim?.start || 0);
+  const end = "end" in over ? over.end : (item.trim?.end ?? item.duration ?? 0);
+  const frames = Math.floor(Math.max(0, end - start) * TRIM_FPS);
+  if (frames < 5) return 0;
+  const k = Math.floor((frames - 5) / 17) * 17 + 5;
+  return ((k - 5) / 17 * 5 + 2) * (ch / 32) * (cw / 32);
+}
+
+/** Take a clip's mask off, with an Undo in the loader's message line. The
+ *  mask file stays on disk, so undoing just puts the settings back. */
+function clearMaskOn(panel, item, commit = true) {
+  const it = panel.live?.(item) || item;
+  const saved = {};
+  MASK_KEYS.forEach((k) => { if (k in it) saved[k] = it[k]; delete it[k]; });
+  panel.say(`${it.name} is no longer being edited \u2014 its mask was cleared, so the next run regenerates ` +
+    "the whole clip.", true, { label: "Undo", fn: () => {
+      Object.assign(panel.live?.(it) || it, saved);
+      panel.say(`${it.name}'s mask is back.`);
+      panel.commit();
+    } });
+  if (commit) panel.commit();
+  return it;
+}
+
+/** A button that acts on its second click within a few seconds, so a stray
+ *  click can't do something hard to notice. */
+function armTwice(btn, armedLabel, fn) {
+  const label = btn.textContent;
+  let timer = null;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!btn.classList.contains("armed")) {
+      btn.classList.add("armed"); btn.textContent = armedLabel;
+      timer = setTimeout(() => { btn.classList.remove("armed"); btn.textContent = label; }, 3500);
+      return;
+    }
+    clearTimeout(timer); btn.classList.remove("armed"); btn.textContent = label;
+    fn();
+  });
+  return btn;
+}
+const setKids = (node, kids) => node.replaceChildren(...[kids].flat(Infinity).filter((k) => k != null));
+const SAM_LINK = "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors";
+const SAM_KEY = "mmh3.samCheckpoint";
+
+const OVERLAY_KEY = "mmh3.maskOverlay";
+const OVERLAY_NOTE = "Mask preview: a low-resolution copy drawn for reference. The mask sent to the model is " +
+  "full resolution, so edges may differ slightly.";
+
+/** Whether saved masks are drawn over clips, in the editor and on loader cards. */
+export function overlayOn() {
+  try { return localStorage.getItem(OVERLAY_KEY) !== "off"; } catch (e) { return true; }
+}
+
+function setOverlay(on) {
+  try { localStorage.setItem(OVERLAY_KEY, on ? "on" : "off"); } catch (e) { /* this session only */ }
+  for (const n of app.graph?._nodes || []) (n._mmlPanels || []).forEach((p) => p.render());
+}
+
+const spriteCache = new Map();
+function spriteImage(file) {
+  let img = spriteCache.get(file);
+  if (!img) { img = new Image(); img.src = viewURL(file); spriteCache.set(file, img); }
+  return img;
+}
+
+/** Draw a clip's saved mask over `video` for the frame on screen, from the
+ *  masking run's sprite (one small tile per frame). `fit` is "fill" when `box`
+ *  is exactly the drawn frame (the editor's crop box) or "contain" when it's
+ *  the whole element (the loader card). Frames outside the masked span draw
+ *  nothing, so the overlay also shows where it stops.
+ *
+ *  `look` shapes it the way the edit will: `grow` and `frameW` (pixels of the
+ *  frame the edit is built from) widen it, `invert` shows everything else,
+ *  `block` (frame pixels) rounds it out to the latent's 16-pixel cells at
+ *  the sampling size — the area really regenerated — and `cropBox` ({x, y, w, h}
+ *  on the source frame) outlines what crop to mask samples. */
+export function maskOverlay(video, box, sprite, fit, { append = false, onMissing = null, look = {} } = {}) {
+  const canvas = el("canvas", { class: "mml-mkoverlay" });
+  if (append) box.append(canvas); else box.prepend(canvas);
+  const img = spriteImage(sprite.file);
+  const work = document.createElement("canvas");
+  let raf = null, on = true;
+  const draw = () => {
+    const r = box.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const W = Math.max(1, Math.round(r.width * dpr)), H = Math.max(1, Math.round(r.height * dpr));
+    if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+    if (!on || !img.complete || !img.naturalWidth) return;
+    const f = Math.round((video.currentTime || 0) * TRIM_FPS) - (sprite.start || 0);
+    const i = Math.floor(f / (sprite.step || 1));
+    let dx = 0, dy = 0, dw = W, dh = H;
+    if (fit === "contain") {
+      const vw = video.videoWidth || sprite.tw, vh = video.videoHeight || sprite.th;
+      const k = Math.min(W / vw, H / vh);
+      dw = vw * k; dh = vh * k; dx = (W - dw) / 2; dy = (H - dh) / 2;
+    }
+    const covered = f >= 0 && i < sprite.count;
+    if (covered) {
+      work.width = W; work.height = H;
+      const w = work.getContext("2d");
+      const sx = (i % sprite.cols) * sprite.tw, sy = Math.floor(i / sprite.cols) * sprite.th;
+      // grow: the tile stamped around a ring of offsets is its dilation
+      const g = look.grow && look.frameW ? look.grow * dw / look.frameW : 0;
+      const rings = g >= 1 ? [g, g / 2] : [];
+      w.drawImage(img, sx, sy, sprite.tw, sprite.th, dx, dy, dw, dh);
+      for (const rad of rings) {
+        for (let a = 0; a < 16; a++) {
+          w.drawImage(img, sx, sy, sprite.tw, sprite.th, dx + rad * Math.cos(a * Math.PI / 8),
+            dy + rad * Math.sin(a * Math.PI / 8), dw, dh);
+        }
+      }
+      if (look.invert) {
+        w.globalCompositeOperation = "xor";
+        w.fillStyle = "#fff";
+        w.fillRect(dx, dy, dw, dh);
+        w.globalCompositeOperation = "source-over";
+      }
+      const cell = look.block && look.frameW ? look.block * dw / look.frameW : 0;
+      if (cell >= 2) {
+        // the area H3 regenerates: any patch the mask touches, whole
+        const cw = Math.max(1, Math.ceil(dw / cell)), ch = Math.max(1, Math.ceil(dh / cell));
+        const small = document.createElement("canvas");
+        small.width = cw; small.height = ch;
+        const s2 = small.getContext("2d");
+        s2.drawImage(work, dx, dy, dw, dh, 0, 0, cw, ch);
+        const px = s2.getImageData(0, 0, cw, ch);
+        for (let p = 3; p < px.data.length; p += 4) px.data[p] = px.data[p] > 0 ? 255 : 0;
+        s2.putImageData(px, 0, 0);
+        w.clearRect(0, 0, W, H);
+        w.imageSmoothingEnabled = false;
+        w.drawImage(small, 0, 0, cw, ch, dx, dy, cw * cell, ch * cell);
+      }
+      ctx.drawImage(work, 0, 0);
+      ctx.globalCompositeOperation = "source-in";
+      ctx.fillStyle = cell >= 2 ? "rgba(255, 160, 40, 0.45)" : "rgba(26, 242, 255, 0.5)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = "source-over";
+    }
+    if (look.cropBox) {
+      const c = look.cropBox;
+      ctx.setLineDash([6 * dpr, 4 * dpr]);
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.strokeStyle = "rgba(255, 220, 90, 0.95)";
+      ctx.strokeRect(dx + c.x * dw, dy + c.y * dh, c.w * dw, c.h * dh);
+      ctx.setLineDash([]);
+    }
+  };
+  const loop = () => { draw(); raf = video.paused || video.ended ? null : requestAnimationFrame(loop); };
+  const kick = () => { if (!raf) loop(); };
+  const events = ["play", "seeked", "timeupdate", "loadedmetadata"];
+  events.forEach((e) => video.addEventListener(e, kick));
+  img.addEventListener("load", draw);
+  if (onMissing) {
+    if (img.complete && !img.naturalWidth && img.src) onMissing();
+    else img.addEventListener("error", onMissing, { once: true });
+  }
+  const ro = new ResizeObserver(draw);
+  ro.observe(box);
+  draw();
+  return {
+    show(v) { on = v; canvas.hidden = !v; draw(); },
+    mirror(m) { canvas.style.transform = m ? "scaleX(-1)" : ""; },
+    setLook(next) { look = next || {}; draw(); },
+    detach() {
+      events.forEach((e) => video.removeEventListener(e, kick));
+      img.removeEventListener("load", draw);
+      ro.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+      canvas.remove();
+    },
+  };
+}
+
+/** The union of a mask sprite's tiles over frames [from, to) as {x, y, w, h}
+ *  on the source frame, or null — for placing the crop-to-mask box. */
+export async function spriteBounds(sprite, from = 0, to = Infinity) {
+  const img = spriteImage(sprite.file);
+  if (!img.complete) await new Promise((res) => { img.addEventListener("load", res, { once: true });
+    img.addEventListener("error", res, { once: true }); });
+  if (!img.naturalWidth) return null;
+  const c = document.createElement("canvas");
+  c.width = img.naturalWidth; c.height = img.naturalHeight;
+  const g = c.getContext("2d");
+  g.drawImage(img, 0, 0);
+  const data = g.getImageData(0, 0, c.width, c.height).data;
+  let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+  const first = Math.max(0, Math.floor((from - (sprite.start || 0)) / (sprite.step || 1)));
+  const last = Math.min(sprite.count, Math.ceil((to - (sprite.start || 0)) / (sprite.step || 1)));
+  for (let i = first; i < last; i++) {
+    const ox = (i % sprite.cols) * sprite.tw, oy = Math.floor(i / sprite.cols) * sprite.th;
+    for (let y = 0; y < sprite.th; y++) {
+      for (let x = 0; x < sprite.tw; x++) {
+        if (data[((oy + y) * c.width + ox + x) * 4 + 3] > 0) {
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+    }
+  }
+  return x1 < 0 ? null : { x: x0 / sprite.tw, y: y0 / sprite.th, w: (x1 - x0 + 1) / sprite.tw, h: (y1 - y0 + 1) / sprite.th };
+}
+
+/** A clip's frame as the loader sends it, in pixels (its crop and size cap). */
+function sentFrame(item, crop = item.crop, resize = item.resize) {
+  let w = (item.width || 0) * (crop?.w ?? 1), h = (item.height || 0) * (crop?.h ?? 1);
+  if (resize && Math.max(w, h) > resize) { const k = resize / Math.max(w, h); w *= k; h *= k; }
+  return { W: w, H: h };
+}
+
+/** How a saved mask is shaped for the edit, for drawing it (no crop box: that
+ *  needs the mask itself, and mask mode draws it). */
+export function itemLook(item, crop, resize) {
+  return { grow: Number.isFinite(+item.mask_grow) ? +item.mask_grow : 16, frameW: sentFrame(item, crop, resize).W,
+    invert: !!item.mask_invert };
+}
+
+/** A latent cell in frame pixels at the sampling size, without crop to mask:
+ *  the sampler holds or regenerates whole 16-pixel cells. */
+function regenBlock(item, crop, resize) {
+  const { W, H } = sentFrame(item, crop, resize);
+  return 16 / Math.min(1, Math.sqrt(sampleBudget() / Math.max(1, W * H)));
+}
+
+/** The Text Encode's width x height in this graph, for sizing previews of
+ *  what an edit samples; 1344 x 768 when there isn't one to read. */
+function sampleBudget() {
+  for (const n of app.graph?._nodes || []) {
+    if (!/RefModTextEncode/.test(n.type || "")) continue;
+    const w = +n.widgets?.find((x) => x.name === "width")?.value, h = +n.widgets?.find((x) => x.name === "height")?.value;
+    if (w > 0 && h > 0) return w * h;
+  }
+  return 1344 * 768;
+}
+
+/** Checkpoints ComfyUI can see, SAM 3 ones first. */
+async function samCheckpoints() {
+  try {
+    const info = await (await api.fetchApi("/object_info/CheckpointLoaderSimple")).json();
+    const spec = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name || [];
+    const list = Array.isArray(spec[0]) ? spec[0] : (spec[1]?.options || []);
+    return [...list].sort((a, b) => (/sam3/i.test(b) ? 1 : 0) - (/sam3/i.test(a) ? 1 : 0));
+  } catch (e) { return []; }
+}
+
+/** The trim editor's mask mode: mark what to change on the clip as it's
+ *  trimmed, cropped and mirrored there. Dots go on the frame as shown; Run
+ *  masking sends SAM 3.1 through the queue on its own, over the trimmed span
+ *  only, the way the RefMod library runs Create. The mask itself is stored
+ *  against the source file, so a later crop or mirror still lines up. */
+class MaskMode {
+  constructor(host) {
+    this.host = host;
+    const item = host.item;
+    this.marks = new Map();          // frame -> { time, positive: [], negative: [] }
+    this.strokes = [];               // brush strokes not yet applied
+    this.text = "";
+    this.mode = "replace";
+    this.found = item.mask ? { file: item.mask, ...(item.mask_info || {}) } : null;
+    this.grow = Number.isFinite(+item.mask_grow) ? +item.mask_grow : 16;
+    this.feather = Number.isFinite(+item.mask_feather) ? +item.mask_feather : 0;
+    this.invert = !!item.mask_invert;
+    this.cropOn = !!item.mask_crop;
+    this.context = Number.isFinite(+item.mask_context) && +item.mask_context > 0 ? +item.mask_context : 1.75;
+    this.keepAudio = item.keep_audio !== false;
+    this.refStrength = Number.isFinite(+item.mask_ref_strength) && +item.mask_ref_strength > 0 ? +item.mask_ref_strength : 1;
+    this.brushOn = false;
+    this.erase = false;
+    this.brushSize = 4;              // radius, % of the frame height
+    this.reach = "frame";
+    this.busy = false;
+    this.build();
+    host.media.addEventListener("timeupdate", () => this.paintDots());
+    host.media.addEventListener("seeked", () => this.paintDots());
+    this.loadCheckpoints();
+  }
+
+  build() {
+    const h = this.host;
+    const item = h.item;
+    // Dots and brush strokes live in the crop overlay's frame box, which sits
+    // exactly over the drawn picture: positions are fractions of the frame
+    // as shown.
+    this.dots = el("div", { class: "mml-mkdots",
+      onclick: (e) => { if (!this.brushOn) this.click(e, "positive"); },
+      oncontextmenu: (e) => { e.preventDefault(); if (!this.brushOn) this.click(e, "negative"); },
+      onpointerdown: (e) => this.strokeStart(e) });
+    this.brushCanvas = el("canvas", { class: "mml-mkoverlay mml-mkbrush" });
+    h.cropBox.append(this.brushCanvas, this.dots);
+
+    this.textIn = el("input", { type: "text", class: "mml-mktext",
+      placeholder: "what it is, e.g. phone, the man, his jacket",
+      oninput: (e) => { this.text = e.target.value; },
+      onkeydown: (e) => { if (e.key === "Enter") this.find(); } });
+    this.ckpt = el("select", { class: "mml-mkckpt", title: "The SAM 3.1 checkpoint in models/checkpoints",
+      onchange: (e) => { try { localStorage.setItem(SAM_KEY, e.target.value); } catch (err) {} } });
+    this.findBtn = el("button", { class: "mml-btn mml-mkgo",
+      title: "Run SAM 3.1 over the kept range (Enter in the name box does the same)",
+      onclick: () => this.find() }, "▶ Run masking");
+    this.modeSeg = el("span", { class: "mml-mkmode" },
+      [["replace", "Replace the mask"], ["add", "Add to the mask"], ["subtract", "Cut from the mask"]].map(([m, t]) =>
+        el("button", { class: "mml-btn mml-sm", dataset: { m }, onclick: () => { this.mode = m; this.syncMode(); } }, t)));
+    this.modeHint = el("span", { class: "mml-mkhint" });
+    this.status = el("div", { class: "mml-mkstatus" });
+    this.marksEl = el("div", { class: "mml-mkmarks" });
+
+    const slider = (label, title, min, max, step, get, set, unit = "px") => {
+      const val = el("span", { class: "mml-mkdim" }, `${get()}${unit}`);
+      const input = el("input", { type: "range", min, max, step, value: get(),
+        oninput: (e) => { set(+e.target.value); val.textContent = `${get()}${unit}`; } });
+      return { el: el("label", { class: "mml-mklbl", title }, label, input, val), input, val };
+    };
+    this.growS = slider("grow", "Widen the mask so edges and shadows are replaced too", 0, 64, 4,
+      () => this.grow, (v) => { this.grow = v; this.refresh(); });
+    this.refS = slider("reference strength", "How strongly the cited clip is shown to the model. 1 is the clip as it is. " +
+      "Lower mixes it toward a blurred copy: its colours and placement stay, its detail goes, so the model has to " +
+      "generate the masked area instead of copying the clip back. Try 0.5 when an edit comes back unchanged.",
+      0.2, 1, 0.05, () => this.refStrength.toFixed(2), (v) => { this.refStrength = v; }, "");
+    this.featherS = slider("feather", "Soft edge: the regenerated area fades into the kept footage over this width, " +
+      "so there's no hard seam. It's rounded up to whole 16-pixel latent cells at the sampling size, so any " +
+      "feather is at least one cell. The inside stays fully regenerated.", 0, 64, 4,
+      () => this.feather, (v) => { this.feather = v; });
+    this.contextS = slider("context", "How much of the surroundings the crop keeps around the mask. More matches the " +
+      "lighting and colour better; less gives the masked area more detail.", 1.25, 3, 0.25,
+      () => this.context, (v) => { this.context = v; this.refresh(); }, "×");
+    this.invertIn = el("input", { type: "checkbox", checked: this.invert,
+      onchange: (e) => { this.invert = e.target.checked; this.syncCrop(); this.refresh(); } });
+    this.cropIn = el("input", { type: "checkbox", checked: this.cropOn,
+      onchange: (e) => { this.cropOn = e.target.checked; this.syncCrop(); this.refresh(); } });
+    this.cropNote = el("span", { class: "mml-mkdim" });
+
+    this.brushBtn = el("button", { class: "mml-btn mml-sm", title: "Paint onto the mask: add or erase by hand, " +
+      "for what SAM can't get (a strap, a shadow)", onclick: () => this.setBrush(!this.brushOn) }, "🖌 Brush");
+    this.eraseSeg = el("span", { class: "mml-seg" },
+      [["add", false], ["erase", true]].map(([t, v]) => el("button", { dataset: { v: String(v) },
+        onclick: () => { this.erase = v; this.syncBrush(); } }, t)));
+    this.sizeS = slider("size", "Brush radius, as a share of the frame height", 1, 20, 1,
+      () => this.brushSize, (v) => { this.brushSize = v; }, "%");
+    this.reachSel = el("select", { class: "mml-mkckpt", title: "Which frames the strokes change",
+      onchange: (e) => { this.reach = e.target.value; } },
+      [["frame", "this frame"], ["forward", "from here to the end"], ["all", "the whole clip"]]
+        .map(([v, t]) => el("option", { value: v }, t)));
+    this.applyBtn = el("button", { class: "mml-btn mml-sm", onclick: () => this.applyStrokes() }, "Apply strokes");
+    this.brushRow = el("div", { class: "mml-tmfoot" }, this.eraseSeg, this.sizeS.el,
+      el("span", { class: "mml-mklbl" }, "apply to", this.reachSel),
+      el("span", { class: "mml-tmgap" }), this.applyBtn,
+      el("button", { class: "mml-btn mml-sm", onclick: () => { this.strokes = []; this.paintStrokes(); this.syncBrush(); } },
+        "Discard"));
+
+    this.ui = el("div", { class: "mml-mkui" },
+      el("div", { class: "mml-mkhelp" },
+        "Click what you want to change on a frame where it's clear; right-click a spot that isn't part of it; " +
+        "click a dot to remove it. Dots can go on several frames: if the mask drifts later, add a dot there and " +
+        "run again. A click alone can grab the whole person — type what it is as well (“green " +
+        "jacket”) and just that part under your dots is masked. Only the kept range is masked."),
+      this.marksEl,
+      el("div", { class: "mml-tmfoot" }, this.textIn, this.findBtn),
+      el("div", { class: "mml-tmfoot" }, el("span", { class: "mml-mklbl" }, "When I run masking:"),
+        this.modeSeg, this.modeHint),
+      this.status,
+      el("div", { class: "mml-tmfoot" },
+        el("button", { class: "mml-btn mml-sm", title: "Remove the dots on the frame shown",
+          onclick: () => this.clearPoints(false) }, "Clear this frame"),
+        el("button", { class: "mml-btn mml-sm", title: "Remove the dots on every frame",
+          onclick: () => this.clearPoints(true) }, "Clear all dots"),
+        el("button", { class: "mml-btn mml-sm", title: "Start masking over: dots, name, strokes, the mask found here " +
+          "and every setting back to its default. A mask already saved on the clip stays until you clear it.",
+          onclick: () => this.reset() }, "↺ Reset"),
+        el("span", { class: "mml-tmgap" }), this.brushBtn),
+      this.brushRow,
+      el("div", { class: "mml-tmfoot" }, this.growS.el, this.featherS.el,
+        el("label", { class: "mml-mklbl", title: "Keep what's masked and regenerate everything else — the same " +
+          "person in a new background. Grow then protects a margin around them." }, this.invertIn, "invert"),
+        el("label", { class: "mml-mklbl", title: "Sample only the area around the mask, enlarged, for far more " +
+          "detail in small edits; Edit Composite pastes it back. The box is fixed for the whole clip, so it holds " +
+          "everywhere the masked area goes; it's off when that box would cover most of the frame." },
+          this.cropIn, "crop to mask"),
+        this.contextS.el, this.cropNote),
+      el("div", { class: "mml-tmfoot" },
+        item.has_audio ? el("label", { class: "mml-mklbl", title: "Off: the soundtrack is generated fresh" },
+          this.audioIn = el("input", { type: "checkbox", checked: this.keepAudio,
+            onchange: (e) => { this.keepAudio = e.target.checked; } }), "keep the original sound") : null,
+        this.refS.el,
+        el("span", { class: "mml-tmgap" }),
+        this.costEl = el("span", { class: "mml-mkdim", title: "The clip is also sent as a <Video N> reference for " +
+          "the prompt to cite (“The target video is an edited version of <Video 1>”); this is what that costs. " +
+          "With crop to mask, only the cropped area is sent." }),
+        el("span", { class: "mml-tmgap" }),
+        el("label", { class: "mml-mklbl", title: "The SAM 3.1 checkpoint masking runs with (from models/checkpoints)" },
+          "SAM model", this.ckpt)),
+      el("div", { class: "mml-tmfoot act" },
+        this.clearBtn = armTwice(el("button", { class: "mml-btn mml-sm mml-danger",
+          title: "Remove the saved mask; the clip goes back to being a reference (click twice)" },
+          "Clear saved mask"), "Click again to clear", () => this.clear()),
+        el("span", { class: "mml-tmspace" }),
+        this.useBtn = el("button", { class: "mml-btn mml-sm primary",
+          title: "Save this mask and these settings on the clip, along with the trim and crop set here. The editor stays open.",
+          onclick: () => this.use() }, "Use this mask"),
+        el("button", { class: "mml-btn mml-sm", title: "Close the editor; anything not yet saved is dropped",
+          onclick: () => h.close() }, "Close")),
+      el("div", { class: "mml-mkhelp" },
+        "The clip becomes the footage being edited: only the masked area is regenerated. Describe the finished " +
+        "clip in your prompt, including what the masked area becomes. When removing something, describe what's " +
+        "there instead and don't name what you removed."));
+    this.useBtn.disabled = !this.found;
+    this.clearBtn.hidden = !item.mask;
+    this.brushRow.hidden = true;
+    this.syncMode(); this.syncBrush(); this.syncCrop();
+    if (item.mask && !item.mask_info?.sprite)
+      this.say("This mask was made before overlays — run masking again to see it over the clip.");
+    else if (this.found) this.say(`Saved mask: on ${this.found.hit ?? "?"} of ${this.found.frames ?? "?"} frames` +
+      (item.mask_range ? ` (${item.mask_range.start.toFixed(1)}–${item.mask_range.end.toFixed(1)} s).` : "."));
+  }
+
+  /* ---- what the overlay should show: the mask the way the edit will use it */
+
+  /** The frame the edit is built from, in pixels: the loader's crop and size cap. */
+  frameSize() {
+    const h = this.host, it = h.item;
+    let w = (it.width || 0) * (h.crop?.w ?? 1), hh = (it.height || 0) * (h.crop?.h ?? 1);
+    if (h.resize && Math.max(w, hh) > h.resize) { const k = h.resize / Math.max(w, hh); w *= k; hh *= k; }
+    return { W: w, H: hh };
+  }
+
+  look() {
+    const { W, H } = this.frameSize();
+    const budget = sampleBudget();
+    const box = this.cropOn && !this.invert ? this.cropBox : null;
+    let scale = Math.min(1, Math.sqrt(budget / Math.max(1, W * H)));
+    if (box) scale = Math.min(4, Math.sqrt(budget / Math.max(1, box.w * W * box.h * H)));
+    return { grow: this.grow, frameW: W, invert: this.invert, cropBox: box,
+      block: this.host.showRegen ? 16 / scale : 0 };
+  }
+
+  refresh() {
+    this.updateCropBox();
+    this.host.refreshMaskLayer();
+  }
+
+  /** Where crop to mask will sample, from the sprite: the mask over the kept
+   *  range, grown, padded by `context`, no longer than 2.5:1, inside the frame.
+   *  The Text Encode works it out the same way from the full mask. */
+  async updateCropBox() {
+    const sprite = this.found?.sprite;
+    const h = this.host;
+    if (!this.cropOn || this.invert || !sprite) { this.cropBox = null; this.cropNote.textContent = ""; this.showCost(); return; }
+    const b = await spriteBounds(sprite, Math.round(h.start * TRIM_FPS), Math.round(h.end * TRIM_FPS) + 1);
+    const { W, H } = this.frameSize();
+    if (!b || !W) { this.cropBox = null; this.showCost(); return; }
+    // the loader's crop, on the source frame (its rect is drawn on the mirrored view)
+    const c = h.crop ? { x: h.mirror ? 1 - h.crop.x - h.crop.w : h.crop.x, y: h.crop.y, w: h.crop.w, h: h.crop.h }
+      : { x: 0, y: 0, w: 1, h: 1 };
+    const gx = this.grow / W * c.w, gy = this.grow / H * c.h;
+    let x0 = Math.max(c.x, b.x - gx), y0 = Math.max(c.y, b.y - gy);
+    let x1 = Math.min(c.x + c.w, b.x + b.w + gx), y1 = Math.min(c.y + c.h, b.y + b.h + gy);
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    let bw = (x1 - x0) * this.context * W / c.w, bh = (y1 - y0) * this.context * H / c.h;   // frame pixels
+    if (bw / bh > 2.5) bh = bw / 2.5; else if (bh / bw > 2.5) bw = bh / 2.5;
+    bw = Math.min(W, Math.max(64, bw)); bh = Math.min(H, Math.max(64, bh));
+    const nw = bw / W * c.w, nh = bh / H * c.h;
+    const nx = Math.min(c.x + c.w - nw, Math.max(c.x, cx - nw / 2)), ny = Math.min(c.y + c.h - nh, Math.max(c.y, cy - nh / 2));
+    if (bw * bh > 0.6 * W * H) {
+      this.cropBox = null;
+      const span = Math.round((x1 - x0) * (y1 - y0) / (c.w * c.h) * 100);
+      this.cropNote.textContent = `no crop: over the clip the mask moves through ${span}% of the frame, ` +
+        `${Math.round(bw * bh / (W * H) * 100)}% with context`;
+    } else {
+      this.cropBox = { x: nx, y: ny, w: nw, h: nh };
+      const k = Math.min(4, Math.sqrt(sampleBudget() / (bw * bh)));
+      this.cropNote.textContent = `≈${k.toFixed(1)}× detail`;
+    }
+    this.showCost();
+    this.host.refreshMaskLayer();
+  }
+
+  syncCrop() {
+    this.cropIn.disabled = this.invert;
+    this.contextS.el.hidden = !this.cropOn || this.invert;
+    if (this.invert) this.cropNote.textContent = this.cropOn ? "off while inverted" : "";
+    this.updateCropBox();
+  }
+
+  syncMode() {
+    const base = !!(this.found?.file || this.host.item.mask);
+    if (!base && this.mode !== "replace") this.mode = "replace";
+    this.modeSeg.querySelectorAll("button").forEach((b) => {
+      b.classList.toggle("on", b.dataset.m === this.mode);
+      b.disabled = b.dataset.m !== "replace" && !base;
+      b.title = b.disabled ? "Needs a mask first: run masking once, then add to it or cut from it" : "";
+    });
+    this.modeHint.textContent = {
+      replace: "SAM's result becomes the mask.",
+      add: "What SAM finds is added to the current mask \u2014 e.g. dot the shirt under the jacket.",
+      subtract: "What SAM finds is cut out of the current mask \u2014 e.g. dot a strap it shouldn't include.",
+    }[this.mode];
+    this.findBtn.textContent = { replace: "\u25b6 Run masking", add: "\u25b6 Find and add to mask",
+      subtract: "\u25b6 Find and cut from mask" }[this.mode];
+  }
+
+  /** What citing the clip costs at the editor's current trim and frame. */
+  showCost() {
+    const h = this.host;
+    const n = Math.round(refTokenEstimate(h.item, { start: h.start, end: h.end, crop: h.crop, resize: h.resize,
+      box: this.cropOn && !this.invert ? this.cropBox : null }));
+    this.costEl.textContent = n ? `cited as a reference: ≈${n.toLocaleString()} tokens` : "";
+    this.costEl.classList.toggle("err", n > REF_TOKEN_WARN);
+  }
+
+  show(on) {
+    if (on) this.updateCropBox();
+    this.dots.hidden = !on;
+    this.brushCanvas.hidden = !on;
+    if (on) this.paintDots();
+  }
+
+  async loadCheckpoints() {
+    const list = await samCheckpoints();
+    let saved = "";
+    try { saved = localStorage.getItem(SAM_KEY) || ""; } catch (e) {}
+    const sam = list.filter((c) => /sam3/i.test(c));
+    setKids(this.ckpt, list.map((c) => el("option", { value: c }, c)));
+    this.ckpt.value = list.includes(saved) ? saved : (sam[0] || "");
+    if (!sam.length) {
+      setKids(this.status, el("span", {}, "No SAM 3.1 checkpoint found. Put ",
+        el("a", { href: SAM_LINK, target: "_blank", rel: "noopener" }, "sam3.1_multiplex_fp16.safetensors"),
+        " in models/checkpoints, then reopen the editor. Nothing is downloaded for you."));
+      this.status.className = "mml-mkstatus err";
+    }
+  }
+
+  say(msg, err = false) {
+    setKids(this.status, msg);
+    this.status.className = "mml-mkstatus" + (err ? " err" : "");
+  }
+
+  now() { return this.host.media?.currentTime || 0; }
+  frameAt(t) { return Math.round(t * TRIM_FPS); }
+
+  /** A pointer position as a fraction of the frame shown, or null outside it
+   *  (or outside the loader's crop, which isn't sent). */
+  spot(e) {
+    const r = this.dots.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+    const c = this.host.crop;
+    if (c && (x < c.x || x > c.x + c.w || y < c.y || y > c.y + c.h)) {
+      this.say("That's outside the crop — only the cropped area is sent.", true);
+      return null;
+    }
+    return { x: +x.toFixed(4), y: +y.toFixed(4) };
+  }
+
+  pauseHere() {
+    const h = this.host;
+    if (!h.media.paused) { h.media.pause(); h.playBtn.textContent = "▶"; }
+    const t = this.now();
+    if (t < h.start - 0.01 || t > h.end + 0.01) {
+      this.say("That frame is outside the kept range; move into it first.", true);
+      return null;
+    }
+    return t;
+  }
+
+  click(e, kind) {
+    if (e.target.classList.contains("mml-mkdot")) return;
+    const p = this.spot(e);
+    const t = p && this.pauseHere();
+    if (t == null) return;
+    const k = this.frameAt(t);
+    if (!this.marks.has(k)) this.marks.set(k, { time: t, positive: [], negative: [] });
+    this.marks.get(k)[kind].push(p);
+    this.paintDots();
+    if (!this.busy) this.say("");
+  }
+
+  paintDots() {
+    if (this.dots.hidden) return;
+    const k = this.frameAt(this.now());
+    const m = this.marks.get(k);
+    const dot = (p, kind, i) => el("span", { class: `mml-mkdot ${kind}`, title: "Click to remove",
+      style: { left: `${p.x * 100}%`, top: `${p.y * 100}%` },
+      onclick: (e) => { e.stopPropagation(); m[kind].splice(i, 1);
+        if (!m.positive.length && !m.negative.length) this.marks.delete(k); this.paintDots(); } });
+    setKids(this.dots, m ? [...m.positive.map((p, i) => dot(p, "positive", i)),
+      ...m.negative.map((p, i) => dot(p, "negative", i))] : []);
+    const frames = [...this.marks.entries()].sort((a, b) => a[0] - b[0]);
+    setKids(this.marksEl, frames.length ? [el("span", { class: "mml-mkdim" }, "dots on"),
+      ...frames.map(([f, v]) => el("span", { class: "mml-mkmark" + (f === k ? " here" : "") +
+          (v.positive.length ? "" : " bad"),
+        title: v.positive.length ? "Go to this frame" : "No green dot here: this frame is skipped until it has one",
+        onclick: () => this.host.seek(v.time) },
+        `${v.time.toFixed(2)}s`, el("b", { class: "pos" }, ` ●${v.positive.length}`),
+        v.negative.length ? el("b", { class: "neg" }, ` ●${v.negative.length}`) : null,
+        el("span", { class: "mml-mkmarkx", title: "Remove this frame's dots",
+          onclick: (e) => { e.stopPropagation(); this.marks.delete(f); this.paintDots(); } }, "✕")))] : []);
+    this.paintStrokes();
+  }
+
+  clearPoints(all) {
+    if (all) this.marks.clear(); else this.marks.delete(this.frameAt(this.now()));
+    this.paintDots();
+    if (!this.busy) this.say("");
+  }
+
+  reset() {
+    this.marks.clear(); this.strokes = [];
+    this.text = ""; this.textIn.value = "";
+    this.found = null; this.mode = "replace";
+    this.grow = 16; this.growS.input.value = 16; this.growS.val.textContent = "16px";
+    this.feather = 0; this.featherS.input.value = 0; this.featherS.val.textContent = "0px";
+    this.invert = false; this.invertIn.checked = false;
+    this.cropOn = false; this.cropIn.checked = false;
+    this.context = 1.75; this.contextS.input.value = 1.75; this.contextS.val.textContent = "1.75×";
+    this.keepAudio = true; if (this.audioIn) this.audioIn.checked = true;
+    this.refStrength = 1; this.refS.input.value = 1; this.refS.val.textContent = "1.00";
+    this.setBrush(false);
+    this.useBtn.disabled = true;
+    this.syncMode(); this.syncCrop(); this.paintDots();
+    this.host.refreshMaskLayer();
+    if (!this.busy) this.say(this.host.item.mask ? "Reset. The clip still has its saved mask until you clear it." : "");
+  }
+
+  /* ---- brush */
+
+  setBrush(on) {
+    this.brushOn = on;
+    this.brushBtn.classList.toggle("on", on);
+    this.brushRow.hidden = !on;
+    this.dots.classList.toggle("brush", on);
+    if (on && !this.found?.file) this.say("Run masking first: the brush edits a mask.", true);
+    this.syncBrush();
+  }
+
+  syncBrush() {
+    this.eraseSeg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === String(this.erase)));
+    this.applyBtn.disabled = !this.strokes.length || !this.found?.file;
+    this.applyBtn.textContent = this.strokes.length ? `Apply ${this.strokes.length} stroke(s)` : "Apply strokes";
+  }
+
+  strokeStart(e) {
+    if (!this.brushOn || e.button !== 0) return;
+    const p = this.spot(e);
+    const t = p && this.pauseHere();
+    if (t == null) return;
+    e.preventDefault();
+    const stroke = { time: t, erase: this.erase, r: this.brushSize / 100, points: [p] };
+    this.strokes.push(stroke);
+    const move = (ev) => { const q = this.spot(ev); if (q) { stroke.points.push(q); this.paintStrokes(); } };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      this.syncBrush(); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    this.paintStrokes();
+  }
+
+  paintStrokes() {
+    const c = this.brushCanvas, r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    c.width = Math.max(1, Math.round(r.width * dpr)); c.height = Math.max(1, Math.round(r.height * dpr));
+    const g = c.getContext("2d");
+    g.clearRect(0, 0, c.width, c.height);
+    const k = this.frameAt(this.now());
+    for (const s of this.strokes) {
+      if (this.frameAt(s.time) !== k) continue;
+      g.strokeStyle = s.erase ? "rgba(255, 90, 90, 0.55)" : "rgba(90, 255, 160, 0.55)";
+      g.lineWidth = 2 * s.r * c.height; g.lineCap = "round"; g.lineJoin = "round";
+      g.beginPath();
+      s.points.forEach((p, i) => (i ? g.lineTo : g.moveTo).call(g, p.x * c.width, p.y * c.height));
+      if (s.points.length === 1) g.lineTo(s.points[0].x * c.width + 0.1, s.points[0].y * c.height);
+      g.stroke();
+    }
+  }
+
+  async applyStrokes() {
+    const h = this.host;
+    if (!this.found?.file || !this.strokes.length) return;
+    // strokes were drawn on the frame as shown; the mask is on the source file
+    const flip = (p) => ({ x: h.mirror ? +(1 - p.x).toFixed(4) : p.x, y: p.y });
+    const strokes = this.strokes.map((s) => ({ ...s, points: s.points.map(flip) }));
+    this.applyBtn.disabled = true;
+    try {
+      const r = await postApi("/minimax_h3/mask_strokes", { headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mask: this.found.file, strokes, reach: this.reach }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      this.found = d.mask;
+      this.strokes = [];
+      this.useBtn.disabled = false;
+      this.refresh(); this.paintStrokes(); this.syncMode();
+      this.say("Strokes applied. Use this mask keeps them on the clip.");
+    } catch (err) {
+      this.say(`The brush couldn't apply: ${err.message}`, true);
+    }
+    this.syncBrush();
+  }
+
+  /* ---- SAM */
+
+  async find() {
+    if (this.busy) return;
+    const h = this.host;
+    const text = this.text.trim();
+    const frames = [...this.marks.values()];
+    const seeds = frames.filter((m) => m.positive.length);
+    if (!seeds.length && !text) {
+      this.say(frames.length ? "Every frame with dots needs a green dot (left-click) on the thing itself."
+        : "Click it or type what it is first.", true);
+      return;
+    }
+    if (!this.ckpt.value) { this.say("Choose the SAM 3.1 checkpoint first.", true); return; }
+    // Dots were placed on the frame as shown, which is mirrored when mirror
+    // is on; the job wants positions on the source file.
+    const unmirror = (p) => ({ x: h.mirror ? +(1 - p.x).toFixed(4) : p.x, y: p.y });
+    const points = seeds.length ? JSON.stringify({ frames: seeds.map((m) => ({ time: m.time,
+      positive: m.positive.map(unmirror), negative: m.negative.map(unmirror) })) }) : "";
+    const end = h.end >= h.dur - 0.05 ? 0 : +h.end.toFixed(3);
+    const base = this.mode === "replace" ? "" : (this.found?.file || h.item.mask || "");
+    const prompt = {
+      1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: this.ckpt.value } },
+      2: { class_type: MASK_NODE, inputs: { model: ["1", 0], clip: ["1", 1], video: h.item.file, text, points,
+        start: +h.start.toFixed(3), end, threshold: 0.5, max_objects: 4, mode: this.mode, base } },
+    };
+    this.busy = true; this.findBtn.disabled = true; this.findBtn.textContent = "Masking…";
+    const skipped = frames.length - seeds.length;
+    this.say("Masking… (in the queue; a running generation finishes first)" +
+      (skipped ? ` — ${skipped} frame(s) with only red dots are skipped` : ""));
+    this.range = { start: +h.start.toFixed(2), end: +(end || h.dur).toFixed(2) };
+    try {
+      const r = await api.fetchApi("/prompt", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, client_id: api.clientId }) });
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        const errs = Object.values(d.node_errors || {}).flatMap((n) => (n.errors || []).map((x) => x.details || x.message || ""));
+        throw new Error((d.error?.message || d.error || `HTTP ${r.status}`) + (errs.length ? `: ${errs.join("; ")}` : ""));
+      }
+      await this.wait(d.prompt_id);
+    } catch (err) {
+      this.say(`Masking failed: ${err.message}`, true);
+    } finally {
+      this.busy = false; this.findBtn.disabled = false; this.syncMode();
+    }
+  }
+
+  async wait(pid) {
+    const started = Date.now();
+    while (!this.closed && Date.now() - started < 30 * 60 * 1000) {
+      await new Promise((res) => setTimeout(res, 1500));
+      let entry = null;
+      try { entry = (await (await api.fetchApi(`/history/${pid}`)).json())?.[pid]; } catch (e) { continue; }
+      if (!entry?.status || entry.status.completed === undefined) continue;
+      if (entry.status.status_str !== "success") {
+        const msg = (entry.status.messages || []).map((m) => m[0] === "execution_error" ? m[1]?.exception_message : "")
+          .find(Boolean);
+        throw new Error(msg || "the job failed — the ComfyUI console has the details");
+      }
+      const info = ((entry.outputs?.["2"] || {}).mmh3_mask || [])[0];
+      if (!info) throw new Error("the job finished without a mask");
+      this.found = info;
+      this.refresh();
+      this.useBtn.disabled = false;
+      this.say(`Masked on ${info.hit} of ${info.frames} frames (${info.how}). ` +
+        (this.host.maskShown ? "Scrub or play to check it, then Use this mask."
+          : "The overlay is off — turn on ◐ show mask at the top to see it, then Use this mask."));
+      return;
+    }
+  }
+
+  use() {
+    if (!this.found) return;
+    const h = this.host;
+    const it = h.panel.live?.(h.item) || h.item;
+    // One clip is edited at a time; any other goes back to being a reference.
+    for (const other of h.panel.items) if (other !== it && other.edit) MASK_KEYS.forEach((k) => delete other[k]);
+    Object.assign(it, { edit: true, mask: this.found.file, mask_grow: this.grow, mask_feather: this.feather,
+      mask_invert: this.invert, mask_crop: this.cropOn && !this.invert, mask_context: this.context,
+      mask_box: this.cropOn && !this.invert ? this.cropBox : null,
+      mask_ref_strength: this.refStrength,
+      mask_info: { hit: this.found.hit, frames: this.found.frames, how: this.found.how, sprite: this.found.sprite } });
+    if (this.range) it.mask_range = this.range;
+    if (it.has_audio) it.keep_audio = this.keepAudio;
+    h.panel.say(`${it.name} is the clip being edited. Describe the finished clip in your prompt.`);
+    h.apply(true);
+    h.refreshMaskLayer();
+    this.clearBtn.hidden = false;
+    this.say("Saved on the clip, with these settings and the trim and crop set here. Keep adjusting, or close the editor.");
+  }
+
+  clear() {
+    const h = this.host;
+    clearMaskOn(h.panel, h.item, false);
+    h.apply(true);
+    // Cleared means gone from the editor too: no overlay, nothing to re-use.
+    this.found = null;
+    this.useBtn.disabled = true;
+    this.syncMode();
+    h.refreshMaskLayer();
+    this.clearBtn.hidden = true;
+    this.say("Mask cleared: the clip is a reference again. Run masking to make a new one, or use Undo in the " +
+      "Media Loader's message line.");
+  }
+}
+
+/** Right-click menu on a loader video. */
+function videoMenu(panel, item, e) {
+  e.preventDefault(); e.stopPropagation();
+  document.querySelectorAll(".mml-ctxmenu").forEach((m) => m.remove());
+  const entry = (label, title, fn) => el("div", { class: "mml-ctxitem", title,
+    onclick: () => { menu.remove(); fn(); } }, label);
+  const armed = (label, armedLabel, title, fn) => {
+    const it = el("div", { class: "mml-ctxitem mml-ctxdanger", title }, label);
+    return armTwice(it, armedLabel, () => { menu.remove(); fn(); });
+  };
+  const menu = el("div", { class: "mml-ctxmenu", style: { left: `${e.clientX}px`, top: `${e.clientY}px` } },
+    entry("✂ Trim & crop…", "Open the editor", () => new TrimModal(panel, item)),
+    entry(item.mask ? "◐ Edit the mask…" : "◐ Mask for editing…",
+      "Mark part of this clip to replace, change or remove; only that area is regenerated",
+      () => new TrimModal(panel, item, { mask: true })),
+    item.mask && item.mask_info?.sprite
+      ? entry(overlayOn() ? "Hide the mask overlay" : "Show the mask overlay",
+          "Draw saved masks over clips here and in the editor. It's a preview, not the exact mask.",
+          () => setOverlay(!overlayOn()))
+      : null,
+    item.mask ? el("div", { class: "mml-ctxsep" }) : null,
+    item.mask ? armed("Clear the mask", "Click again to clear the mask",
+      "Remove the mask; the clip goes back to being a reference (click twice)", () => clearMaskOn(panel, item)) : null);
+  document.body.append(menu);
+  const r = menu.getBoundingClientRect();
+  if (r.right > innerWidth) menu.style.left = `${innerWidth - r.width - 6}px`;
+  if (r.bottom > innerHeight) menu.style.top = `${innerHeight - r.height - 6}px`;
+  const off = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); window.removeEventListener("pointerdown", off, true); } };
+  setTimeout(() => window.addEventListener("pointerdown", off, true), 0);
 }
 
 /** The largest centred rect of `aspect` (w/h) inside a w x h frame, in the
@@ -2081,8 +3169,9 @@ export async function postApi(path, init = {}) {
   return resp;
 }
 const TOKEN_REFUSED = "ComfyUI refused this pack's session token even after fetching a fresh one. " +
-  "If ComfyUI runs behind a proxy, tunnel or login page, or another custom node changes requests, " +
-  `the ${TOKEN_HEADER} header may be removed on the way. The ComfyUI console says which.`;
+  "If you are using ComfyUI inside another front-end (SwarmUI's Comfy tab, for one), behind a proxy, " +
+  `tunnel or login page, or another custom node changes requests, the ${TOKEN_HEADER} header may be ` +
+  "removed on the way — open ComfyUI's own page directly and try again. The ComfyUI console says which.";
 
 async function presetApi(path, body) {
   const resp = body
@@ -2668,9 +3757,10 @@ class LoaderPanel {
   }
 
 
-  say(text, isError) {
+  say(text, isError, action = null) {
     this.msg = text || "";
     this.msgErr = !!isError;
+    this.msgAction = action;
   }
 
   async add(files) {
@@ -2748,6 +3838,42 @@ class LoaderPanel {
     }, still ? "\u25a3" : "\u2702");
   }
 
+
+  /** Mask files (and their overlay sprites) no Media Loader in this
+   *  workflow points at, plus saved edit/reference latents. */
+  async findCleanup() {
+    let files = [];
+    try { files = (await (await api.fetchApi("/minimax_h3/edit_files", { cache: "no-store" })).json()).files || []; }
+    catch (e) { this.say("Couldn't list the mask files.", true); this.render(); return; }
+    const used = new Set();
+    for (const n of app.graph?._nodes || []) {
+      if (n.type !== LOADER_NAME) continue;
+      let items = [];
+      try { items = JSON.parse(n.widgets?.find((w) => w.name === "media_state")?.value || "[]"); } catch (e) {}
+      for (const it of items) {
+        for (const f of [it?.mask, it?.mask_info?.sprite?.file]) {
+          if (f) used.add(String(f).split(" [")[0].split("/").pop());
+        }
+      }
+    }
+    const pick = files.filter((f) => f.kind === "cache" || !used.has(f.name));
+    this.cleanup = { files: pick, bytes: pick.reduce((t, f) => t + f.size, 0),
+      masks: pick.filter((f) => f.kind === "mask").length, cache: pick.filter((f) => f.kind === "cache").length };
+    this.render();
+  }
+
+  async runCleanup() {
+    const files = (this.cleanup?.files || []).map((f) => ({ kind: f.kind, name: f.name }));
+    this.cleanup = null;
+    try {
+      const r = await postApi("/minimax_h3/edit_files/delete", { headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      this.say(`Deleted ${d.removed.length} file(s).`);
+    } catch (e) { this.say(`Clean up failed: ${e.message}`, true); }
+    this.render();
+  }
 
   unloadAll() {
     const n = this.items.length;
@@ -2857,6 +3983,8 @@ class LoaderPanel {
     this.closePresetMenu?.();
     this.players.forEach((p) => p.stop());
     this.players = [];
+    (this.overlays || []).forEach((o) => o.detach());
+    this.overlays = [];
 
     const { tags, extra } = computeTags(this.items);
     const total = fileCount(this.items);
@@ -2879,6 +4007,9 @@ class LoaderPanel {
             onclick: () => { this.unloadPrompt = true; this.render(); } },
             "Unload media")
         : null,
+      el("button", { class: "mml-btn mml-sm",
+        title: "Delete mask files no Media Loader here uses, and saved edit latents (rebuilt when needed)",
+        onclick: () => this.findCleanup() }, "Clean up\u2026"),
       el("span", { class: "mml-count" + (total > MAX.total ? " over" : "") },
         `${total} / ${MAX.total}`),
       el("span", { class: "mml-count" + (audioCount(this.items) > MAX.audio ? " over" : ""),
@@ -2887,6 +4018,20 @@ class LoaderPanel {
         `\u266a ${audioCount(this.items)}/${MAX.audio}`)));
 
     const select = this.presetPicker();
+    if (this.cleanup) {
+      const c = this.cleanup;
+      const mb = (b) => `${(b / 1048576).toFixed(b < 10485760 ? 1 : 0)} MB`;
+      kids.push(el("div", { class: "mml-presetrow" },
+        el("span", { class: "mml-presetwarn" }, c.files.length
+          ? `${c.masks} unused mask file(s) and ${c.cache} saved latent(s), ${mb(c.bytes)}. Masks used by a ` +
+            "Media Loader in this workflow are kept; saved latents are rebuilt when needed. Masks used only " +
+            "in other workflows would be lost."
+          : "Nothing to clean up: every mask file is in use and there are no saved latents."),
+        c.files.length ? el("button", { class: "mml-btn mml-sm mml-danger", onclick: () => this.runCleanup() },
+          "Delete") : null,
+        el("button", { class: "mml-btn mml-sm", onclick: () => { this.cleanup = null; this.render(); } },
+          c.files.length ? "Cancel" : "OK")));
+    }
     if (this.unloadPrompt) {
       kids.push(el("div", { class: "mml-presetrow" },
         el("span", { class: "mml-presetwarn" },
@@ -2985,8 +4130,10 @@ class LoaderPanel {
         i.kind === "video")) && audio)
       problems.push("Audio can't be sent alone — add an image or video.");
 
+    const act = !problems.length && this.msg && this.msgAction;
     kids.push(el("div", { class: "mml-msg" + (this.msgErr || problems.length ? " err" : "") },
-      problems.length ? problems[0] : this.msg));
+      problems.length ? problems[0] : this.msg,
+      act ? el("button", { class: "mml-msgact", onclick: (e) => { e.stopPropagation(); act.fn(); } }, act.label) : null));
 
     const left = el("div", { class: "mml-col" });
     const right = el("div", { class: "mml-col" });
@@ -3095,9 +4242,14 @@ class LoaderPanel {
     vids.forEach((it) => {
       const mode = it.audio_mode || "off";
       const splitTag = extra.get(it);
+      const editing = !!it.edit;
+      let thumb = null;
       const row = el("div", { class: "mml-row" },
-        this.powerBtn(it),
-        el("video", { class: "mml-vthumb",
+        editing
+          ? el("span", { class: "mml-editbadge", title: "This clip is being edited \u2014 click to change the mask",
+              onclick: (e) => { e.stopPropagation(); new TrimModal(this, it, { mask: true }); } }, "\u25d0")
+          : this.powerBtn(it),
+        thumb = el("video", { class: "mml-vthumb",
           style: it.mirror ? { transform: "scaleX(-1)" } : {},
           onloadedmetadata: (e) => {
             const t = it.trim;
@@ -3126,9 +4278,21 @@ class LoaderPanel {
           onmouseleave: (e) => e.target.pause(),
           onclick: () => lightbox(it, tags.get(it) || "") }),
         el("div", { class: "mml-meta" },
-          el("div", { class: "mml-tag vid" },
-            isOn(it) ? (tags.get(it) || "").slice(1, -1) : "off"),
+          el("div", { class: "mml-tag vid" + (editing ? " edit" : "") },
+            isOn(it) ? (tags.get(it) || "").slice(1, -1) + (editing ? " \u00b7 editing" : "") : "off"),
           el("div", { class: "mml-name", title: it.name }, it.name)));
+      const sprite = editing && it.mask && overlayOn() ? it.mask_info?.sprite : null;
+      if (sprite) {
+        const wrap = el("span", { class: "mml-vthumbwrap",
+          title: `${OVERLAY_NOTE} Right-click the clip to hide it.` });
+        thumb.replaceWith(wrap);
+        wrap.append(thumb);
+        const o = maskOverlay(thumb, wrap, sprite, "contain", { append: true, look: itemLook(it), onMissing: () => wrap.append(
+          el("span", { class: "mml-maskmissing", title: "This clip's mask files are missing: mask it again, " +
+            "or clear its mask. The next run stops with an error until you do." }, "\u26a0")) });
+        o.mirror(!!it.mirror);
+        this.overlays.push(o);
+      }
       if (it.has_audio && isOn(it)) {
         row.append(el("div", { class: "mml-segstack" },
           el("span", { class: "mml-tag aud mml-segtag" },
@@ -3160,7 +4324,9 @@ class LoaderPanel {
         el("span", { class: "mml-drag", title: "Drag to reorder" }, "\u2630"),
         el("span", { class: "mml-x", title: "Remove",
           onclick: () => this.remove(it) }, "\u2715"));
-      const vcell = el("div", { class: "mml-slot filled vid" + (isOn(it) ? "" : " off") },
+      const vcell = el("div", { class: "mml-slot filled vid" + (isOn(it) || editing ? "" : " off"),
+        title: "Right-click to mask part of this clip for editing",
+        oncontextmenu: (e) => videoMenu(this, it, e) },
         row);
       vidCells.push(this.reorderable(vcell, it));
     });
@@ -3208,9 +4374,11 @@ class LoaderPanel {
       else if (i.kind === "video" && i.audio_mode === "standalone" && extra.has(i))
         order.push(`[${(extra.get(i) || "").slice(1, -1)}]`);
     });
+    const edited = this.items.find((i) => i.edit && i.enabled !== false);
     kids.push(el("div", { class: "mml-order" },
       el("b", {}, "tag order sent to the model"),
-      el("div", {}, order.length ? order.join(" \u00b7 ") : "nothing loaded yet")));
+      el("div", {}, order.length ? order.join(" \u00b7 ") : "nothing loaded yet"),
+      edited ? el("div", {}, `editing ${edited.name} \u2014 also cited as ${tags.get(edited) || "a reference"}`) : null));
 
     this.root.replaceChildren(...kids.filter(Boolean));
   }

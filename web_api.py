@@ -873,6 +873,69 @@ if PromptServer is not None and web is not None:
         except Exception as exc:
             return web.json_response({"error": f"delete failed: {exc}"}, status=500)
 
+    # Masks, their overlay sprites and saved edit/reference latents pile up
+    # as people re-mask and change settings. These list and delete them; the
+    # page decides which are unused and asks before deleting.
+    def _edit_file_dirs():
+        from . import latent_cache
+        from .object_mask import SUBFOLDER as MASKS
+        base = folder_paths.get_input_directory()
+        return {"mask": os.path.realpath(os.path.join(base, MASKS)),
+                "cache": os.path.realpath(os.path.join(base, latent_cache.SUBFOLDER))}
+
+    @routes.post("/minimax_h3/mask_strokes")
+    @_guard()
+    async def mask_strokes(request):
+        """Apply the editor's brush strokes to a saved mask; returns the new one."""
+        from . import object_mask
+        try:
+            body = await request.json()
+            mask = str(body.get("mask") or "")
+            path = os.path.realpath(media_io.resolve(mask))
+            if os.path.dirname(path) != _edit_file_dirs()["mask"]:
+                return web.json_response({"error": "not a mask file"}, status=400)
+            reach = body.get("reach") if body.get("reach") in ("frame", "forward", "all") else "frame"
+            info = object_mask.apply_strokes(mask, body.get("strokes") or [], reach)
+            return web.json_response({"mask": info})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": f"brush failed: {exc}"}, status=500)
+
+    @routes.get("/minimax_h3/edit_files")
+    async def edit_files(request):
+        out = []
+        for kind, folder in _edit_file_dirs().items():
+            if not os.path.isdir(folder):
+                continue
+            for name in sorted(os.listdir(folder)):
+                path = os.path.join(folder, name)
+                if os.path.isfile(path) and name.endswith((".safetensors", ".png")):
+                    st = os.stat(path)
+                    out.append({"kind": kind, "name": name, "size": st.st_size, "mtime": int(st.st_mtime)})
+        return web.json_response({"files": out})
+
+    @routes.post("/minimax_h3/edit_files/delete")
+    @_guard()
+    async def edit_files_delete(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON"}, status=400)
+        dirs = _edit_file_dirs()
+        removed = []
+        for entry in body.get("files") or []:
+            folder = dirs.get((entry or {}).get("kind"))
+            name = os.path.basename(str((entry or {}).get("name") or ""))
+            if not folder or not name.endswith((".safetensors", ".png")):
+                continue
+            path = os.path.realpath(os.path.join(folder, name))
+            if os.path.dirname(path) != folder or not os.path.isfile(path):
+                continue
+            os.remove(path)
+            removed.append(name)
+        return web.json_response({"removed": removed})
+
     @routes.post("/minimax_h3/refmods/set_preview")
     @_guard(json_only=False)
     async def refmod_set_preview(request):
