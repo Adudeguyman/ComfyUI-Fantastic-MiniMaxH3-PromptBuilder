@@ -542,6 +542,7 @@ const CSS = `
   font-family:ui-monospace,monospace;pointer-events:none;letter-spacing:0;
   text-shadow:0 1px 2px rgba(0,0,0,.9);z-index:2;}
 .mml-dims:empty{display:none;}
+.mml-dims.vid{top:auto;bottom:2px;right:2px;padding:0 3px;}
 .mml-lightdims{font-size:calc(10px * var(--mml-fs, 1));color:#8a93a3;font-family:ui-monospace,monospace;}
 .mml-pic{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   display:block;cursor:zoom-in;background:#0d1015;}
@@ -1505,8 +1506,8 @@ class TrimModal {
     const [ow, oh] = outSize({ ...this.item, crop: this.crop, rotate: 0,
                                resize: this.resize });
     this.cropInfo.textContent = (ow === sw && oh === sh)
-      ? `${sw} \u00d7 ${sh}`
-      : `${sw} \u00d7 ${sh} \u2192 ${ow} \u00d7 ${oh}`;
+      ? dimsLabel(sw, sh)
+      : `${dimsLabel(sw, sh)} \u2192 ${dimsLabel(ow, oh)}`;
     this.cropInfo.classList.toggle("changed", ow !== sw || oh !== sh);
   }
 
@@ -2278,7 +2279,7 @@ class MaskMode {
     this.mode = "replace";
     this.found = item.mask ? { file: item.mask, ...(item.mask_info || {}) } : null;
     this.grow = Number.isFinite(+item.mask_grow) ? +item.mask_grow : 16;
-    this.feather = Number.isFinite(+item.mask_feather) ? +item.mask_feather : 0;
+    this.feather = Number.isFinite(+item.mask_feather) ? +item.mask_feather : 12;
     this.invert = !!item.mask_invert;
     this.cropOn = !!item.mask_crop;
     this.context = Number.isFinite(+item.mask_context) && +item.mask_context > 0 ? +item.mask_context : 1.75;
@@ -2627,7 +2628,7 @@ class MaskMode {
     this.text = ""; this.textIn.value = "";
     this.found = null; this.mode = "replace";
     this.grow = 16; this.growS.input.value = 16; this.growS.val.textContent = "16px";
-    this.feather = 0; this.featherS.input.value = 0; this.featherS.val.textContent = "0px";
+    this.feather = 12; this.featherS.input.value = 12; this.featherS.val.textContent = "12px";
     this.invert = false; this.invertIn.checked = false;
     this.cropOn = false; this.cropIn.checked = false;
     this.context = 1.75; this.contextS.input.value = 1.75; this.contextS.val.textContent = "1.75×";
@@ -2752,7 +2753,14 @@ class MaskMode {
         const errs = Object.values(d.node_errors || {}).flatMap((n) => (n.errors || []).map((x) => x.details || x.message || ""));
         throw new Error((d.error?.message || d.error || `HTTP ${r.status}`) + (errs.length ? `: ${errs.join("; ")}` : ""));
       }
-      await this.wait(d.prompt_id);
+      const info = await this.wait(d.prompt_id);
+      if (!info) return;                  // the editor was closed meanwhile
+      this.found = info;
+      this.refresh();
+      this.useBtn.disabled = false;
+      this.say(`Masked on ${info.hit} of ${info.frames} frames (${info.how}). ` +
+        (this.host.maskShown ? "Scrub or play to check it, then Use this mask."
+          : "The overlay is off — turn on ◐ show mask at the top to see it, then Use this mask."));
     } catch (err) {
       this.say(`Masking failed: ${err.message}`, true);
     } finally {
@@ -2760,28 +2768,63 @@ class MaskMode {
     }
   }
 
-  async wait(pid) {
-    const started = Date.now();
-    while (!this.closed && Date.now() - started < 30 * 60 * 1000) {
-      await new Promise((res) => setTimeout(res, 1500));
-      let entry = null;
-      try { entry = (await (await api.fetchApi(`/history/${pid}`)).json())?.[pid]; } catch (e) { continue; }
-      if (!entry?.status || entry.status.completed === undefined) continue;
-      if (entry.status.status_str !== "success") {
-        const msg = (entry.status.messages || []).map((m) => m[0] === "execution_error" ? m[1]?.exception_message : "")
-          .find(Boolean);
-        throw new Error(msg || "the job failed — the ComfyUI console has the details");
-      }
-      const info = ((entry.outputs?.["2"] || {}).mmh3_mask || [])[0];
-      if (!info) throw new Error("the job finished without a mask");
-      this.found = info;
-      this.refresh();
-      this.useBtn.disabled = false;
-      this.say(`Masked on ${info.hit} of ${info.frames} frames (${info.how}). ` +
-        (this.host.maskShown ? "Scrub or play to check it, then Use this mask."
-          : "The overlay is off — turn on ◐ show mask at the top to see it, then Use this mask."));
-      return;
-    }
+  /** The job's mask info, or null if the editor closes first. The websocket's
+   *  executed event carries it the moment the job ends; /history is asked
+   *  every few seconds too, in case that message was missed. A history
+   *  request that hangs or fails is retried, and only a long run of
+   *  failures gives up, with the reason. */
+  wait(pid) {
+    return new Promise((resolve, reject) => {
+      let done = false, asking = false, failures = 0;
+      const finish = (err, info = null) => {
+        if (done) return;
+        done = true;
+        clearInterval(timer);
+        for (const [k, f] of Object.entries(on)) api.removeEventListener(k, f);
+        if (err) reject(err); else resolve(info);
+      };
+      const on = {
+        executed: (e) => {
+          const info = e.detail?.prompt_id === pid && e.detail.output?.mmh3_mask?.[0];
+          if (info) finish(null, info);
+        },
+        execution_error: (e) => {
+          if (e.detail?.prompt_id === pid)
+            finish(new Error(e.detail.exception_message || "the job failed — the ComfyUI console has the details"));
+        },
+        execution_interrupted: (e) => { if (e.detail?.prompt_id === pid) finish(new Error("the job was cancelled")); },
+      };
+      for (const [k, f] of Object.entries(on)) api.addEventListener(k, f);
+      const started = Date.now();
+      const timer = setInterval(async () => {
+        if (this.closed) return finish(null);
+        if (Date.now() - started > 30 * 60 * 1000) return finish(new Error("no result after 30 minutes"));
+        if (asking) return;
+        asking = true;
+        const ctl = new AbortController();
+        const cut = setTimeout(() => ctl.abort(), 10000);
+        try {
+          const r = await api.fetchApi(`/history/${pid}`, { signal: ctl.signal });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const entry = (await r.json())?.[pid];
+          failures = 0;
+          if (!entry?.status || entry.status.completed === undefined) return;
+          if (entry.status.status_str !== "success") {
+            const msg = (entry.status.messages || []).map((m) => m[0] === "execution_error" ? m[1]?.exception_message : "")
+              .find(Boolean);
+            return finish(new Error(msg || "the job failed — the ComfyUI console has the details"));
+          }
+          const info = ((entry.outputs?.["2"] || {}).mmh3_mask || [])[0];
+          finish(info ? null : new Error("the job finished without a mask"), info || null);
+        } catch (err) {
+          failures += 1;
+          if (failures >= 20) finish(new Error(`couldn't read the job's result from ComfyUI (${err.name === "AbortError" ? "no answer" : err.message})`));
+        } finally {
+          clearTimeout(cut);
+          asking = false;
+        }
+      }, 3000);
+    });
   }
 
   use() {
@@ -3056,13 +3099,18 @@ function decimalRatio(w, h) {
   return w >= h ? `${(w / h).toFixed(2)}:1` : `1:${(h / w).toFixed(2)}`;
 }
 
-/** "1290\u00d7720 \u00b7 16:9", "\u224816:9" when close, or a plain decimal
- *  when no standard ratio is near enough to name honestly. */
-function dimsLabel(w, h) {
+/** "16:9", "\u224816:9" when close, or a plain decimal when no standard
+ *  ratio is near enough to name honestly. */
+function ratioLabel(w, h) {
   if (!w || !h) return "";
   const n = nearestAspect(w, h);
-  if (n.err > 0.10) return `${w}\u00d7${h} \u00b7 ${decimalRatio(w, h)}`;
-  return `${w}\u00d7${h} \u00b7 ${n.err <= 0.005 ? "" : "\u2248"}${n.a}:${n.b}`;
+  if (n.err > 0.10) return decimalRatio(w, h);
+  return `${n.err <= 0.005 ? "" : "\u2248"}${n.a}:${n.b}`;
+}
+
+/** "1290\u00d7720 \u00b7 16:9". */
+function dimsLabel(w, h) {
+  return w && h ? `${w}\u00d7${h} \u00b7 ${ratioLabel(w, h)}` : "";
 }
 
 /** Longer form for tooltips: names the preset and the exact ratio. */
@@ -4282,11 +4330,14 @@ class LoaderPanel {
             isOn(it) ? (tags.get(it) || "").slice(1, -1) + (editing ? " \u00b7 editing" : "") : "off"),
           el("div", { class: "mml-name", title: it.name }, it.name)));
       const sprite = editing && it.mask && overlayOn() ? it.mask_info?.sprite : null;
+      // What is sent: the crop and size cap applied, like a picture's badge.
+      const [ow, oh] = outSize(it);
+      thumb.title = dimsTitle(it.name, it.width, it.height) + (it.crop || it.resize ? `\nsent as ${ow}\u00d7${oh}` : "") +
+        (it.mirror ? "\nmirrored" : "") + (sprite ? `\n${OVERLAY_NOTE} Right-click the clip to hide it.` : "");
+      const wrap = el("span", { class: "mml-vthumbwrap" });
+      thumb.replaceWith(wrap);
+      wrap.append(thumb, el("span", { class: "mml-dims vid" + (it.crop ? " cut" : "") }, ratioLabel(ow, oh)));
       if (sprite) {
-        const wrap = el("span", { class: "mml-vthumbwrap",
-          title: `${OVERLAY_NOTE} Right-click the clip to hide it.` });
-        thumb.replaceWith(wrap);
-        wrap.append(thumb);
         const o = maskOverlay(thumb, wrap, sprite, "contain", { append: true, look: itemLook(it), onMissing: () => wrap.append(
           el("span", { class: "mml-maskmissing", title: "This clip's mask files are missing: mask it again, " +
             "or clear its mask. The next run stops with an error until you do." }, "\u26a0")) });

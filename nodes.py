@@ -469,7 +469,7 @@ class MiniMaxH3MediaLoader:
                                                        "mask", "has_audio")}
             bundle["edit"]["grow"] = int(edit.get("mask_grow", 16))
             bundle["edit"]["keep_audio"] = edit.get("keep_audio", True)
-            bundle["edit"]["feather"] = int(edit.get("mask_feather") or 0)
+            bundle["edit"]["feather"] = int(edit["mask_feather"]) if edit.get("mask_feather") is not None else 12
             bundle["edit"]["invert"] = bool(edit.get("mask_invert"))
             # crop to mask: how much surroundings to keep; 0 samples the whole frame
             bundle["edit"]["context"] = (float(edit.get("mask_context") or 1.75)
