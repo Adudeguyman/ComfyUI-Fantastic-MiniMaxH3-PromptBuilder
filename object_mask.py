@@ -12,8 +12,16 @@ dots (and the typed name, which picks the match under them) and tracked
 forward to the next marked frame; the first is also tracked back to the
 start, since core's tracker only starts from a first-frame mask. So a mask
 that drifts is fixed by adding a dot where it goes wrong. With a name only,
-the tracker looks for it on every frame. A run can replace the clip's mask,
-add to it or subtract from it, and brush strokes edit a saved mask directly.
+the tracker looks for it on every frame. A run can replace a layer's mask,
+add to it or subtract from it.
+
+The mask editor builds a clip's mask from a stack of layers, bottom first,
+each adding to or cutting from the ones below it: SAM results (Auto Mask),
+keyframed ellipses, rectangles and polygons, and brush strokes.
+compose_layers() draws them into the one mask the edit uses. The shape
+keyframing (normalised shapes, per-shape keys, Shown/Hidden keys) follows
+BISAM20's Animated Mask Editor, https://github.com/BISAM20/ComfyUI-AnimatedMaskEditor
+(MIT License, Copyright (c) 2026 Bishoy Samaan).
 
 Masks are stored one bit per pixel (np.packbits along the width); older
 one-byte masks still read.
@@ -33,6 +41,7 @@ import uuid
 import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image, ImageDraw
 
 import folder_paths
 
@@ -77,15 +86,15 @@ def _save_sprite(masks, folder, stem):
     """The mask as one small PNG of tiles, one per frame, white with the mask
     as alpha. The editor and the loader card draw the tile for the frame on
     screen, so the overlay follows scrubbing exactly. Returns its layout."""
-    from PIL import Image
     n, h, w = masks.shape
     tw, th = SPRITE_W, max(1, round(h * SPRITE_W / w))
     step = -(-n // SPRITE_MAX)
-    picks = masks[::step].float()
+    picks = masks[::step]
     cols = max(1, int(np.ceil(np.sqrt(picks.shape[0]))))
     rows = -(-picks.shape[0] // cols)
     # "area" keeps a thin edge visible at thumbnail size instead of dropping it
-    small = (F.interpolate(picks[:, None], size=(th, tw), mode="area")[:, 0] > 0.2).to(torch.uint8) * 255
+    small = torch.cat([F.interpolate(picks[i:i + 32, None].float(), size=(th, tw), mode="area")[:, 0] > 0.2
+                       for i in range(0, picks.shape[0], 32)]).to(torch.uint8) * 255
     alpha = np.zeros((rows * th, cols * tw), dtype=np.uint8)
     for i in range(small.shape[0]):
         r, c = divmod(i, cols)
@@ -134,7 +143,7 @@ def _seed(sam3, model, cond, frame, pos, neg, threshold):
 
 def pack(masks):
     """bool [n, h, w] -> uint8 [n, h, ceil(w/8)], one bit per pixel."""
-    return torch.from_numpy(np.packbits(masks.numpy().astype(np.uint8), axis=-1))
+    return torch.from_numpy(np.packbits(masks.numpy(), axis=-1))
 
 
 def read_mask(annotated):
@@ -149,7 +158,7 @@ def read_mask(annotated):
         stored = fh.get_tensor("mask")
     if meta.get("format") == "packed1":
         w = int(meta["width"])
-        return meta, torch.from_numpy(np.unpackbits(stored.numpy(), axis=-1, count=w).astype(bool))
+        return meta, torch.from_numpy(np.unpackbits(stored.numpy(), axis=-1, count=w).view(bool))
     return meta, stored > 0
 
 
@@ -171,7 +180,7 @@ def save_mask(masks, source, first, how):
     sprite = _save_sprite(masks, folder, tag)
     sprite["start"] = first
     return {"file": f"{SUBFOLDER}/{name} [input]", "frames": n, "hit": hit,
-            "share": round(float(masks.float().mean()), 4), "how": how, "sprite": sprite}
+            "share": round(np.count_nonzero(masks.numpy()) / masks.numel(), 4), "how": how, "sprite": sprite}
 
 
 def _aligned(base, first, n, h, w):
@@ -217,12 +226,15 @@ class MiniMaxH3FantasticObjectMask:
                 "mode": (["replace", "add", "subtract"], {"default": "replace",
                     "tooltip": "What to do with the clip's current mask: replace it, add what's found to it, "
                                "or take what's found out of it."}),
-                "base": ("STRING", {"default": "", "tooltip": "The clip's current mask file, for add and subtract."}),
+                "base": ("STRING", {"default": "", "tooltip": "The layer's current mask file, for add and subtract."}),
+                "every_frame": ("BOOLEAN", {"default": False,
+                    "tooltip": "With dots and a name: also look for the name on every frame, and use what it finds "
+                               "wherever tracking lost the object (after a cut, say). Can pick up look-alikes."}),
             },
         }
 
     def run(self, model, clip, video, text, points, start=0.0, end=0.0, threshold=0.5, max_objects=4,
-            mode="replace", base=""):
+            mode="replace", base="", every_frame=False):
         try:
             import comfy_extras.nodes_sam3 as sam3
         except Exception as exc:
@@ -263,6 +275,16 @@ class MiniMaxH3FantasticObjectMask:
         masks = masks.float().cpu() > 0.5
         if tuple(masks.shape[1:]) != (h, w):
             masks = F.interpolate(masks[:, None].float(), size=(h, w), mode="nearest")[:, 0] > 0.5
+        if keys and every_frame and cond is not None:
+            # frames where tracking lost it take what the name finds there
+            named = _track(sam3, model, frames, conditioning=cond, detection_threshold=threshold,
+                           max_objects=max_objects, detect_interval=1).float().cpu() > 0.5
+            if tuple(named.shape[1:]) != (h, w):
+                named = F.interpolate(named[:, None].float(), size=(h, w), mode="nearest")[:, 0] > 0.5
+            filled = ~masks.flatten(1).any(dim=1) & named.flatten(1).any(dim=1)
+            masks[filled] = named[filled]
+            if filled.any():
+                how += f", re-found by name on {int(filled.sum())} frame(s)"
         if not masks.any():
             raise ValueError("SAM didn't find the object on any frame. Try other wording or click on it.")
         if mode in ("add", "subtract") and base.strip():
@@ -299,23 +321,155 @@ def _stamp(stroke, h, w):
     return out
 
 
-def apply_strokes(annotated, strokes, reach):
-    """Paint onto a saved mask and save the result as a new mask. Each stroke
-    is {time, erase, r (fraction of the frame height), points [{x, y}] on the
-    source frame}; `reach` is "frame", "forward" (to the end) or "all"."""
-    meta, masks = read_mask(annotated)
-    n, h, w = masks.shape
-    first = int(meta.get("start_frame", 0))
-    masks = masks.clone()
-    for stroke in strokes or []:
-        k = min(n - 1, max(0, round(float(stroke.get("time") or 0) * media_io.FPS) - first))
-        span = slice(k, k + 1) if reach == "frame" else slice(k, n) if reach == "forward" else slice(0, n)
-        stamp = torch.from_numpy(_stamp(stroke, h, w))
-        if stroke.get("erase"):
-            masks[span] &= ~stamp
+SHAPES = ("ellipse", "rect", "poly")
+MOTIONS = ("smooth", "linear", "ease")
+
+
+def _keys(layer):
+    """A shape layer's keys, sorted by time, one per time."""
+    out = []
+    for k in sorted((k for k in layer.get("keys") or [] if isinstance(k, dict)), key=lambda k: float(k["t"])):
+        if out and abs(float(k["t"]) - float(out[-1]["t"])) < 1e-6:
+            out[-1] = k
         else:
-            masks[span] |= stamp
-    return save_mask(masks, meta.get("source") or annotated, first, "brush edit")
+            out.append(k)
+    if layer.get("kind") == "poly" and out:
+        count = len(out[0].get("pts") or [])
+        if count < 3 or any(len(k.get("pts") or []) != count for k in out):
+            raise ValueError(f"The polygon layer '{layer.get('name')}' has keys with different point counts.")
+    return out
+
+
+def _curve(keys, t, get, motion):
+    """get(key) at time t between keys: held before the first and after the
+    last. smooth = a curve through every key (Catmull-Rom tangents, spaced by
+    time), linear = straight between keys, ease = slowing into and out of
+    each key. The editor's preview (medialoader.js) computes the same."""
+    if t <= float(keys[0]["t"]):
+        return get(keys[0])
+    if t >= float(keys[-1]["t"]):
+        return get(keys[-1])
+    i = max(j for j in range(len(keys) - 1) if float(keys[j]["t"]) <= t)
+    a, b = keys[i], keys[i + 1]
+    ta, tb = float(a["t"]), float(b["t"])
+    u = (t - ta) / (tb - ta)
+    va, vb = get(a), get(b)
+    if motion == "linear":
+        return va + (vb - va) * u
+    if motion == "ease":
+        return va + (vb - va) * u * u * (3 - 2 * u)
+    p0 = keys[i - 1] if i > 0 else a
+    p3 = keys[i + 2] if i + 2 < len(keys) else b
+    m1 = (vb - get(p0)) / (tb - float(p0["t"])) * (tb - ta)
+    m2 = (get(p3) - va) / (float(p3["t"]) - ta) * (tb - ta)
+    u2, u3 = u * u, u * u * u
+    return (2 * u3 - 3 * u2 + 1) * va + (u3 - 2 * u2 + u) * m1 + (3 * u2 - 2 * u3) * vb + (u3 - u2) * m2
+
+
+def shape_at(layer, t):
+    """A shape layer at time t in seconds, or None where it's hidden (the last
+    key at or before t is Hidden; before the first key, the first key says).
+    Ellipse and rectangle: centre x, y and full w, h as fractions of the
+    frame, rot in degrees. Polygon: pts as fractions, rot about the centre of
+    their bounding box (a point added on an edge doesn't move it)."""
+    keys = _keys(layer)
+    if not keys:
+        return None
+    cur = keys[0]
+    for k in keys:
+        if float(k["t"]) <= t + 1e-6:
+            cur = k
+    if cur.get("off"):
+        return None
+    motion = layer.get("motion") if layer.get("motion") in MOTIONS else "smooth"
+    val = lambda get: float(_curve(keys, t, get, motion))
+    rot = val(lambda k: float(k.get("rot") or 0))
+    if layer.get("kind") == "poly":
+        return {"pts": [(val(lambda k, i=i: float(k["pts"][i][0])), val(lambda k, i=i: float(k["pts"][i][1])))
+                        for i in range(len(keys[0]["pts"]))], "rot": rot}
+    return {name: val(lambda k, name=name: float(k[name])) for name in ("x", "y", "w", "h")} | {"rot": rot}
+
+
+def _outline(kind, s, w, h):
+    """A shape's outline in pixels of a w x h frame, rotated about its centre."""
+    if kind == "poly":
+        pts = [(x * w, y * h) for x, y in s["pts"]]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    else:
+        cx, cy, rx, ry = s["x"] * w, s["y"] * h, abs(s["w"]) * w / 2, abs(s["h"]) * h / 2
+        if kind == "ellipse":
+            pts = [(cx + rx * math.cos(a), cy + ry * math.sin(a)) for a in (2 * math.pi * i / 96 for i in range(96))]
+        else:
+            pts = [(cx - rx, cy - ry), (cx + rx, cy - ry), (cx + rx, cy + ry), (cx - rx, cy + ry)]
+    c, sn = math.cos(math.radians(s["rot"])), math.sin(math.radians(s["rot"]))
+    return [(cx + (x - cx) * c - (y - cy) * sn, cy + (x - cx) * sn + (y - cy) * c) for x, y in pts]
+
+
+def _layer_frames(layer, first, n, h, w):
+    """One layer as bool [n, h, w] over the clip's frames first .. first + n - 1
+    at media_io.FPS, or None when it has nothing to draw yet."""
+    kind = layer.get("kind")
+    if kind == "auto":
+        return _aligned(layer["result"], first, n, h, w) if layer.get("result") else None
+    out = torch.zeros(n, h, w, dtype=torch.bool)
+    if kind == "brush":
+        # a stroke reaches its frame, from there to the end, or the whole clip
+        for stroke in layer.get("strokes") or []:
+            k = round(float(stroke.get("time") or 0) * media_io.FPS) - first
+            reach = stroke.get("reach")
+            if reach not in ("forward", "all") and not 0 <= k < n:
+                continue
+            span = slice(max(0, k), n) if reach == "forward" else slice(0, n) if reach == "all" else slice(k, k + 1)
+            stamp = torch.from_numpy(_stamp(stroke, h, w))
+            if stroke.get("erase"):
+                out[span] &= ~stamp
+            else:
+                out[span] |= stamp
+        return out
+    if kind not in SHAPES:
+        raise ValueError(f"Unknown mask layer kind {kind!r}.")
+    if not _keys(layer):
+        return None
+    for f in range(n):
+        s = shape_at(layer, (first + f) / media_io.FPS)
+        if s is not None:
+            img = Image.new("1", (w, h), 0)
+            ImageDraw.Draw(img).polygon(_outline(kind, s, w, h), fill=1)
+            out[f] = torch.from_numpy(np.array(img, dtype=bool))
+    return out
+
+
+def compose_layers(clip, layers, start=0.0, end=0.0):
+    """The editor's layers as one mask over the kept range (`end` 0 = to the
+    end of the clip), saved like a masking run's (packed, with its sprite):
+    shown layers applied in stack order, bottom first, each adding to or
+    cutting from those below it. SAM results are at the size masking decodes to, so the rest is
+    drawn at that size too. Only the kept range: a long source file masked
+    whole ran to tens of GB."""
+    info = media_io.probe(clip)
+    if not info["width"] or not info["duration"]:
+        raise ValueError("Couldn't read the clip's size and length.")
+    w, h = media_io._scaled_size(info["width"], info["height"], DECODE_CAP) or (info["width"], info["height"])
+    first = round(float(start or 0) * media_io.FPS)
+    last = round(min(float(end or 0) or info["duration"], info["duration"]) * media_io.FPS)
+    n = max(1, last - first + 1)
+    out = torch.zeros(n, h, w, dtype=torch.bool)
+    names = []
+    for layer in layers:
+        if not isinstance(layer, dict) or layer.get("visible") is False:
+            continue
+        m = _layer_frames(layer, first, n, h, w)
+        if m is None:
+            continue
+        if layer.get("mode") == "cut":
+            out &= m.logical_not_()
+        else:
+            out |= m
+        names.append(str(layer.get("name") or layer.get("kind")))
+    if not out.any():
+        raise ValueError("The layers don't mask anything on the kept frames.")
+    return save_mask(out, clip, first, "layers: " + ", ".join(names))
 
 
 def load_mask(annotated, n, start=None, mirror=False, crop=None):

@@ -1,5 +1,6 @@
 """HTTP routes backing the Media Loader's drag-drop and file picker."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -883,28 +884,49 @@ if PromptServer is not None and web is not None:
         return {"mask": os.path.realpath(os.path.join(base, MASKS)),
                 "cache": os.path.realpath(os.path.join(base, latent_cache.SUBFOLDER))}
 
-    @routes.post("/minimax_h3/mask_strokes")
+    def _saved_masks():
+        """Mask files named in saved media presets and Prompt Builder drafts,
+        which Clean up must keep even when no loader in the graph uses them."""
+        from .object_mask import SUBFOLDER as MASKS
+        pattern = re.compile(re.escape(MASKS) + r"/([A-Za-z0-9_.-]+\.(?:safetensors|png))")
+        folder = _preset_dir()
+        paths = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(".json")] + [_drafts_file()]
+        names = set()
+        for path in paths:
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    names.update(pattern.findall(fh.read()))
+            except OSError:
+                continue
+        return names
+
+    @routes.post("/minimax_h3/mask_compose")
     @_guard()
-    async def mask_strokes(request):
-        """Apply the editor's brush strokes to a saved mask; returns the new one."""
+    async def mask_compose(request):
+        """Draw the mask editor's layers into the clip's mask; returns it."""
         from . import object_mask
         try:
             body = await request.json()
-            mask = str(body.get("mask") or "")
-            path = os.path.realpath(media_io.resolve(mask))
-            if os.path.dirname(path) != _edit_file_dirs()["mask"]:
-                return web.json_response({"error": "not a mask file"}, status=400)
-            reach = body.get("reach") if body.get("reach") in ("frame", "forward", "all") else "frame"
-            info = object_mask.apply_strokes(mask, body.get("strokes") or [], reach)
+            layers = body.get("layers")
+            if not isinstance(layers, list) or not layers or len(layers) > 64:
+                return web.json_response({"error": "expected 1 to 64 layers"}, status=400)
+            masks = _edit_file_dirs()["mask"]
+            for layer in layers:
+                result = layer.get("result") if isinstance(layer, dict) else None
+                if result and os.path.dirname(os.path.realpath(media_io.resolve(str(result)))) != masks:
+                    return web.json_response({"error": "a layer names something that isn't a mask file"}, status=400)
+            info = await asyncio.to_thread(object_mask.compose_layers, str(body.get("clip") or ""), layers,
+                                           float(body.get("start") or 0), float(body.get("end") or 0))
             return web.json_response({"mask": info})
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
-            return web.json_response({"error": f"brush failed: {exc}"}, status=500)
+            return web.json_response({"error": f"combining the layers failed: {exc}"}, status=500)
 
     @routes.get("/minimax_h3/edit_files")
     async def edit_files(request):
         out = []
+        saved = _saved_masks()
         for kind, folder in _edit_file_dirs().items():
             if not os.path.isdir(folder):
                 continue
@@ -912,7 +934,8 @@ if PromptServer is not None and web is not None:
                 path = os.path.join(folder, name)
                 if os.path.isfile(path) and name.endswith((".safetensors", ".png")):
                     st = os.stat(path)
-                    out.append({"kind": kind, "name": name, "size": st.st_size, "mtime": int(st.st_mtime)})
+                    out.append({"kind": kind, "name": name, "size": st.st_size, "mtime": int(st.st_mtime),
+                                "saved": kind == "mask" and name in saved})
         return web.json_response({"files": out})
 
     @routes.post("/minimax_h3/edit_files/delete")
@@ -923,11 +946,12 @@ if PromptServer is not None and web is not None:
         except Exception:
             return web.json_response({"error": "expected JSON"}, status=400)
         dirs = _edit_file_dirs()
+        saved = _saved_masks()
         removed = []
         for entry in body.get("files") or []:
             folder = dirs.get((entry or {}).get("kind"))
             name = os.path.basename(str((entry or {}).get("name") or ""))
-            if not folder or not name.endswith((".safetensors", ".png")):
+            if not folder or not name.endswith((".safetensors", ".png")) or name in saved:
                 continue
             path = os.path.realpath(os.path.join(folder, name))
             if os.path.dirname(path) != folder or not os.path.isfile(path):

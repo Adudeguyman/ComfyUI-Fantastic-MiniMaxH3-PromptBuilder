@@ -623,9 +623,17 @@ the tag it will actually get.
 
 The ✂ button on any video or audio row trims what's sent to a start–end range
 in seconds — the file itself is untouched, and the counters and 15-second
-budgets track the trimmed span. `last 2s` / `last 3s` shortcuts grab a clip's
+budgets track the trimmed span. Each row shows the length it sends beside
+its ✂ (✂ 10.5s): the kept span once trimmed, the whole clip until then. `last 2s` / `last 3s` shortcuts grab a clip's
 tail in one click, which is exactly what video continuation wants. Over-long
 clips can be brought inside the budget the same way instead of re-exporting.
+Beside the playhead time, **from start** says how far the playhead is past
+the first kept frame. Zoom the timeline with **−** / **+**, the zoom slider
+above it or the - and = keys (around the playhead), or scroll on it (around
+the pointer; Shift+scroll moves along it). **⤢ Kept range** fits the trim,
+and a short trim of a long clip opens zoomed. While zoomed, the strip beside
+the zoom controls shows the whole clip; drag it to move along. With unsaved changes, a
+click outside the editor doesn't close it; ✕ or Esc pressed twice drops them.
 
 Videos that carry sound get an extra control for whether that soundtrack is
 treated as part of the video or as a separate audio reference. The **?** button
@@ -1383,27 +1391,47 @@ in `models/checkpoints`. The pack never downloads it.
 
 **Masking.** Right-click a video on the Media Loader → **◐ Mask for
 editing…** (or the **◐ Mask** tab in its trim editor). It works on the clip
-as you've trimmed, cropped and mirrored it there. Click what you want to
-change on a frame where it's clear; right-click a spot that isn't part of
-it. A click alone can grab a whole person, so type what it is as well —
-"green jacket" — and just that part under your dots is masked; a name with
-no dots masks every match. **▶ Run masking** runs SAM through the queue on
-its own, over the kept range only, and the result plays over the clip in
-cyan (an approximate preview; hide it from the right-click menu). **grow**
-widens it so edges and shadows go too. **Use this mask** saves it on the
-clip; the card then reads **Video 1 · editing**.
+as you've trimmed, cropped and mirrored it there. The mask is built from
+**layers**, stacked beside the picture like an image editor's, new ones on
+top: each one **Add**s its area or **Cut**s it out of the layers below it, the eye leaves
+one out, ⠇ drags to reorder and ⋯ renames, duplicates or deletes. The
+selected layer is outlined in amber on the video; hovering a row outlines
+that layer in white. It starts with an Auto Mask layer, ready for dots;
+**+ Add layer** adds more:
 
-**Fixing a mask.** Dots can go on several frames: each marked frame seeds
-the tracking from there to the next one, so when a mask drifts, scrub to
-where it goes wrong, add a dot and run again (a frame needs a green dot; the
-chips above the name box list the frames with dots). **add** and
-**subtract** run SAM and merge the result into the current mask or take it
-out — green-dot the shirt under the jacket, type "shirt", run with add.
-**Brush** paints onto the mask by hand (add or erase, on this frame, from
-here to the end or the whole clip) for what SAM can't get. Each of these
-saves a new mask; **Use this mask** keeps it.
+- **Auto Mask with SAM** — click what you want masked on a frame where it's
+  clear and right-click anything that shouldn't be included. A click alone
+  can grab a whole person, so type what it is as well — "green jacket" — and
+  just that part under your dots is masked; a name with no dots masks every
+  match. **▶ Run Auto** runs SAM through the queue on its own, over the kept
+  range only.
+- **Ellipse**, **Rectangle** and **Polygon** — drag to draw (a polygon:
+  click its points, then the first one again). Move, resize or turn it on
+  another frame and it's keyed there, so it follows what it covers;
+  **Motion** sets how it travels between keys (Smooth, Linear or Ease). A
+  **Hidden** key takes it out of the mask until the next Shown key, for
+  something that leaves the frame or comes back after a cut.
+- **Brush** — paint or erase by hand, on this frame, from here to the end or
+  the whole clip.
 
-**Shaping it.** **grow** widens the mask; **feather** fades the regenerated
+The layers play over the clip in cyan as you work (an approximate preview;
+hide it from the right-click menu). **Use this mask** combines them over the
+kept range into the clip's mask and saves it with the layers, so they stay
+editable; the card then reads **Video 1 · editing**. Widen the trim later
+and the loader says the mask stops short; Use this mask again covers it. Ctrl+Z undoes within the session, and
+closing with unsaved changes asks first.
+
+**Fixing an Auto Mask.** Dots can go on several frames: each marked frame
+seeds the tracking from there to the next one, so when a mask drifts, scrub
+to where it goes wrong, add a dot and run again (a frame needs a green dot;
+the layer's panel lists the frames with dots, and says **run again** once
+they or the name change). **Add** and **Cut** run SAM and merge the result
+into that layer or take it out — green-dot the shirt under the jacket, type
+"shirt", run with Add. **Look for it by name on every frame** also re-finds a
+named object wherever tracking lost it, such as after a cut; it can pick up
+look-alikes. For what SAM can't get, add a shape or a brush layer.
+
+**Shaping it.** These settings apply to the combined mask. **grow** widens the mask; **feather** fades the regenerated
 area into the kept footage so there's no hard seam (its inside stays fully
 regenerated; the fade is rounded up to whole 16-pixel latent cells at the
 sampling size); **invert** keeps what's masked and regenerates everything
@@ -1442,11 +1470,14 @@ else is the source file's own pixels, not a VAE copy of them. Its `max_size` cap
 long edge. The example workflows are wired this way.
 
 **Clearing and tidying.** Clearing a mask asks for a second click and
-offers Undo. Masks are stored one bit per pixel. Masking again leaves the
-old mask file behind, and changed
-settings leave old saved latents; the loader's **Clean up…** deletes mask
-files no Media Loader in the open workflow uses, plus saved latents (they're
-rebuilt when needed).
+offers Undo; the layers stay in the editor. Masks are stored one bit per
+pixel. Saving or running Auto Mask again leaves the old mask files behind,
+and changed settings leave old saved latents; the loader's **Clean up…**
+deletes mask files that no Media Loader in the open workflow, saved media
+set or Prompt Builder draft uses (each Auto Mask layer's result counts),
+plus saved latents (they're rebuilt when needed). Once those unused mask
+files pass 500 MB the loader offers a Clean up; set the size, or 0 for
+never, in its ⚙ menu.
 
 Masks made elsewhere work too: **Fantastic H3 Video Edit Latent** takes
 frames, a MASK and a megapixel budget and outputs the latent, width, height
@@ -1560,6 +1591,10 @@ RefMods: the format and the encode/apply runtime are adapted from
 [ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod)
 by Luisa (luisacaotica), MIT License; the library's layout took cues from
 FranckyB's [ComfyUI-H3RefMods](https://github.com/FranckyB/ComfyUI-H3RefMods).
+
+Mask layers: the keyframed shapes follow BISAM20's
+[ComfyUI-AnimatedMaskEditor](https://github.com/BISAM20/ComfyUI-AnimatedMaskEditor),
+MIT License.
 
 ## License
 
