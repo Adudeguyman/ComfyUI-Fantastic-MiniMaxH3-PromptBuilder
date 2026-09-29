@@ -191,6 +191,7 @@ def _channel(meta, rel, tensors):
         ch["steps"] = int(meta.get("optimize_steps", 0) or 0)
         ch["source"] = str(meta.get("source", "") or "")
         ch["source_shape"] = str(meta.get("source_shape", "") or "")
+        ch["frames"] = bool(meta.get("enc_times"))     # the text encoder's frames are in the file
         # A fork "combined" file carries the voice inside the visual file.
         # The original pack's loader reads only `latent`, so that audio never
         # reaches the model — worth saying, not worth hiding the file.
@@ -740,9 +741,10 @@ def rewrite_meta(files, **fields):
         rewrite_stem_meta(path, label=rel, **fields)
 
 
-def rewrite_stem_meta(path, label="", **fields):
+def rewrite_stem_meta(path, label="", add=None, **fields):
     """Rewrite one RefMod's header fields in place; the tensors are copied as
-    they are. `path` is a stem already resolved inside a RefMod root."""
+    they are, plus any in `add`. `path` is a stem already resolved inside a
+    RefMod root."""
     import torch  # noqa: F401  (safetensors.torch needs it)
     from safetensors.torch import load_file, save_file
     import tempfile
@@ -758,6 +760,7 @@ def rewrite_stem_meta(path, label="", **fields):
                 m[k] = v
     tensors = load_file(path + ".safetensors")
     tensors = {k: v.clone() for k, v in tensors.items()}
+    tensors.update(add or {})
     fd, tmp = tempfile.mkstemp(prefix=".refmod-", suffix=".tmp", dir=os.path.dirname(path))
     os.close(fd)
     try:

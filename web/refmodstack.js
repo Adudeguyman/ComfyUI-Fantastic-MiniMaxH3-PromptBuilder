@@ -1820,7 +1820,10 @@ export function openLibrary(panel, opts = {}) {
   const grid = el("div", { class: "mmr-grid" }, el("div", { class: "mmr-status" }, "Scanning RefMod folders…"));
   const inspector = el("aside", { class: "mmr-inspector", hidden: true });
   const body = el("div", { class: "mmr-body" }, folders, grid, inspector);
-  setChildren(libraryPane, el("div", { class: "mmr-bar" }, search, seg, sort), body);
+  const framesBtn = el("button", { class: "mmr-btn", hidden: true, onclick: async () => {
+    framesBtn.disabled = true; await storeFrames(items.filter(needsFrames)); paintFramesBtn();
+  } });
+  setChildren(libraryPane, el("div", { class: "mmr-bar" }, search, seg, sort, framesBtn), body);
 
   const kindsOf = (it) => [it.visual?.kind, it.audio && "audio"].filter(Boolean);
   const tokensOf = (it) => (it.visual?.tokens || 0) + (it.audio?.tokens || 0);
@@ -2075,7 +2078,55 @@ export function openLibrary(panel, opts = {}) {
             "but edit it with that pack (or save its members as standalone files there first).")
         : el("div", { class: "mmr-iactions" },
             el("button", { class: "mmr-btn primary", title: "Drop, reorder or add frames and change the voice on the Create tab",
-              onclick: () => startEdit(it) }, "Edit frames & voice…")));
+              onclick: () => startEdit(it) }, "Edit frames & voice…"),
+            needsFrames(it) ? el("button", { class: "mmr-btn", disabled: framesPending(it.name), title: FRAMES_TIP,
+              onclick: async (e) => {
+                const b = e.currentTarget; b.disabled = true;
+                if (await storeFrames([it])) b.textContent = "Storing encoder frames…"; else b.disabled = false;
+              } },
+              framesPending(it.name) ? "Storing encoder frames…" : "Store encoder frames") : null));
+  }
+
+  /* ---- encoder frames: RefMods saved before they carried the frames the
+   *      text encoder is shown get them added, one decode each */
+  const FRAMES_NAME = "MiniMaxH3FantasticRefModStoreFrames";
+  const FRAMES_TIP = "Saved without the frames H3's text encoder is shown, so the RefMod Text Encode decodes it " +
+    "(once, then keeps them in the cache). Storing them in the file decodes it once, through the queue with the H3 video VAE.";
+  const needsFrames = (it) => !it.bundle && !!it.visual && !it.visual.frames;
+  const framesJob = () => jobs.find((j) => j.frames && j.status !== "done" && j.status !== "error");
+  const framesPending = (name) => jobs.some((j) => j.frames?.includes(name) && j.status !== "done" && j.status !== "error");
+  function paintFramesBtn() {
+    const j = framesJob(), n = items.filter(needsFrames).length;
+    framesBtn.hidden = !j && !n;
+    framesBtn.disabled = !!j;
+    framesBtn.textContent = !j ? `Store encoder frames (${n})`
+      : j.status === "running" ? `Storing encoder frames… ${Math.round(j.progress * 100)}%` : "Storing encoder frames (queued)";
+    framesBtn.title = `${n} RefMod${n === 1 ? " was" : "s were"} saved without the frames H3's text encoder is shown, so the ` +
+      "RefMod Text Encode decodes them. This stores them in each file: one decode each, through the queue with the H3 video VAE.";
+  }
+  async function storeFrames(list) {
+    const vae = guessVae("videoVae", /minimax.*video|h3.*video/i);
+    if (!vae) { toast("Choose the H3 video VAE on the Create tab first", 4000); return false; }
+    const prompt = { 1: { class_type: "VAELoader", inputs: { vae_name: vae } },
+      2: { class_type: FRAMES_NAME, inputs: { files: list.map((it) => it.visual.file).join("\n"), vae: ["1", 0] } } };
+    try {
+      const r = await api.fetchApi("/prompt", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, client_id: api.clientId }) });
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        const errs = Object.values(d.node_errors || {}).flatMap((n) => (n.errors || []).map((e) => e.message || e.details || ""));
+        throw new Error((d.error && (d.error.message || d.error)) + (errs.length ? ": " + errs.join("; ") : ""));
+      }
+      const what = list.length === 1 ? list[0].label : `${list.length} RefMods`;
+      jobs.unshift({ prompt_id: d.prompt_id, names: [`Encoder frames for ${what}`], status: "queued", msg: `#${d.number} in the queue`,
+        progress: 0, saved: [], frames: list.map((it) => it.name) });
+      hook(); watchJob(d.prompt_id); paintJobs();
+      toast(`Queued encoder frames for ${what}`);
+      return true;
+    } catch (err) {
+      toast(`Couldn't queue: ${err.message}`, 6000);
+      return false;
+    }
   }
 
   /** Decode a RefMod through the queue. `opts.forEdit` asks for full-strength
@@ -3028,14 +3079,26 @@ export function openLibrary(panel, opts = {}) {
 
   let hooked = false, gone = false;      // gone: this dialog is closed; its pollers stop
   const onEvt = {
-    executing: (e) => { const j = jobs.find((x) => x.prompt_id === e.detail?.prompt_id); if (j && e.detail?.node) { j.status = "running"; j.msg = "encoding…"; paintJobs(); } },
+    executing: (e) => { const j = jobs.find((x) => x.prompt_id === e.detail?.prompt_id); if (j && e.detail?.node) { j.status = "running"; j.msg = j.frames ? "decoding…" : "encoding…"; paintJobs(); } },
     progress: (e) => { const j = jobs.find((x) => x.prompt_id === e.detail?.prompt_id); if (j && e.detail?.max) { j.progress = e.detail.value / e.detail.max; paintJobs(); } },
     executed: (e) => { if (inspectEvent("executed", e)) return; const j = jobs.find((x) => x.prompt_id === e.detail?.prompt_id); const saved = e.detail?.output?.refmod_saved; if (j && saved) { j.saved.push(...saved); paintJobs(); } },
-    execution_error: (e) => { if (inspectEvent("error", e)) return; const j = jobs.find((x) => x.prompt_id === e.detail?.prompt_id); if (j) { j.status = "error"; j.msg = e.detail?.exception_message || "failed"; paintJobs(); } },
+    execution_error: (e) => {
+      if (inspectEvent("error", e)) return;
+      const j = jobs.find((x) => x.prompt_id === e.detail?.prompt_id); if (!j) return;
+      j.status = "error"; j.msg = e.detail?.exception_message || "failed"; paintJobs();
+      // files finished before the failure keep their frames
+      if (j.frames) { toast(`Couldn't store encoder frames: ${j.msg}`, 6000); load(true); }
+    },
     execution_success: async (e) => {
       if (inspectEvent("success", e)) return;
       const j = jobs.find((x) => x.prompt_id === e.detail?.prompt_id); if (!j) return;
       j.status = "done"; j.msg = `saved ${j.saved.length} file${j.saved.length === 1 ? "" : "s"}`; j.progress = 1; paintJobs();
+      if (j.frames) {
+        await load(true);
+        toast(j.saved.length ? `Stored encoder frames in ${j.saved.length} RefMod${j.saved.length === 1 ? "" : "s"}`
+          : "Those RefMods already had their encoder frames");
+        return;
+      }
       if (j.edit) {
         // The file changed: forget its old decode, leave edit mode, show it.
         inspectResults.delete(j.edit);
@@ -3062,6 +3125,7 @@ export function openLibrary(panel, opts = {}) {
     setChildren(jobsEl, jobs.slice(0, 6).map((j) => el("div", { class: `mmr-job ${j.status}` },
       el("div", { class: "mmr-jobhead" }, el("span", {}, j.names.join(", ")), el("span", { class: "mmr-dim" }, j.msg)),
       j.status === "running" ? el("div", { class: "mmr-bar2" }, el("div", { style: { width: `${Math.round(j.progress * 100)}%` } })) : null)));
+    paintFramesBtn();
   }
 
   /* ---- data */
@@ -3074,7 +3138,7 @@ export function openLibrary(panel, opts = {}) {
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       items = data.items || []; roots = data.roots || []; packInstalled = data.pack_installed !== false;
       if (vr && vr.ok) { try { const v = await vr.json(); vaes = Array.isArray(v) ? v : []; } catch (e) { vaes = []; } }
-      drawFolders(); drawGrid();
+      drawFolders(); drawGrid(); paintFramesBtn();
       if (view.selected) { if (byName(view.selected)) paintInspector(); else select(null); }
       if (rescan && panel) panel.refreshFrom(items);
     } catch (e) {

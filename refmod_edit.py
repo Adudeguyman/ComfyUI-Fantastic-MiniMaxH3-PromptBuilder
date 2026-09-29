@@ -17,7 +17,7 @@ import torch
 import comfy.utils
 import comfy.model_management as mm
 
-from .refmod_core import H3RefMod, load_cached
+from .refmod_core import H3RefMod, load_cached, encoder_record, stored_record
 from .refmod_create import (_cover, ensure_min_size, resize_ref, pool_latent, optimize_latent,
                             encode_audio, save_mod, snap_to_h3_grid, parse_sources,
                             load_look, load_voice)
@@ -311,7 +311,11 @@ class MiniMaxH3FantasticRefModEdit:
             os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
             if out_look is not None:
                 out_look = replace(out_look, name=base, **changes)
-                saved.append(save_mod(out_look, look_dest))
+                # changed frames are shown to the encoder anew (without a VAE the Text
+                # Encode decodes them once later); an unchanged look keeps its own
+                frames = (encoder_record(out_look, vae) if vae is not None else None) if edited is not None \
+                    else stored_record(out_look)
+                saved.append(save_mod(out_look, look_dest, frames))
             if out_voice is not None:
                 out_voice = replace(out_voice, name=base, **changes)
                 saved.append(save_mod(out_voice, voice_dest))
@@ -330,7 +334,7 @@ class MiniMaxH3FantasticRefModEdit:
             # --- in place
             final_look = look_stem
             if edited is not None:
-                saved.append(save_mod(edited, look_stem))
+                saved.append(save_mod(edited, look_stem, encoder_record(edited, vae) if vae is not None else None))
             if v:
                 if voice_stem is None and look_stem is not None:
                     # A plain <name> file gets the pair suffix once it has a voice.
@@ -372,5 +376,56 @@ class MiniMaxH3FantasticRefModEdit:
         return {"ui": {"refmod_saved": rel_saved}, "result": ("\n".join(rel_saved),)}
 
 
-NODE_CLASS_MAPPINGS = {"MiniMaxH3FantasticRefModEdit": MiniMaxH3FantasticRefModEdit}
-NODE_DISPLAY_NAME_MAPPINGS = {"MiniMaxH3FantasticRefModEdit": "Fantastic H3 Edit RefMod"}
+class MiniMaxH3FantasticRefModStoreFrames:
+    CATEGORY = "conditioning/video_models"
+    DESCRIPTION = (
+        "Add the frames H3's text encoder is shown to RefMods saved before they "
+        "carried them, so the RefMod Text Encode reads them instead of decoding "
+        "the RefMod. Each file is decoded once; its latent is not touched. Files "
+        "that already have them and voice files are left alone. Queued by the "
+        "RefMod library's Store encoder frames."
+    )
+    OUTPUT_NODE = True
+    RETURN_TYPES = ()
+    FUNCTION = "store"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "files": ("STRING", {"default": "", "multiline": True, "tooltip": "RefMod files under models/refmods, one per line, e.g. characters/hero_visual."}),
+                "vae": ("VAE", {"tooltip": "MiniMax H3 video VAE."}),
+            },
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def store(self, files, vae):
+        rels = [r.strip().replace("\\", "/") for r in files.splitlines() if r.strip()]
+        pbar = comfy.utils.ProgressBar(len(rels))
+        saved = []
+        for i, rel in enumerate(rels):
+            mm.throw_exception_if_processing_interrupted()
+            path = resolve_file(rel, (".safetensors",))
+            if not path:
+                raise FileNotFoundError(f"RefMod '{rel}' was not found under models/refmods.")
+            stem = path[:-len(".safetensors")]
+            mod = load_cached(stem)
+            if mod.kind != "audio" and not mod.enc_times:
+                packed, times, fps = encoder_record(mod, vae)
+                made = os.stat(path)
+                rewrite_stem_meta(stem, rel, add=packed, enc_times=times, enc_fps=fps)
+                # the library's Newest sort still means when the RefMod was made
+                os.utime(path, ns=(made.st_atime_ns, made.st_mtime_ns))
+                saved.append(rel)
+            pbar.update_absolute(i + 1)
+        print(f"[MiniMaxH3FantasticRefModStoreFrames] stored encoder frames in {len(saved)} of {len(rels)} files")
+        return {"ui": {"refmod_saved": saved}}
+
+
+NODE_CLASS_MAPPINGS = {"MiniMaxH3FantasticRefModEdit": MiniMaxH3FantasticRefModEdit,
+                       "MiniMaxH3FantasticRefModStoreFrames": MiniMaxH3FantasticRefModStoreFrames}
+NODE_DISPLAY_NAME_MAPPINGS = {"MiniMaxH3FantasticRefModEdit": "Fantastic H3 Edit RefMod",
+                              "MiniMaxH3FantasticRefModStoreFrames": "Fantastic H3 Store RefMod Encoder Frames"}

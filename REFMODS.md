@@ -91,8 +91,19 @@ understands RefMods:
   Latent node either.
 - **width**, **height**, **length** and **ref_image_size** are the same
   settings Reference to Video has, and they mean the same thing.
+- **stack_pictures** (experimental) sets how many pictures of a RefMod
+  made from several the text encoder sees: every 4th (the default), up to
+  8, or all. More pictures may help lock in identity and reduce bleeding
+  between RefMods, but they increase memory use and generation time.
 - **reference_map** is a text output listing every label and where it
   came from. Handy for checking with a preview node.
+
+To show a RefMod to H3's text encoder, the Text Encode needs it as pictures.
+RefMods made or edited with a VAE keep those frames inside their file,
+so it never has to decode them. Older ones get them from the library's
+**Store encoder frames**. Until then they're decoded the first time they're
+used and kept in `input/minimax_h3/cache`, where the Media Loader's
+**Clean up…** lists them; deleting them only means one more decode.
 
 Media from a Media Loader still works through it, so you can mix RefMods
 with one-off pictures and clips in the same prompt. There's more on that

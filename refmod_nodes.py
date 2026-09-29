@@ -14,13 +14,17 @@ Both accept any bundle that follows the shared (mod, strength) contract,
 so ComfyUI-MiniMaxH3Mod's loaders feed these nodes and our stack feeds its.
 """
 
+import hashlib
 import inspect
 import math
 import time
 
+import torch
+
 import comfy.model_management as mm
 
-from .refmod_core import check_bundle, _blur_latent
+from .refmod_core import (check_bundle, _blur_latent, decode_for_encoder, pack_frames, unpack_frames,
+                          stored_record, soften)
 from .refmods import KIND_LABEL
 from . import latent_cache
 from .video_edit import bundle_edit, shape, spec_mask, usable_frames
@@ -187,6 +191,41 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
     return items, blocks, mapping
 
 
+def encoder_view(mod, vae, fps):
+    """A visual RefMod's frames for H3's text encoder, at full strength, with
+    their timestamps and where they came from: stored in the RefMod when it
+    has them, else decoded once and kept in the cache, so no RefMod is
+    decoded on every run."""
+    rate = None if mod.source == "stack" else fps     # a stack's pictures don't depend on the rate
+    if mod.enc_times and (rate is None or abs(mod.enc_fps - rate) < 1e-6):
+        packed, times, _fps = stored_record(mod)
+        return unpack_frames(packed), times, "stored in the RefMod"
+    key = {"v": 1, "latent": hashlib.sha1(mod.latent.detach().cpu().contiguous().view(torch.uint8).numpy()).hexdigest(),
+           "shape": list(mod.latent.shape), "kind": mod.kind, "fps": rate, "vae": latent_cache.vae_tag(vae)}
+    path = latent_cache.path_for("encframes", key)
+    saved = latent_cache.load(path)
+    how = "cached"
+    if saved is None:
+        frames, times = decode_for_encoder(mod, vae, fps)
+        saved = {**pack_frames(frames), "times": torch.tensor(times, dtype=torch.float64)}
+        latent_cache.save(path, saved)
+        how = "decoded once, now cached"
+    # every run is shown the same frames: the kept copy, not this run's decode
+    return unpack_frames(saved), saved["times"].tolist(), how
+
+
+STACK_PICTURES = ("every 4th", "up to 8", "all")
+
+
+def stack_picks(n, mode):
+    """Which of a stack's n pictures the encoder is shown, by stack_pictures."""
+    if mode == "every 4th":
+        return list(range(0, n, 4))
+    if mode == "up to 8" and n > 8:
+        return [round(i * (n - 1) / 7) for i in range(8)]
+    return list(range(n))
+
+
 def build_entries(tokenizer, prompt, items):
     """H3's token stream, built exactly as core's MiniMaxH3Tokenizer builds it
     (comfy/text_encoders/minimax.py), plus one thing: an audio item may carry
@@ -277,8 +316,8 @@ class MiniMaxH3FantasticRefModTextEncode:
                            "pixel area; 'max' keeps up to a 2048 px short edge for identity, at a "
                            "cost in speed. RefMods keep the size they were saved at."}),
             "reference_fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0,
-                "tooltip": "Playback rate assumed for a reconstructed RefMod video. "
-                           "Compressed or stacked references do not keep their original timing."}),
+                "tooltip": "Playback rate assumed for a RefMod clip, to pick the frames H3's encoder "
+                           "is shown (two a second). Stacks use stack_pictures instead."}),
             "max_total_tokens": ("INT", {"default": 0, "min": 0, "max": 2147483647,
                 "tooltip": "Refuse RefMod bundles over this many reference tokens. 0 = no limit."}),
         }, "optional": {
@@ -294,11 +333,22 @@ class MiniMaxH3FantasticRefModTextEncode:
                            "go. On: each voice RefMod's saved Voice description is also written right after its "
                            "<Audio N>: label, where H3's encoder is introduced to the reference. Off: the bare "
                            "label, exactly as core writes it."}),
+            "stack_pictures": (list(STACK_PICTURES), {"default": "every 4th",
+                "tooltip": "EXPERIMENTAL: How many pictures of a RefMod the text encoder sees (only RefMods made "
+                           "from several pictures; clips and single pictures aren't affected). More pictures may "
+                           "help lock in identity and reduce bleeding when using several RefMods, but increase "
+                           "memory use and generation time.\n\n"
+                           "• every 4th (default): the first picture and every 4th after it. Fewest tokens; good "
+                           "for a single RefMod.\n"
+                           "• up to 8: 8 pictures spread across the stack. Costs more, possibly better identity "
+                           "retention.\n"
+                           "• all: every picture. The most expensive, and can greatly increase generation time, "
+                           "but early tests suggest it helps with bleed between similar-looking characters."}),
         }, "hidden": {"extra_pnginfo": "EXTRA_PNGINFO"}}
 
     def encode(self, clip, prompt, width=1344, height=768, length=124, ref_image_size="match",
                reference_fps=24.0, max_total_tokens=0, mods=None, references=None, vae=None, audio_vae=None,
-               voice_description_at_label=False, extra_pnginfo=None):
+               voice_description_at_label=False, stack_pictures="every 4th", extra_pnginfo=None):
         try:
             from comfy.text_encoders.minimax import MiniMaxH3Tokenizer
             from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
@@ -350,9 +400,9 @@ class MiniMaxH3FantasticRefModTextEncode:
             if items and audio_vae is None and any(i["type"] == "audio" for i in items):
                 print("[MiniMaxH3FantasticRefModTextEncode] media audio has no audio VAE: "
                       "it conditions the text encoder only")
-        # A copy is the same latent again: decode each one once and reuse the
-        # pixels for every label it gets.
-        decoded = {}
+        # A copy is the same RefMod again: fetch its frames once and reuse
+        # them for every label it gets.
+        shown = {}
         voiced = 0
         if voice_description_at_label and not native:
             print("[MiniMaxH3FantasticRefModTextEncode] voice_description_at_label needs the native H3 CLIP; ignored")
@@ -374,31 +424,36 @@ class MiniMaxH3FantasticRefModTextEncode:
                 voiced += 1
             mapping.append(f"<{KIND_LABEL[kind]} {counters[kind]}> = {mod.name}" + (" \u00b7 voice description at label" if voice else ""))
             if kind != "audio":
-                key = (id(mod), round(float(strength), 4))
-                if key not in decoded:
-                    # Show the encoder the same weakened latent the DiT receives.
+                first = id(mod) not in shown
+                if first:
                     t0 = time.perf_counter()
-                    pixels = vae.decode(block["latent"])
-                    if pixels.ndim == 5 and pixels.shape[0] == 1:
-                        pixels = pixels[0]
-                    if pixels.ndim != 4 or pixels.shape[-1] != 3 or pixels.shape[0] < 1:
-                        raise ValueError(f"Unexpected VAE decode shape {tuple(pixels.shape)}.")
-                    decoded[key] = pixels.cpu()
-                    del pixels
-                    print(f"[MiniMaxH3FantasticRefModTextEncode] decoded {mod.name} for the encoder: "
-                          f"{tuple(decoded[key].shape[:3])} ({time.perf_counter() - t0:.1f}s)")
-                pixels = decoded[key]
+                    shown[id(mod)] = encoder_view(mod, vae, reference_fps)
+                frames, times, how = shown[id(mod)]
+                # weakened as the latent the DiT receives is
+                frames = soften(frames, strength, mod.latent_h, mod.latent_w)
                 if kind == "image":
-                    item["data"] = pixels[:1].clone()
+                    item["data"] = frames[:1].clone()
+                    what = "1 picture"
+                elif mod.source == "stack":
+                    idx = stack_picks(frames.shape[0], stack_pictures)
+                    if stack_pictures == "every 4th":
+                        # two to a block, as a clip sampled at two frames a second
+                        item["data"], item["timestamps"] = frames[idx], [i / 2 for i in range(len(idx))]
+                    else:
+                        # a block each: every picture held for its second, sampled twice
+                        item["data"] = frames[idx].repeat_interleave(2, dim=0)
+                        item["timestamps"] = [k + d for k in range(len(idx)) for d in (0.0, 0.5)]
+                    what = f"{len(idx)} of {frames.shape[0]} pictures"
                 else:
-                    # Native H3 presents video at 2 fps, indexed by timestamp.
-                    times = [i / 2 for i in range(math.ceil(pixels.shape[0] * 2 / reference_fps))]
-                    idx = [min(round(t * reference_fps), pixels.shape[0] - 1) for t in times]
-                    item["data"] = pixels[idx].clone()
+                    item["data"] = frames.clone()
                     item["timestamps"] = times
+                    what = f"{frames.shape[0]} frame{'s' if frames.shape[0] != 1 else ''}"
+                if first:
+                    print(f"[MiniMaxH3FantasticRefModTextEncode] {mod.name} for the encoder: {what}, {how} "
+                          f"({time.perf_counter() - t0:.1f}s)")
             items.append(item)
             blocks.append(block)
-        del decoded
+        del shown
         if blocks:
             # Let the VAE's working memory go before the text encoder loads.
             mm.soft_empty_cache()
@@ -415,6 +470,9 @@ class MiniMaxH3FantasticRefModTextEncode:
         else:
             tokens = clip.tokenize(prompt, minimax_ref_items=items)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
+        if blocks:
+            print(f"[MiniMaxH3FantasticRefModTextEncode] conditioning: {conditioning[0][0].shape[1]:,} tokens "
+                  "(the prompt plus what the encoder was shown), also riding through every sampling step")
         out = []
         for embedding, metadata in conditioning:
             if "minimax_token_tags" not in metadata:

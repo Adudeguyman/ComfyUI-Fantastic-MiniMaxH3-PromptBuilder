@@ -20,15 +20,18 @@ format (consumed in comfy/model_base.py), the same shape the native
 reference node builds.
 """
 
+import io
 import json
 import math
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
-from safetensors.torch import load_file
+from PIL import Image
+from safetensors import safe_open
 
 from .refmods import read_meta
 
@@ -182,6 +185,8 @@ class H3RefMod:
     voice_description: str = ""   # drafted onto the voice line and the speaker buttons
     retained_attributes: str = ""   # drafted onto the end of the subject's retention note
     path: str = ""
+    enc_times: List[float] = field(default_factory=list)   # frames stored for the text encoder, by timestamp
+    enc_fps: float = 0.0          # the playback rate they were picked at
 
     def __post_init__(self):
         if self.kind == "audio":
@@ -246,12 +251,13 @@ class H3RefMod:
             if member is None or not 0 <= member < len(refs):
                 raise ValueError(f"{os.path.basename(path_no_ext)} is a RefMod bundle; "
                                  "pick one of its members from the library.")
-            from safetensors import safe_open
             with safe_open(path_no_ext + ".safetensors", framework="pt", device=device) as fh:
                 latent = fh.get_tensor(f"ref_{member}").clone()
             meta = refs[member]
         else:
-            latent = load_file(path_no_ext + ".safetensors", device=device)["latent"].clone()
+            # only the latent: stored encoder frames are read when the Text Encode needs them
+            with safe_open(path_no_ext + ".safetensors", framework="pt", device=device) as fh:
+                latent = fh.get_tensor("latent").clone()
         raw_config = meta.get("refmod_config")
         try:
             config = json.loads(raw_config) if isinstance(raw_config, str) else {}
@@ -280,7 +286,94 @@ class H3RefMod:
             voice_description=str(meta.get("voice_description", "") or ""),
             retained_attributes=str(meta.get("retained_attributes", "") or ""),
             path=path_no_ext,
+            enc_times=[float(t) for t in meta.get("enc_times") or []],
+            enc_fps=float(meta.get("enc_fps") or 0.0),
         )
+
+
+# ---------------------------------------------------- the encoder's frames
+#
+# The Text Encode shows each visual RefMod to H3's text encoder as pixels,
+# which the latent has to be decoded into. Doing that on every run is the
+# cost; instead new RefMods carry the frames the encoder takes, and the Text
+# Encode keeps them for older ones (refmod_nodes.encoder_view).
+
+ENC_FPS = 24.0      # the playback rate stored frames are picked at (reference_fps's default)
+
+
+def encoder_picks(n, fps):
+    """(indices, timestamps) of the frames H3's text encoder takes from an
+    n-frame clip played at `fps`: two a second, as the native path samples video."""
+    times = [i / 2 for i in range(math.ceil(n * 2 / fps))]
+    return [min(round(t * fps), n - 1) for t in times], times
+
+
+def _decoded(vae, z):
+    pixels = vae.decode(z)
+    if pixels.ndim == 5 and pixels.shape[0] == 1:
+        pixels = pixels[0]
+    if pixels.ndim != 4 or pixels.shape[-1] != 3 or pixels.shape[0] < 1:
+        raise ValueError(f"Unexpected VAE decode shape {tuple(pixels.shape)}.")
+    return pixels
+
+
+def decode_for_encoder(mod, vae, fps=ENC_FPS):
+    """A visual RefMod's frames for the text encoder, at full strength:
+    ([N, H, W, 3] frames on the CPU, their timestamps). A stack's frames are
+    separate pictures, so each is decoded on its own and every one is kept;
+    the Text Encode's stack_pictures picks the ones the encoder sees. A clip
+    is sampled at two frames a second, as the native path samples video."""
+    if mod.source == "stack":
+        frames = [_decoded(vae, mod.latent[:, :, i:i + 1])[:1].cpu() for i in range(mod.latent.shape[2])]
+        return torch.cat(frames), [float(i) for i in range(len(frames))]
+    pixels = _decoded(vae, mod.latent)
+    if mod.kind == "image":
+        return pixels[:1].cpu(), [0.0]
+    idx, times = encoder_picks(pixels.shape[0], fps)
+    return pixels[idx].cpu(), times
+
+
+def pack_frames(frames):
+    """[N, H, W, 3] frames in 0..1 as JPEG bytes, one uint8 tensor each."""
+    out = {}
+    for i, f in enumerate(frames):
+        buf = io.BytesIO()
+        Image.fromarray((f.float().clamp(0, 1) * 255).round().to(torch.uint8).numpy()).save(buf, "JPEG", quality=95)
+        out[f"enc_{i}"] = torch.frombuffer(bytearray(buf.getvalue()), dtype=torch.uint8)
+    return out
+
+
+def unpack_frames(tensors):
+    """pack_frames' tensors back to [N, H, W, 3] frames in 0..1."""
+    n = sum(1 for k in tensors if k.startswith("enc_"))
+    return torch.stack([torch.from_numpy(np.array(Image.open(io.BytesIO(tensors[f"enc_{i}"].numpy().tobytes()))
+                                                  .convert("RGB"))).float() / 255 for i in range(n)])
+
+
+def encoder_record(mod, vae):
+    """What save_mod stores for the text encoder: decoded once, packed."""
+    frames, times = decode_for_encoder(mod, vae)
+    return pack_frames(frames), times, ENC_FPS
+
+
+def stored_record(mod):
+    """The encoder frames saved in a RefMod's file, as save_mod takes them, or None."""
+    if not mod.enc_times or not mod.path:
+        return None
+    with safe_open(mod.path + ".safetensors", framework="pt") as fh:
+        packed = {f"enc_{i}": fh.get_tensor(f"enc_{i}") for i in range(len(mod.enc_times))}
+    return packed, list(mod.enc_times), mod.enc_fps
+
+
+def soften(frames, strength, latent_h, latent_w):
+    """Encoder frames weakened the way ref_block weakens the latent: mixed
+    toward the same heavy low-pass, _blur_latent's cells taken in pixels."""
+    if strength >= 1.0:
+        return frames
+    x = frames.movedim(-1, 1).float()
+    down = F.adaptive_avg_pool2d(x, (max(1, latent_h // 8), max(1, latent_w // 8)))
+    up = F.interpolate(down, size=x.shape[-2:], mode="bilinear", align_corners=False)
+    return (strength * x + (1.0 - strength) * up).movedim(1, -1)
 
 
 # ---------------------------------------------------------------- cache

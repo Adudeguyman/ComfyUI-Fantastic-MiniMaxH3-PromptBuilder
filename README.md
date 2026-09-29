@@ -1243,6 +1243,16 @@ come along). A RefMod that had no voice is renamed to the
 only change, just the file headers are rewritten. **Fantastic H3 Edit RefMod** is
 the node behind it, should you want it in a graph.
 
+**Store encoder frames** is for RefMods saved before they carried the
+frames H3's text encoder is shown. Without them, RefMod Text Encode has to
+decode the RefMod (once, then it keeps the frames in its cache). This adds
+them to the file for good: one RefMod from its details panel, or every one
+still missing them from the button beside the sort menu. Each is decoded
+once, through the queue with the video VAE; its latent isn't touched. A
+RefMod made from several pictures keeps every picture, which roughly
+doubles its file.
+**Fantastic H3 Store RefMod Encoder Frames** is the node behind it.
+
 The **Create** tab makes new ones. Drop pictures, clips or audio anywhere
 on the library, or pull the items from any Media Loader in the workflow
 (the loader's right-click menu has *RefMod library* for the same thing), so
@@ -1346,7 +1356,13 @@ encoder during tokenization, so the prompt can cite `<Picture n>`,
 RefMods after it, one counter per kind with every copy numbered, and the
 map is reported on `reference_map`. Loader media is sized as the native
 node sizes it (`width`, `height`, `length` and `ref_image_size` are the
-same settings); RefMods keep the size they were saved at. Connect its
+same settings); RefMods keep the size they were saved at. A clip is shown
+to the encoder at two frames a second, as the native node samples video.
+For a RefMod made from several pictures, `stack_pictures` (experimental)
+sets how many of them the encoder sees: every 4th (the default and the
+fewest tokens), up to 8, or all. More may help lock in identity and reduce
+bleed between RefMods, but what the encoder sees rides through every
+sampling step, so it costs memory and generation time. Connect its
 conditioning straight to the sampler — it has already attached the
 references — and its `latent` output is the empty AV latent to sample
 from, so no separate Empty Latent node is needed. The builder shows the same

@@ -28,7 +28,7 @@ import comfy.utils
 import comfy.model_management as mm
 
 from . import media_io
-from .refmod_core import H3RefMod
+from .refmod_core import H3RefMod, encoder_record
 from .refmods import search_dirs, valid_rel, sanitize_name, _contained_target, clean_subject_name, clean_description, PREVIEW_EXT
 
 CONCEPT_TYPES = ("generic", "identity", "pose_motion", "clothing", "background",
@@ -310,7 +310,10 @@ def target_root():
     return dirs[0]
 
 
-def save_mod(mod, path_no_ext):
+def save_mod(mod, path_no_ext, frames=None):
+    """Write a RefMod. `frames` is the text encoder's frames (packed, their
+    timestamps, the fps they were picked at), stored beside the latent so the
+    Text Encode never decodes this RefMod."""
     os.makedirs(os.path.dirname(path_no_ext) or ".", exist_ok=True)
     meta = {
         "name": mod.name, "kind": mod.kind,
@@ -329,7 +332,11 @@ def save_mod(mod, path_no_ext):
     fd, tmp = tempfile.mkstemp(prefix=".refmod-", suffix=".tmp", dir=os.path.dirname(dest) or ".")
     os.close(fd)
     try:
-        save_file({"latent": mod.latent.contiguous()}, tmp, metadata={"refmod_meta": json.dumps(meta)})
+        tensors = {"latent": mod.latent.contiguous()}
+        if frames:
+            packed, meta["enc_times"], meta["enc_fps"] = frames
+            tensors.update(packed)
+        save_file(tensors, tmp, metadata={"refmod_meta": json.dumps(meta)})
         os.replace(tmp, dest)
     finally:
         if os.path.exists(tmp):
@@ -573,6 +580,7 @@ class MiniMaxH3FantasticRefModCreate:
                 optimize_steps=refinement_steps if mode_key == "training" else 0,
                 tags=[tag], description=description or "", concept_type=concept_type,
                 **described), info)
+            look_frames = encoder_record(look[0], vae)
         pbar.update_absolute(75)
         vmod = None
         if voice is not None:
@@ -591,7 +599,8 @@ class MiniMaxH3FantasticRefModCreate:
                 mod, info = look
                 stem = os.path.join(root, base + ("_visual" if both else ""))
                 mod.path = stem
-                saved.append(save_mod(mod, stem))
+                saved.append(save_mod(mod, stem, look_frames))
+                mod.enc_times, mod.enc_fps = look_frames[1], look_frames[2]
                 mods.append((mod, 1.0))
                 for n in info["notes"]:
                     print(f"[MiniMaxH3FantasticRefModCreate] {clean}: {n}")
