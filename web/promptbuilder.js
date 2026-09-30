@@ -3192,7 +3192,7 @@ class Editor {
 
     // Right-click on a selection offers to save it. The browser's own menu
     // is only replaced when there IS a selection in one of our fields, and
-    // Copy is included so nothing is taken away.
+    // Copy, Cut, Paste and Remove are included so nothing is taken away.
     this.formEl.addEventListener("contextmenu", (e) => {
       const box = e.target;
       if (!box || typeof box.value !== "string") return;
@@ -3208,7 +3208,7 @@ class Editor {
       }
       if (b <= a) return;                       // no selection: native menu
       e.preventDefault();
-      this.openCtx(e.clientX, e.clientY, box.value.slice(a, b));
+      this.openCtx(e.clientX, e.clientY, box, a, b);
     });
     this.formEl.addEventListener("input", () => {
       this.updatePreview();
@@ -5608,8 +5608,9 @@ class Editor {
     this._ctxMenu = null;
   }
 
-  openCtx(x, y, text) {
+  openCtx(x, y, box, a, b) {
     this.closeCtx();
+    const text = box.value.slice(a, b);
     const item = (label, fn) => el("div", { class: "mmh3-ctxitem",
       onclick: () => { this.closeCtx(); fn(); } }, label);
     const menu = el("div", { class: "mmh3-ctxmenu" },
@@ -5617,7 +5618,20 @@ class Editor {
       item("Copy", async () => {
         const ok = await copyText(text);
         if (!ok) toast("Couldn't reach the clipboard", 4000);
-      }));
+      }),
+      item("Cut", async () => {
+        if (await copyText(text)) editField(box, a, b, "");
+        else toast("Couldn't reach the clipboard", 4000);
+      }),
+      item("Paste", async () => {
+        // Pages may only read the clipboard on https or localhost, and the
+        // browser can ask first; Ctrl+V works everywhere.
+        let clip = "";
+        try { clip = await navigator.clipboard.readText(); } catch (e) { /* not allowed here */ }
+        if (clip) editField(box, a, b, clip);
+        else toast("Couldn't read text from the clipboard \u2014 press Ctrl+V instead", 4500);
+      }),
+      item("Remove", () => editField(box, a, b, "")));
     document.body.append(menu);
     // Keep it on screen when the click lands near an edge.
     const r = menu.getBoundingClientRect();

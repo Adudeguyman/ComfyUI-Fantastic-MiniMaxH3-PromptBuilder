@@ -50,6 +50,41 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.8.0
+
+- **Masked video editing.** Mark part of a clip and only that area is
+  regenerated; the rest stays as filmed. Right-click a video on the Media
+  Loader and choose **◐ Mask for editing…**. The mask is built from layers,
+  new ones on top, each adding to or cutting from those below: **Auto Mask**
+  (SAM 3.1, from dots and a name), keyframed **ellipses, rectangles and
+  polygons**, and **brush** strokes. Grow, feather, invert and crop to mask
+  shape it. The RefMod Text Encode builds the edit, and the new **Fantastic
+  H3 Edit Composite** pastes exactly the regenerated area back into your
+  original frames. It needs the SAM 3.1 checkpoint; see
+  [Editing a clip with a mask](#editing-a-clip-with-a-mask).
+- **A faster RefMod Text Encode.** RefMods now keep the pictures the text
+  encoder is shown inside their file, so it no longer decodes them on every
+  run. Older ones are decoded once and cached, and the library's **Store
+  encoder frames** adds them to old files for good.
+- **stack_pictures** (experimental) on the Text Encode sets how many of a
+  RefMod's pictures the encoder sees: every 4th (the default, about what it
+  saw before), up to 8, or all. More may help identity and bleeding between
+  RefMods, but costs memory and generation time.
+- **Trim editor.** Zoom the timeline (−/+, the slider, the - and = keys, or
+  scroll), see how far the playhead is past the first kept frame, and stop
+  losing work to a stray click or Esc: with unsaved changes it asks first.
+  Ctrl+Z inside it no longer undoes the graph. Loader rows show each clip's
+  length beside ✂, and video cards show their aspect ratio as sent.
+- **Right-click selected text** in any builder field for Copy, Cut, Paste
+  and Remove, alongside Save selection as phrase.
+- **Clean up…** in the Media Loader deletes mask files nothing uses and
+  saved latents, keeps masks used by saved media sets and drafts, and
+  offers itself once unused masks pass 500 MB (set the size in its ⚙ menu).
+- **voice_description_at_label** on the Text Encode also writes each voice
+  RefMod's saved description right after its `<Audio n>:` label.
+- New RefMods default to a **768 px** short edge (was 1024).
+- The 📖 Guide adds **Part E** on masked editing.
+
 ## What's new in 1.7.4
 
 - **Compressed RefMods no longer squash faces.** A photo of a different
@@ -173,25 +208,6 @@ reference picture or clip. New to them? See the
   like any other draft (it used to be lost on reload).
 - Security: the pack has a `SECURITY.md`, and its code no longer contains
   anything the Comfy Registry's automated scan flags.
-
----
-
-## What's new in 1.6.4
-
-**Features:**
-
-- A new **Delivery** row in the editor, directly under the dialogue row,
-  inserts the community-found performance tags that shape how a line is
-  spoken: pauses and breaths, emphasis and whispering, and non-verbal
-  sounds such as laughs, sighs and gasps. Pick a group, pick a tag, and
-  hover the picker to preview an example line before inserting it. These
-  tags aren't in MiniMax's published guide, so results may vary.
-- The tags that wrap text, like `<i>` and `<whisper>`, wrap whatever you
-  have selected and leave it selected. With nothing selected, the caret
-  lands between the opening and closing halves, ready to type.
-- The bundled writing guide has a new **Community Discoveries** section
-  listing the same tags with an example for each, clearly marked as
-  community findings rather than official guidance.
 
 Older releases are in the [changelog](CHANGELOG.md).
 
@@ -404,6 +420,9 @@ another speaker and its name and voice clause become theirs, and removing
 the ID drops the voice clause but keeps the name. Swapping IDs everywhere
 only renumbers, so every line keeps its speaker.
 This tag and Field can be undone with Ctrl+Z.
+
+**Right-click selected text** in any field for **Copy**, **Cut**, **Paste**
+and **Remove**, or to save it as a phrase. Ctrl+Z undoes Cut, Paste and Remove.
 
 **Things it checks:** shots numbered in order, cut times increasing and inside
 your video's length, `[Shot 1]` not carrying a timestamp, dialogue tags balanced
@@ -1468,7 +1487,13 @@ past about 30,000. With crop to mask, only the cropped box is cited, which
 matches what's generated and costs far less. If an edit comes back as the
 clip unchanged, lower **reference strength** in the mask settings: the cited clip is
 then mixed toward a blurred copy, so it still gives the model the colours
-and placement but not detail it can copy back. Describe the
+and placement but not detail it can copy back. **Masked area in the
+reference** (experimental) is for replacing a whole person, where the
+original tends to creep back: **blurred** softens the masked area of the
+cited clip by the **blur** radius, and **inverted** turns it into a
+photographic negative that keeps shape, movement and expressions;
+**blurred and inverted** does both. Everything outside the mask stays as it
+is. Describe the
 finished clip, including what the masked area becomes; when removing
 something, describe what's there instead and don't name it.
 

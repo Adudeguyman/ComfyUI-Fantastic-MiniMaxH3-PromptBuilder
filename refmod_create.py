@@ -455,7 +455,7 @@ class MiniMaxH3FantasticRefModCreate:
                 "subfolder": ("STRING", {"default": "", "tooltip": "Folder under models/refmods, e.g. characters."}),
                 "mode": (list(MODES.keys()), {"default": "Compressed Reference",
                     "tooltip": "Full keeps the most detail and is heavier to use. Compressed keeps the overall look and is much lighter."}),
-                "ref_resolution": ("INT", {"default": 1024, "min": 256, "max": 2048, "step": 32,
+                "ref_resolution": ("INT", {"default": 768, "min": 256, "max": 2048, "step": 32,
                     "tooltip": "Short edge each source is scaled down to before encoding (never up)."}),
                 "grid": ("INT", {"default": 16, "min": 2, "max": 64, "step": 2,
                     "tooltip": "Compressed: size of the small grid on its long edge. 16 is up to 64 tokens per frame."}),

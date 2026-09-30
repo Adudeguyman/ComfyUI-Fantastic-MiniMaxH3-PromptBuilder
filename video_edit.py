@@ -179,6 +179,42 @@ def _h3():
     return FRAME_PER_TOKEN, MiniMaxH3VideoVAE, temporal_shape, _encode_ref_audio
 
 
+def hide_area(frames, obj, box, w, h, invert, how, radius):
+    """The cited clip with its masked area changed, so the original doesn't
+    creep back into the edit: `obj` (from shape(), over the whole w x h frame)
+    cut to the crop box and brought to the frames' size, turned inside out
+    when the edit is inverted; in there the frames get a Gaussian blur of
+    `radius` source pixels ("blur"), become a photographic negative
+    ("invert"), or both ("blur_invert"). `frames` [n, th, tw, 3] is left as it
+    is; the result is new."""
+    if box:
+        x, y, bw, bh = box
+        mh, mw = obj.shape[1:]
+        obj = obj[:, round(y * mh / h):round((y + bh) * mh / h), round(x * mw / w):round((x + bw) * mw / w)]
+    n, th, tw = frames.shape[:3]
+    dev = mm.get_torch_device()
+    if how != "invert":
+        sigma = radius * tw / (box[2] if box else w)     # source pixels, on the cited clip's size
+        r = max(1, math.ceil(3 * sigma))
+        k = torch.exp(-0.5 * (torch.arange(-r, r + 1, device=dev, dtype=torch.float32) / sigma) ** 2)
+        k = (k / k.sum()).repeat(3, 1, 1, 1)
+    out = torch.empty_like(frames)
+    for i in range(0, n, CHUNK):
+        m = resize_mask(obj[i:i + CHUNK], tw, th).to(dev)[:, None]
+        if invert:
+            m = 1.0 - m
+        f = frames[i:i + CHUNK].to(dev, torch.float32).movedim(-1, 1)
+        if how == "invert":
+            hidden = 1.0 - f
+        else:
+            hidden = F.conv2d(F.pad(f, (r, r, 0, 0), mode="replicate"), k.view(3, 1, 1, -1), groups=3)
+            hidden = F.conv2d(F.pad(hidden, (0, 0, r, r), mode="replicate"), k.view(3, 1, -1, 1), groups=3)
+            if how == "blur_invert":
+                hidden = 1.0 - hidden
+        out[i:i + CHUNK] = torch.lerp(f, hidden, m).movedim(1, -1).to(out.device, out.dtype)
+    return out
+
+
 def cell_mask(obj, box, w, h, tw, th, invert, feather):
     """What an edit regenerates, on H3's latent grid: the grown object mask
     (`obj` [n, mh, mw] from shape(), over the whole w x h frame) cut to the

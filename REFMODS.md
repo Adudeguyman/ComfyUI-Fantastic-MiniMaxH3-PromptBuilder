@@ -257,6 +257,10 @@ Click **Details** on a card to open its panel. From there you can:
 - Describe its **Appearance**, **Retained attributes** and **Voice**. All
   three are saved inside the file, and drafting puts them into the prompt.
 - **Replace preview** to set a nicer thumbnail.
+- **Store encoder frames**, for a RefMod saved before RefMods kept the
+  pictures the text encoder is shown, so the Text Encode doesn't have to
+  decode it. The button beside the sort menu does every RefMod still
+  missing them.
 - **Delete** it. You'll be asked to click twice.
 
 Click **Save changes** when you're done.

@@ -475,6 +475,8 @@ class MiniMaxH3MediaLoader:
             bundle["edit"]["context"] = (float(edit.get("mask_context") or 1.75)
                                          if edit.get("mask_crop") and not edit.get("mask_invert") else 0.0)
             bundle["edit"]["ref_strength"] = float(edit.get("mask_ref_strength") or 1.0)
+            bundle["edit"]["hide"] = edit.get("mask_hide") if edit.get("mask_hide") in ("blur", "invert", "blur_invert") else "off"
+            bundle["edit"]["blur"] = float(edit.get("mask_blur") or 24.0)
             print(f"[MiniMaxH3 Loader] editing {edit.get('name') or edit['file']} (also cited as a reference)")
         # Each video's settings, index for index with "videos": what the Text
         # Encode keys its saved reference latents on.

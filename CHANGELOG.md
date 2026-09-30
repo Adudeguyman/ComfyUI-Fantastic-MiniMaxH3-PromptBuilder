@@ -3,6 +3,41 @@
 Every release of **ComfyUI Fantastic H3 Prompt Builder**, newest first. The
 [README](README.md) keeps the recent ones; everything older lives here.
 
+## 1.8.0
+
+- **Masked video editing.** Mark part of a clip and only that area is
+  regenerated; the rest stays as filmed. Right-click a video on the Media
+  Loader and choose **◐ Mask for editing…**. The mask is built from layers,
+  new ones on top, each adding to or cutting from those below: **Auto Mask**
+  (SAM 3.1, from dots and a name), keyframed **ellipses, rectangles and
+  polygons**, and **brush** strokes. Grow, feather, invert and crop to mask
+  shape it. The RefMod Text Encode builds the edit, and the new **Fantastic
+  H3 Edit Composite** pastes exactly the regenerated area back into your
+  original frames. It needs the SAM 3.1 checkpoint; see
+  [Editing a clip with a mask](README.md#editing-a-clip-with-a-mask).
+- **A faster RefMod Text Encode.** RefMods now keep the pictures the text
+  encoder is shown inside their file, so it no longer decodes them on every
+  run. Older ones are decoded once and cached, and the library's **Store
+  encoder frames** adds them to old files for good.
+- **stack_pictures** (experimental) on the Text Encode sets how many of a
+  RefMod's pictures the encoder sees: every 4th (the default, about what it
+  saw before), up to 8, or all. More may help identity and bleeding between
+  RefMods, but costs memory and generation time.
+- **Trim editor.** Zoom the timeline (−/+, the slider, the - and = keys, or
+  scroll), see how far the playhead is past the first kept frame, and stop
+  losing work to a stray click or Esc: with unsaved changes it asks first.
+  Ctrl+Z inside it no longer undoes the graph. Loader rows show each clip's
+  length beside ✂, and video cards show their aspect ratio as sent.
+- **Right-click selected text** in any builder field for Copy, Cut, Paste
+  and Remove, alongside Save selection as phrase.
+- **Clean up…** in the Media Loader deletes mask files nothing uses and
+  saved latents, keeps masks used by saved media sets and drafts, and
+  offers itself once unused masks pass 500 MB (set the size in its ⚙ menu).
+- **voice_description_at_label** on the Text Encode also writes each voice
+  RefMod's saved description right after its `<Audio n>:` label.
+- New RefMods default to a **768 px** short edge (was 1024).
+- The 📖 Guide adds **Part E** on masked editing.
+
 ## 1.7.4
 
 - **Compressed RefMods no longer squash faces.** A photo of a different

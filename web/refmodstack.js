@@ -1447,7 +1447,7 @@ function clampSetting(key, value, fallback) {
   return Math.min(r[1], Math.max(r[0], v));
 }
 function loadSettings() {
-  const d = { mode: "Compressed Reference", ref_resolution: 1024, grid: 16, latent_frames: 22,
+  const d = { mode: "Compressed Reference", ref_resolution: 768, grid: 16, latent_frames: 22,
     refinement_steps: 500, max_tokens: 5120, audio_max_seconds: 30, concept_type: "generic",
     subfolder: "", write_preview: true, videoVae: "", audioVae: "", combine: true };
   let st = d;

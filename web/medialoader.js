@@ -2234,7 +2234,7 @@ class TrimModal {
 
 const MASK_NODE = "MiniMaxH3FantasticObjectMask";
 const MASK_KEYS = ["edit", "mask_box", "mask", "mask_info", "mask_layers", "mask_grow", "mask_range", "keep_audio",
-  "mask_feather", "mask_invert", "mask_crop", "mask_context", "mask_ref_strength"];
+  "mask_feather", "mask_invert", "mask_crop", "mask_context", "mask_ref_strength", "mask_hide", "mask_blur"];
 const REF_TOKEN_WARN = 30000;   // matches the Text Encode's warning
 
 /** Reference tokens a loader clip costs when cited, as the Text Encode will
@@ -2692,7 +2692,10 @@ class MaskMode {
     this.context = Number.isFinite(+item.mask_context) && +item.mask_context > 0 ? +item.mask_context : 1.75;
     this.keepAudio = item.keep_audio !== false;
     this.refStrength = Number.isFinite(+item.mask_ref_strength) && +item.mask_ref_strength > 0 ? +item.mask_ref_strength : 1;
+    this.hide = ["blur", "invert", "blur_invert"].includes(item.mask_hide) ? item.mask_hide : "off";
+    this.blur = Number.isFinite(+item.mask_blur) && +item.mask_blur > 0 ? +item.mask_blur : 24;
     this.build();
+    this.syncHide();
     const onTime = () => this.onTime();
     host.media.addEventListener("timeupdate", onTime);
     host.media.addEventListener("seeked", onTime);
@@ -2769,6 +2772,25 @@ class MaskMode {
       "is. Lower mixes it toward a blurred copy: its colours and placement stay, its detail goes, so the model has to " +
       "generate the masked area instead of copying the clip back. Try 0.5 when an edit comes back unchanged.",
       0.2, 1, 0.05, () => this.refStrength, (v) => { this.refStrength = v; }, "", 2);
+    this.hideSel = el("select", { class: "mml-mkckpt",
+      onchange: (e) => { this.hide = e.target.value; this.dirty = true; this.syncHide(); this.syncFoot(); } },
+      [["off", "unchanged"], ["blur", "blurred"], ["invert", "inverted"], ["blur_invert", "blurred and inverted"]].map(([v, t]) =>
+        el("option", { value: v, selected: v === this.hide }, t)));
+    // the slider covers 1-64; typing goes further, for big clips
+    const setBlur = (v) => {
+      const n = Math.round(v);
+      this.blur = n >= 1 ? Math.min(256, n) : this.blur;      // a cleared or zero box keeps the last value
+      blurRange.value = blurNum.value = this.blur;
+      this.dirty = true; this.syncFoot();
+    };
+    const blurRange = el("input", { type: "range", min: 1, max: 64, step: 1, value: this.blur,
+      oninput: (e) => setBlur(+e.target.value) });
+    const blurNum = el("input", { type: "number", class: "mml-tmnum", min: 1, max: 256, step: 1, value: this.blur,
+      onchange: (e) => setBlur(+e.target.value), onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } });
+    this.blurS = { range: blurRange, num: blurNum, el: el("label", { class: "mml-mklbl", title: "How much the masked " +
+      "area is blurred: the Gaussian radius, in the clip's own pixels. A few pixels soften what makes someone " +
+      "recognisable while eyes, mouth and expression still read; 20 or more leaves only the silhouette and movement." },
+      "blur", blurRange, blurNum, "px") };
     this.invertIn = el("input", { type: "checkbox", checked: this.invert,
       onchange: (e) => { this.invert = e.target.checked; this.dirty = true; this.syncCrop(); this.refresh(); } });
     this.cropIn = el("input", { type: "checkbox", checked: this.cropOn,
@@ -2805,9 +2827,17 @@ class MaskMode {
           this.audioIn = el("input", { type: "checkbox", checked: this.keepAudio,
             onchange: (e) => { this.keepAudio = e.target.checked; this.dirty = true; this.syncFoot(); } }),
           "keep the original sound") : null,
-        this.refS.el,
-        el("span", { class: "mml-tmgap" }),
-        this.costEl),
+        this.refS.el),
+      el("div", { class: "mml-tmfoot" },
+        el("label", { class: "mml-mklbl", style: { whiteSpace: "nowrap" }, title: "EXPERIMENTAL: What the model sees " +
+          "inside the mask in the clip it's shown as a reference. Blurred or inverted, the original person is less " +
+          "likely to creep back into the edit: blurred keeps their colours and movement, and the blur slider sets how " +
+          "much detail goes; inverted keeps their shape, movement and expressions as a photographic negative; " +
+          "blurred and inverted does both, so even less of the original gets through. " +
+          "Everything outside the mask stays as it is. Worth trying when replacing a whole person." },
+          "Masked area in the reference:", this.hideSel),
+        this.blurS.el),
+      el("div", { class: "mml-tmfoot" }, this.costEl),
       this.status,
       el("div", { class: "mml-tmfoot act" },
         this.clearBtn, this.overBtn,
@@ -3705,6 +3735,11 @@ class MaskMode {
     this.costEl.classList.toggle("err", n > REF_TOKEN_WARN);
   }
 
+  /** The blur slider only means something while the masked area is blurred. */
+  syncHide() {
+    this.blurS.el.style.display = this.hide === "blur" || this.hide === "blur_invert" ? "" : "none";
+  }
+
   syncFoot() {
     const content = this.layers.some((l) => l.visible !== false && layerDraws(l));
     this.unsaved.hidden = !this.dirty;
@@ -3771,7 +3806,8 @@ class MaskMode {
         mask_range: { start: +start.toFixed(2), end: +(end || h.dur).toFixed(2) },
         mask_grow: this.grow, mask_feather: this.feather, mask_invert: this.invert,
         mask_crop: this.cropOn && !this.invert, mask_context: this.context,
-        mask_box: this.cropOn && !this.invert ? this.cropBox : null, mask_ref_strength: this.refStrength });
+        mask_box: this.cropOn && !this.invert ? this.cropBox : null, mask_ref_strength: this.refStrength,
+        mask_hide: this.hide, mask_blur: this.blur });
       if (it.has_audio) it.keep_audio = this.keepAudio;
       h.panel.say(`${it.name} is the clip being edited. Describe the finished clip in your prompt.`);
       h.apply(true);
@@ -3804,7 +3840,9 @@ class MaskMode {
     this.layers.push(this.newLayer("auto"));
     this.sel = this.layers[0].id; this.drawing = null;
     this.grow = 16; this.feather = 12; this.invert = false; this.cropOn = false; this.context = 1.75;
-    this.keepAudio = true; this.refStrength = 1;
+    this.keepAudio = true; this.refStrength = 1; this.hide = "off"; this.hideSel.value = "off";
+    this.blur = this.blurS.range.value = this.blurS.num.value = 24;
+    this.syncHide();
     for (const [s, v] of [[this.growS, 16], [this.featherS, 12], [this.contextS, 1.75], [this.refS, 1]]) {
       s.input.value = v; s.val.textContent = `${v.toFixed(s.digits)}${s.unit}`;
     }

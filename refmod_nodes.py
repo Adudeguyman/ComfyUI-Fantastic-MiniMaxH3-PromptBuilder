@@ -27,7 +27,7 @@ from .refmod_core import (check_bundle, _blur_latent, decode_for_encoder, pack_f
                           stored_record, soften)
 from .refmods import KIND_LABEL
 from . import latent_cache
-from .video_edit import bundle_edit, shape, spec_mask, usable_frames
+from .video_edit import bundle_edit, hide_area, shape, spec_mask, usable_frames
 
 REF_TOKEN_WARN = 30000      # a cited clip being edited past this many tokens gets a warning
 
@@ -97,11 +97,12 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
         vh, vw = frames.shape[1], frames.shape[2]
         # With crop to mask the edit samples only a box around the mask, so
         # the cited clip is that same box.
-        box = None
-        if spec and spec.get("edit") and edit and edit.get("context"):
+        box, obj = None, None
+        hide = edit.get("hide", "off") if spec and spec.get("edit") and edit else "off"
+        if spec and spec.get("edit") and edit and (edit.get("context") or hide != "off"):
             used = usable_frames(frames.shape[0])
-            _obj, box = shape(spec_mask(edit, used), used, vw, vh, int(edit.get("grow", 16)),
-                              bool(edit.get("invert")), float(edit["context"]))
+            obj, box = shape(spec_mask(edit, used), used, vw, vh, int(edit.get("grow", 16)),
+                             bool(edit.get("invert")), float(edit.get("context") or 0))
             if box:
                 x, y, vw, vh = box
                 frames = frames[:, y:y + vh, x:x + vw]
@@ -118,6 +119,10 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
         while k % 17 != 5:
             k -= 1
         frames = frames[:k]
+        if hide != "off":
+            # what's being replaced, hidden from the encoder and the DiT alike
+            frames = hide_area(frames, obj, box, source_shape[2], source_shape[1], bool(edit.get("invert")), hide,
+                               float(edit.get("blur") or 24.0))
         if soundtrack is not None:
             counters["audio"] += 1
             mapping.append(f"<Audio {counters['audio']}> = soundtrack of video {n} (media)")
@@ -141,7 +146,10 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
                     "crop": spec.get("crop"), "mirror": bool(spec.get("mirror")), "resize": spec.get("resize"),
                     "audio_mode": spec.get("audio_mode"), "shape": source_shape, "box": box, "size": [cw, ch, k],
                     "audio": with_audio, "vae": latent_cache.vae_tag(vae),
-                    "audio_vae": latent_cache.vae_tag(audio_vae) if with_audio else None})
+                    "audio_vae": latent_cache.vae_tag(audio_vae) if with_audio else None,
+                    **({"hide": [hide, latent_cache.file_stamp(edit["mask"]), int(edit.get("grow", 16)),
+                                 bool(edit.get("invert")), float(edit.get("blur") or 24.0) if hide != "invert" else 0]}
+                       if hide != "off" else {})})
             except (OSError, ValueError):
                 path = None
         saved = latent_cache.load(path) if path else None
@@ -171,6 +179,9 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
               f"{tokens_of(blocks[-1])} reference tokens"
               + (f" + {2 * ref_audio_t} audio" if ref_audio_t else "")
               + (" (the crop to mask box)" if box else "")
+              + (f"; masked area blurred ({float(edit.get('blur') or 24.0):g} px)" if hide in ("blur", "blur_invert")
+                 else "")
+              + (" and inverted" if hide == "blur_invert" else "; masked area inverted" if hide == "invert" else "")
               + (f"; reference strength {soft:.2f}" if soft < 1.0 else "")
               + (f" (loaded the saved encode, {time.perf_counter() - t0:.1f}s)" if saved is not None
                  else f" ({time.perf_counter() - t0:.1f}s to encode)")
