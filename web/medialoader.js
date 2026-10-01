@@ -958,6 +958,8 @@ const fmt = (t, d = 1) => `${Math.floor(t / 60)}:${(t % 60).toFixed(d).padStart(
 
 /** Popout editor for a clip's trim range and (for video) a crop rect.
  *  Writes item.trim {start,end} and item.crop {x,y,w,h} on Apply only. */
+const SIZE_CAPS = [2048, 1920, 1600, 1280, 1024, 832];     // the size menu's long-edge presets
+
 class TrimModal {
   /** @param opts.aspect - lock the crop to this width/height ratio and open
    *  straight into crop editing (used by the RefMod library to fit a photo
@@ -977,6 +979,7 @@ class TrimModal {
     this.rotate = ((parseInt(item.rotate, 10) || 0) % 360 + 360) % 360;
     // RefMods ignore the loader's size cap (Create's resolution decides size).
     this.resize = opts.refmod ? 0 : (parseInt(item.resize, 10) || 0);
+    this.customSize = !!this.resize && !SIZE_CAPS.includes(this.resize);
     this.cropMode = false;
     this.aspect = "free";
     if (opts.aspect > 0) {
@@ -1650,17 +1653,31 @@ class TrimModal {
           title: "Cap the long edge of what's sent. The model rescales " +
                  "references anyway, so this mostly saves decode time and RAM " +
                  "\u2014 and on video it saves both per frame. Keep a keyframe " +
-                 "or a continuation source at least as large as your generation.",
+                 "or a continuation source at least as large as your generation. " +
+                 "custom\u2026 takes any long edge you type.",
           onchange: (e) => {
-            this.resize = parseInt(e.target.value, 10) || 0;
-            this.syncCrop();
+            this.customSize = e.target.value === "custom";
+            if (!this.customSize) this.resize = parseInt(e.target.value, 10) || 0;
+            else if (!this.resize) {          // start the box at what's sent now
+              const f = sentFrame(this.item, this.crop, 0);
+              this.resize = Math.round(Math.max(f.W, f.H)) || 1024;
+            }
+            this.syncSize(); this.syncCrop();
           } },
-          [[0, "size: full"], [2048, "max 2048px"], [1920, "max 1920px"],
-           [1600, "max 1600px"], [1280, "max 1280px"], [1024, "max 1024px"],
-           [832, "max 832px"]]
-            .map(([v, label]) => el("option",
-              { value: String(v), selected: this.resize === v }, label)))
+          [[0, "size: full"], ...SIZE_CAPS.map((v) => [v, `max ${v}px`]), ["custom", "custom\u2026"]]
+            .map(([v, label]) => el("option", { value: String(v) }, label)))
       : null;
+    this.sizeNum = this.sizeEl ? el("input", { type: "text", inputmode: "numeric", class: "mml-tmnum",
+      style: { width: "calc(4ch + 18px)" },          // four digits at any text size
+      title: "The long edge in pixels. The shape is kept, and nothing is enlarged.",
+      onchange: (e) => {
+        const v = Math.round(+e.target.value);
+        if (v >= 64) this.resize = Math.min(8192, v);      // a cleared or tiny box keeps the last size
+        this.syncSize(); this.syncCrop();
+      },
+      onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } }) : null;
+    this.sizeCustom = this.sizeNum ? el("label", { class: "mml-mklbl" }, this.sizeNum, "px") : null;
+    this.syncSize();
     // Only for stills: writing a resized copy of a video would mean
     // re-encoding it, which is a different job entirely.
     this.bakeBtn = (this.isStill && !this.opts.refmod)
@@ -1679,7 +1696,15 @@ class TrimModal {
     return el("span", { class: "mml-tmcropbar" },
       this.rotBtn, this.mirrorBtn,
       locked ? this.lockEl : this.cropBtn, locked ? null : this.aspectEl,
-      this.sizeEl, this.bakeBtn, this.cropInfo);
+      this.sizeEl, this.sizeCustom, this.bakeBtn, this.cropInfo);
+  }
+
+  /** The size menu on a preset, or on custom… with its long edge beside it. */
+  syncSize() {
+    if (!this.sizeEl) return;
+    this.sizeEl.value = this.customSize ? "custom" : String(this.resize);
+    this.sizeCustom.style.display = this.customSize ? "" : "none";
+    this.sizeNum.value = this.resize;
   }
 
   /** Mirror only the picture: the crop overlay stays in screen space, so a
@@ -1728,6 +1753,7 @@ class TrimModal {
   /** Source size, and what will actually be sent when they differ. */
   showSize() {
     if (!this.cropInfo) return;
+    this.maskLayer?.setLook(this.maskLook());      // grow and cells are in pixels of the frame sent
     const sw = this.item.width, sh = this.item.height;
     if (!sw || !sh) { this.cropInfo.textContent = ""; return; }
     const [ow, oh] = outSize({ ...this.item, crop: this.crop, rotate: 0,
@@ -2138,7 +2164,7 @@ class TrimModal {
                     this.crop = coverRect(this.item.width, this.item.height, this.opts.aspect);
                     this.cropMode = true;
                   }
-                  if (this.sizeEl) this.sizeEl.value = "0";
+                  this.customSize = false; this.syncSize();
                   this.syncCrop(); this.syncMirror(); this.syncRotate();
                   this.layoutTimeline(); } },
                 "\u21ba Reset")
@@ -2189,9 +2215,7 @@ class TrimModal {
     this.maskRegenBtn.hidden = !file || !this.maskShown;
     this.maskRegenBtn.classList.toggle("on", !!this.showRegen);
     if (this.maskLayer) {
-      const look = this.maskOn && this.masker ? this.masker.look()
-        : { ...itemLook(this.item, this.crop, this.resize), block: this.showRegen ? regenBlock(this.item, this.crop, this.resize) : 0 };
-      this.maskLayer.setLook(look);
+      this.maskLayer.setLook(this.maskLook());
       this.maskLayer.show(!!this.maskShown);
       this.maskLayer.mirror(this.mirror);
     }
@@ -2202,6 +2226,13 @@ class TrimModal {
     this.maskNote.hidden = !(this.maskLayer && this.maskShown);
     this.maskNote.style.pointerEvents = this.maskOn ? "none" : "";     // it sits on the picture being drawn on
     this.syncCrop();
+  }
+
+  /** How the edit will shape the mask at the editor's current crop and size:
+   *  mask mode's layers, otherwise the clip's saved mask. */
+  maskLook() {
+    return this.maskOn && this.masker ? this.masker.look()
+      : { ...itemLook(this.item, this.crop, this.resize), block: this.showRegen ? regenBlock(this.item, this.crop, this.resize) : 0 };
   }
 
   /** Mask mode: the same clip, trim and crop, with the mask's layers beside
@@ -2344,8 +2375,9 @@ function spriteImage(file) {
  *  the whole element (the loader card). Frames outside the masked span draw
  *  nothing, so the overlay also shows where it stops.
  *
- *  `look` shapes it the way the edit will: `grow` and `frameW` (pixels of the
- *  frame the edit is built from) widen it, `invert` shows everything else,
+ *  `look` shapes it the way the edit will: `grow` (pixels of the frame the
+ *  edit is built from; `frameW` is the uncropped frame's width in those
+ *  pixels) widens it, `invert` shows everything else,
  *  `block` (frame pixels) rounds it out to the latent's 16-pixel cells at
  *  the sampling size — the area really regenerated — and `cropBox` ({x, y, w, h}
  *  on the source frame) outlines what crop to mask samples.
@@ -2488,9 +2520,9 @@ function sentFrame(item, crop = item.crop, resize = item.resize) {
 
 /** How a saved mask is shaped for the edit, for drawing it (no crop box: that
  *  needs the mask itself, and mask mode draws it). */
-export function itemLook(item, crop, resize) {
-  return { grow: Number.isFinite(+item.mask_grow) ? +item.mask_grow : 16, frameW: sentFrame(item, crop, resize).W,
-    invert: !!item.mask_invert };
+export function itemLook(item, crop = item.crop, resize = item.resize) {
+  return { grow: Number.isFinite(+item.mask_grow) ? +item.mask_grow : 16,
+    frameW: sentFrame(item, crop, resize).W / (crop?.w ?? 1), invert: !!item.mask_invert };
 }
 
 /** A latent cell in frame pixels at the sampling size, without crop to mask:
@@ -2788,7 +2820,8 @@ class MaskMode {
     const blurNum = el("input", { type: "number", class: "mml-tmnum", min: 1, max: 256, step: 1, value: this.blur,
       onchange: (e) => setBlur(+e.target.value), onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } });
     this.blurS = { range: blurRange, num: blurNum, el: el("label", { class: "mml-mklbl", title: "How much the masked " +
-      "area is blurred: the Gaussian radius, in the clip's own pixels. A few pixels soften what makes someone " +
+      "area is blurred: the Gaussian radius, in pixels of the clip at the size it's sent, so a smaller size " +
+      "setting makes the same number blur more. A few pixels soften what makes someone " +
       "recognisable while eyes, mouth and expression still read; 20 or more leaves only the silhouette and movement." },
       "blur", blurRange, blurNum, "px") };
     this.invertIn = el("input", { type: "checkbox", checked: this.invert,
@@ -3665,11 +3698,12 @@ class MaskMode {
 
   look() {
     const { W, H } = this.frameSize();
+    const c = this.host.crop || { w: 1, h: 1 };        // the box and the overlay are on the uncropped frame
     const budget = sampleBudget();
     const box = this.cropOn && !this.invert ? this.cropBox : null;
     let scale = Math.min(1, Math.sqrt(budget / Math.max(1, W * H)));
-    if (box) scale = Math.min(4, Math.sqrt(budget / Math.max(1, box.w * W * box.h * H)));
-    return { grow: this.grow, frameW: W, invert: this.invert, cropBox: box,
+    if (box) scale = Math.min(4, Math.sqrt(budget / Math.max(1, box.w / c.w * W * box.h / c.h * H)));
+    return { grow: this.grow, frameW: W / c.w, invert: this.invert, cropBox: box,
       block: this.host.showRegen ? 16 / scale : 0 };
   }
 
@@ -4573,6 +4607,7 @@ class LoaderPanel {
         return;
       }
       w.value = JSON.stringify(this.items);
+      window.dispatchEvent(new Event("mml-media-changed"));     // RefMod stacks number after these media
       try { this.node.setDirtyCanvas?.(true, true); }
       catch (e) { /* Vue redraws itself */ }
 

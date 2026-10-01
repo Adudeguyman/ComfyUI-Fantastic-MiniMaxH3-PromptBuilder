@@ -3,6 +3,26 @@
 Every release of **ComfyUI Fantastic H3 Prompt Builder**, newest first. The
 [README](README.md) keeps the recent ones; everything older lives here.
 
+## 1.8.1
+
+- **Custom size.** The trim and crop editor's size menu has **custom…**: type
+  any long edge, applied with Apply like the presets.
+- **stack_pictures: up to N.** "up to 8" is now **up to N**, and the new
+  **stack_pictures_n** under it sets N (8 by default). A workflow saved with
+  "up to 8" needs it picked again.
+- **Edit bundles as copies.** RefMod bundles from ComfyUI-MiniMaxH3Mod 0.2.6+
+  open in **Edit frames & voice**. The result is saved as a copy in standalone
+  files and the bundle is left as it is, so saving a copy with no changes
+  splits a bundle into standalone files.
+- **Library size.** The RefMod library has its own **⤡ Size** for its window
+  and text size.
+- **Stack labels without the builder.** The RefMod Stack's cards number
+  RefMods after the Media Loader's media, as the Text Encode will, with or
+  without the Prompt Builder in between.
+- **Mask preview fixes.** The overlay redraws when you change the size or the
+  crop, and no longer draws grow and the regenerated cells too large on a
+  cropped clip. The edit itself was always right.
+
 ## 1.8.0
 
 - **Masked video editing.** Mark part of a clip and only that area is

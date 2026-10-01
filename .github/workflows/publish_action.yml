@@ -16,7 +16,7 @@ jobs:
     # before the version-bump push, since registry versions are immutable.
     env:
       COMFY_NODE_CHANGELOG: |
-        A new RefMod Stack node with twelve fixed slots, per-channel sliders labelled with their tags, position badges and a Size control; it never resizes on its own. RefMod presets save a stack with its weights, and prompts can link to them. Chained stacks show their position and upstream labels. Right-click any tag, name or speaker ID to replace, swap or remove it in one place, one field or everywhere. Start typing a subject name and press Tab to fill it in.
+        The trim and crop editor's size menu takes a custom long edge. stack_pictures "up to 8" is now "up to N", with stack_pictures_n setting N (default 8); workflows saved with "up to 8" need it picked again. RefMod bundles from ComfyUI-MiniMaxH3Mod can be edited, saved as a copy in standalone files with the bundle left as it is. The RefMod library has its own window and text size control. RefMod Stack cards number RefMods after the Media Loader's media with or without the Prompt Builder in between. The mask preview redraws on size and crop changes and no longer draws grow and the regenerated cells too large on a cropped clip.
     steps:
       - name: Check out code
         uses: actions/checkout@v4

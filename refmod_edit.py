@@ -23,7 +23,7 @@ from .refmod_create import (_cover, ensure_min_size, resize_ref, pool_latent, op
                             load_look, load_voice)
 from .refmods import (resolve_file, _split_pair, _root_of, _contained_target, sanitize_name,
                       valid_rel, split_member, read_meta, clean_subject_name, clean_description, rewrite_stem_meta,
-                      PREVIEW_EXT)
+                      bundle_members, PREVIEW_EXT)
 
 
 def _first_source_px(mod):
@@ -133,7 +133,7 @@ class MiniMaxH3FantasticRefModEdit:
                 "voice": ("STRING", {"default": "", "tooltip": "A Media Loader item (audio, or a clip with sound) to replace the voice; 'remove' to drop it; empty = unchanged."}),
                 "latent_frames": ("INT", {"default": 22, "min": 1, "max": 1024, "tooltip": "Frames taken from the start of an added clip; 22 stores 7 frames, 39 stores 12, 56 stores 17."}),
                 "audio_max_seconds": ("FLOAT", {"default": 30.0, "min": 0.5, "max": 600.0, "step": 0.5}),
-                "save_as": ("STRING", {"default": "", "tooltip": "Save the result as a new RefMod with this name (folders allowed, e.g. characters/hero_v2) and leave the original untouched. Empty = overwrite the original."}),
+                "save_as": ("STRING", {"default": "", "tooltip": "Save the result as a new RefMod with this name (folders allowed, e.g. characters/hero_v2) and leave the original untouched. Empty = overwrite the original, except for a ComfyUI-MiniMaxH3Mod bundle, which is always saved as a copy."}),
             },
             "optional": {
                 "vae": ("VAE", {"tooltip": "MiniMax H3 video VAE, for added pictures."}),
@@ -180,26 +180,35 @@ class MiniMaxH3FantasticRefModEdit:
         if root is None:
             raise ValueError("That file is outside every RefMod folder.")
         head, _t = read_meta(stem)
-        if isinstance(head, dict) and head.get("kind") == "bundle":
-            raise ValueError(
-                f"'{split_member(rel)[0]}' is a single-file bundle from ComfyUI-MiniMaxH3Mod. "
-                "It can be used and inspected here, but not edited: save its members as "
-                "standalone files with that pack's Save H3 RefMods node first.")
-        mod = load_cached(stem)
         root_dir, base_name = os.path.dirname(stem), os.path.basename(stem)
-        pair_base, role = _split_pair(base_name)
-        # The other half of a pair, when there is one.
-        partner_stem = None
-        if role:
-            for suf in (("_audio", "_Audio") if role == "visual" else ("_visual", "_Video")):
-                cand = os.path.join(root_dir, pair_base + suf)
-                if os.path.isfile(cand + ".safetensors"):
-                    partner_stem = cand
-                    break
-        look_mod = mod if mod.kind != "audio" else (load_cached(partner_stem) if partner_stem else None)
-        look_stem = stem if mod.kind != "audio" else partner_stem
-        voice_mod = mod if mod.kind == "audio" else (load_cached(partner_stem) if partner_stem else None)
-        voice_stem = stem if mod.kind == "audio" else partner_stem
+        members = bundle_members(head)
+        if members:
+            # A ComfyUI-MiniMaxH3Mod bundle: its first look and first voice, as its
+            # library card shows them. The bundle stays as that pack wrote it.
+            if not (save_as or "").strip():
+                raise ValueError(f"'{split_member(rel)[0]}' is a single-file bundle from ComfyUI-MiniMaxH3Mod, "
+                                 "so an edit is saved as a copy: give save_as a name.")
+            look_i = next((i for i, m in enumerate(members) if m.get("kind") != "audio"), None)
+            voice_i = next((i for i, m in enumerate(members) if m.get("kind") == "audio"), None)
+            look_mod = load_cached(stem, look_i) if look_i is not None else None
+            voice_mod = load_cached(stem, voice_i) if voice_i is not None else None
+            mod, pair_base, role = look_mod or voice_mod, base_name, None
+            look_stem = voice_stem = None
+        else:
+            mod = load_cached(stem)
+            pair_base, role = _split_pair(base_name)
+            # The other half of a pair, when there is one.
+            partner_stem = None
+            if role:
+                for suf in (("_audio", "_Audio") if role == "visual" else ("_visual", "_Video")):
+                    cand = os.path.join(root_dir, pair_base + suf)
+                    if os.path.isfile(cand + ".safetensors"):
+                        partner_stem = cand
+                        break
+            look_mod = mod if mod.kind != "audio" else (load_cached(partner_stem) if partner_stem else None)
+            look_stem = stem if mod.kind != "audio" else partner_stem
+            voice_mod = mod if mod.kind == "audio" else (load_cached(partner_stem) if partner_stem else None)
+            voice_stem = stem if mod.kind == "audio" else partner_stem
         saved = []
         pbar = comfy.utils.ProgressBar(100)
 

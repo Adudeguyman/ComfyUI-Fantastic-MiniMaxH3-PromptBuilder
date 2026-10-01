@@ -225,15 +225,16 @@ def encoder_view(mod, vae, fps):
     return unpack_frames(saved), saved["times"].tolist(), how
 
 
-STACK_PICTURES = ("every 4th", "up to 8", "all")
+STACK_PICTURES = ("every 4th", "up to N", "all")
 
 
-def stack_picks(n, mode):
-    """Which of a stack's n pictures the encoder is shown, by stack_pictures."""
+def stack_picks(n, mode, count):
+    """Which of a stack's n pictures the encoder is shown, by stack_pictures;
+    `count` is the N of "up to N", spread from the first picture to the last."""
     if mode == "every 4th":
         return list(range(0, n, 4))
-    if mode == "up to 8" and n > 8:
-        return [round(i * (n - 1) / 7) for i in range(8)]
+    if mode == "up to N" and n > count:
+        return [round(i * (n - 1) / (count - 1)) for i in range(count)] if count > 1 else [0]
     return list(range(n))
 
 
@@ -351,15 +352,18 @@ class MiniMaxH3FantasticRefModTextEncode:
                            "memory use and generation time.\n\n"
                            "• every 4th (default): the first picture and every 4th after it. Fewest tokens; good "
                            "for a single RefMod.\n"
-                           "• up to 8: 8 pictures spread across the stack. Costs more, possibly better identity "
-                           "retention.\n"
+                           "• up to N: N pictures spread across the stack (set N in stack_pictures_n). Costs more, "
+                           "possibly better identity retention.\n"
                            "• all: every picture. The most expensive, and can greatly increase generation time, "
                            "but early tests suggest it helps with bleed between similar-looking characters."}),
+            "stack_pictures_n": ("INT", {"default": 8, "min": 1, "max": 1024,
+                "tooltip": "How many pictures 'up to N' shows the text encoder, spread evenly across the stack. "
+                           "Only used when stack_pictures is 'up to N'."}),
         }, "hidden": {"extra_pnginfo": "EXTRA_PNGINFO"}}
 
     def encode(self, clip, prompt, width=1344, height=768, length=124, ref_image_size="match",
                reference_fps=24.0, max_total_tokens=0, mods=None, references=None, vae=None, audio_vae=None,
-               voice_description_at_label=False, stack_pictures="every 4th", extra_pnginfo=None):
+               voice_description_at_label=False, stack_pictures="every 4th", stack_pictures_n=8, extra_pnginfo=None):
         try:
             from comfy.text_encoders.minimax import MiniMaxH3Tokenizer
             from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
@@ -446,7 +450,7 @@ class MiniMaxH3FantasticRefModTextEncode:
                     item["data"] = frames[:1].clone()
                     what = "1 picture"
                 elif mod.source == "stack":
-                    idx = stack_picks(frames.shape[0], stack_pictures)
+                    idx = stack_picks(frames.shape[0], stack_pictures, stack_pictures_n)
                     if stack_pictures == "every 4th":
                         # two to a block, as a clip sampled at two frames a second
                         item["data"], item["timestamps"] = frames[idx], [i / 2 for i in range(len(idx))]

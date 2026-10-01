@@ -10,7 +10,7 @@ import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
   overlayOn, maskOverlay, refTokenEstimate, itemLook } from "./medialoader.js";
 import { STACK_NAME, ENCODE_NAMES, readStack, deriveEntries, labelGroups,
   rangeText as refmodRange, previewURL as refmodPreviewURL, KIND as REFMOD_KIND,
-  openStackModal } from "./refmodstack.js";
+  openStackModal, refreshStackLabels } from "./refmodstack.js";
 
 const NODE_NAME = "MiniMaxH3PromptBuilder";
 
@@ -7048,7 +7048,7 @@ app.registerExtension({
     const onConnectionsChange = nodeType.prototype.onConnectionsChange;
     nodeType.prototype.onConnectionsChange = function () {
       const r = onConnectionsChange?.apply(this, arguments);
-      setTimeout(() => updateSummary(this), 0);
+      setTimeout(() => { updateSummary(this); refreshStackLabels(); }, 0);
       return r;
     };
   },

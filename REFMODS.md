@@ -233,7 +233,8 @@ it. A page reload starts clean.
 ## Saving and organising
 
 Everything you create is saved automatically. Open **Browse library…** to
-see it all.
+see it all. **⤡ Size** at the library's top right sets its window and text
+size, and it's remembered for next time.
 
 ![A RefMod's details panel](docs/refmods/04-details.png)
 
@@ -480,8 +481,9 @@ if a label is sent but never used.
 You can use a **Media Loader** and RefMods together. Media from the loader
 is numbered first, then the RefMods after it. So one picture in the loader
 plus a RefMod gives you `<Picture 1>` from the loader, then `<Video 1>` and
-`<Audio 1>` from the RefMod. The editor's chips always show the real
-numbers, so go by those.
+`<Audio 1>` from the RefMod. The editor's chips and the stack's cards
+both show the real numbers, with or without the Prompt Builder in between,
+so go by those. (The stack's `labels` output counts the RefMods alone.)
 
 Use **+ Media loader** and **+ RefMods** on the builder, and both get
 wired through for you.
@@ -542,6 +544,7 @@ are the same format both ways: RefMods made here load in that pack, and
 its RefMods load here. That includes the single-file **bundles** its
 0.2.6 release can save: they show up in the library with a *bundle* badge,
 using the first look and first voice inside, and can be used and inspected
-here but not edited. The library's layout took cues from FranckyB's
+here. Editing one saves a copy as standalone files and leaves the bundle as
+it is. The library's layout took cues from FranckyB's
 [ComfyUI-H3RefMods](https://github.com/FranckyB/ComfyUI-H3RefMods).
 
