@@ -719,6 +719,11 @@ const CSS = `
   border-bottom:1px solid #2a2f3a;background:#1b1f27;}
 .mml-tmtitle{flex:1;min-width:0;font-size:calc(12px * var(--mml-fs, 1));color:#dde2ea;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
+.mml-tmnav{display:inline-flex;align-items:center;gap:4px;font-size:calc(11px * var(--mml-fs, 1));color:#c9cfda;
+  white-space:nowrap;}
+.mml-subjbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid #2a2f3a;
+  font-size:calc(11px * var(--mml-fs, 1));color:#c9cfda;}
+.mml-subjstatus{flex:1 1 220px;min-width:0;color:#9fb4c8;line-height:1.35;}
 /* overflow:hidden is the safety net for the rotate bug: a CSS transform does
    not change an element's layout box, so a quarter-turned preview painted
    outside the stage and across the toolbar above it — covering the very
@@ -944,7 +949,7 @@ const CSS = `
 `;
 
 let cssDone = false;
-function injectCSS() {
+export function injectCSS() {
   if (cssDone) return;
   document.head.append(el("style", { textContent: CSS }));
   cssDone = true;
@@ -1069,6 +1074,11 @@ class TrimModal {
   key(e) {
     const typing = !!e.target?.closest?.("textarea, select, input:not([type=checkbox]):not([type=range]):not([type=button])");
     if (!typing) e.stopPropagation();
+    if (!typing && this.opts.nav && [",", ".", "PageUp", "PageDown"].includes(e.key)) {
+      e.preventDefault();
+      this.step(e.key === "," || e.key === "PageUp" ? -1 : 1);
+      return;
+    }
     if (this.isStill) {
       if (e.key === "Escape" && !typing) this.tryClose();
       return;
@@ -1142,6 +1152,7 @@ class TrimModal {
   close() {
     if (this.masker) this.masker.closed = true;
     this.maskLayer?.detach();
+    this.subjectLayer?.detach();
     if (this.stopFit) this.stopFit();
     if (this.raf) cancelAnimationFrame(this.raf);
     window.removeEventListener("keydown", this.onKey, true);
@@ -1832,6 +1843,7 @@ class TrimModal {
       }
     }
     if (this.rotBtn) this.rotBtn.classList.toggle("on", !!this.rotate);
+    this.subjectLayer?.draw();
     this.showSize();
   }
 
@@ -1841,6 +1853,7 @@ class TrimModal {
         `${this.mirror ? "scaleX(-1) " : ""}rotate(${this.rotate || 0}deg)`;
     }
     this.maskLayer?.mirror(this.mirror);
+    this.subjectLayer?.draw();
     if (this.mirrorBtn) this.mirrorBtn.classList.toggle("on", this.mirror);
   }
 
@@ -1899,7 +1912,8 @@ class TrimModal {
     if (!this.cropWrap) return;
     // The rect stays on screen whenever a crop exists — only editing is
     // toggled — so you can always see what the frame will be cut to.
-    const show = this.cropMode || !!this.crop || !!this.maskOn || !!(this.maskLayer && this.maskShown);
+    const show = this.cropMode || !!this.crop || !!this.maskOn || !!(this.maskLayer && this.maskShown) || !!this.opts.subject;
+    if (this.cropMode && this.subjectLayer?.picking) this.subjectLayer.setPicking(false);
     this.cropWrap.style.display = show ? "" : "none";
     this.cropWrap.style.pointerEvents = this.cropMode ? "" : "none";
     this.cropRect.classList.toggle("locked", !this.cropMode);
@@ -2082,9 +2096,15 @@ class TrimModal {
       onmousedown: (e) => { if (e.target === this.overlay) this.tryClose(true); } },
       el("div", { class: "mml-tmmodal" + (isVid || still ? "" : " audio"), role: "dialog", "aria-modal": "true" },
         el("div", { class: "mml-tmhead" },
+          this.opts.nav ? el("span", { class: "mml-tmnav" },
+            el("button", { class: "mml-btn mml-sm", title: "Previous source, keeping what's set here  ( , or PgUp )",
+              onclick: () => this.step(-1) }, "\u2039"),
+            el("span", {}, this.opts.nav.label),
+            el("button", { class: "mml-btn mml-sm", title: "Next source, keeping what's set here  ( . or PgDn )",
+              onclick: () => this.step(1) }, "\u203a")) : null,
           this.titleEl = el("span", { class: "mml-tmtitle" },
             `${still ? "\u25a3" : "\u2702"} ${this.item.name}`),
-          (isVid || still) ? this.cropUI : null,
+          (isVid || still) && !this.opts.noCrop ? this.cropUI : null,
           this.sizeControl(),
           this.canMask ? (this.maskViewBtn = el("button", { class: "mml-btn mml-sm mml-mktab on",
             title: "Show the clip's saved mask over the picture",
@@ -2098,6 +2118,7 @@ class TrimModal {
             title: "Mask part of this clip for editing, on the trim and crop set here",
             onclick: () => this.setMaskMode(!this.maskOn) }, "\u25d0 Mask")) : null,
           el("button", { class: "mml-x", onclick: () => this.tryClose() }, "\u2715")),
+        this.opts.subject ? (this.subjSlot = el("div", {})) : null,
         el("div", { class: "mml-tmbody" },
           el("div", { class: "mml-tmleft" },
             stage,
@@ -2195,6 +2216,18 @@ class TrimModal {
     this.maskShown = overlayOn();
     this.refreshMaskLayer();
     if (this.opts.mask && this.canMask) this.setMaskMode(true);
+    if (this.opts.subject) {
+      this.subjectLayer = new SubjectLayer(this, this.opts.subject);
+      this.subjSlot.append(this.subjectLayer.bar);
+      this.syncCrop();
+    }
+  }
+
+  /** Keep what's set here, as Apply does, and open the Create tab's
+   *  next or previous source. */
+  step(delta) {
+    this.apply();
+    this.opts.nav.step(delta);
   }
 
   /** The mask drawn over the picture, synced to the playhead: in mask mode
@@ -2263,7 +2296,7 @@ class TrimModal {
 /* Mask for editing: the editor's mask mode, with SAM 3.1              */
 /* ------------------------------------------------------------------ */
 
-const MASK_NODE = "MiniMaxH3FantasticObjectMask";
+export const MASK_NODE = "MiniMaxH3FantasticObjectMask";
 const MASK_KEYS = ["edit", "mask_box", "mask", "mask_info", "mask_layers", "mask_grow", "mask_range", "keep_audio",
   "mask_feather", "mask_invert", "mask_crop", "mask_context", "mask_ref_strength", "mask_hide", "mask_blur"];
 const REF_TOKEN_WARN = 30000;   // matches the Text Encode's warning
@@ -2329,8 +2362,8 @@ function armTwice(btn, armedLabel, fn) {
   return btn;
 }
 const setKids = (node, kids) => node.replaceChildren(...[kids].flat(Infinity).filter((k) => k != null));
-const SAM_LINK = "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors";
-const SAM_KEY = "mmh3.samCheckpoint";
+export const SAM_LINK = "https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors";
+export const SAM_KEY = "mmh3.samCheckpoint";
 
 const CLEANUP_KEY = "mmh3.maskCleanupMB";
 
@@ -2544,7 +2577,7 @@ function sampleBudget() {
 }
 
 /** Checkpoints ComfyUI can see, SAM 3 ones first. */
-async function samCheckpoints() {
+export async function samCheckpoints() {
   try {
     const info = await (await api.fetchApi("/object_info/CheckpointLoaderSimple")).json();
     const spec = info?.CheckpointLoaderSimple?.input?.required?.ckpt_name || [];
@@ -4015,6 +4048,288 @@ class MaskMode {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Subject: the RefMod Create tab's crop to subject and background blur */
+/* ------------------------------------------------------------------ */
+
+/** Widest value within r of each pixel, then the mean within r: a mask
+ *  [w*h] of 0..1 grown and softened the way blur_outside does it. */
+function maxFilter(a, w, h, r) {
+  const t = new Float32Array(a.length), out = new Float32Array(a.length);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let m = 0;
+    for (let k = Math.max(0, x - r); k <= Math.min(w - 1, x + r); k++) m = Math.max(m, a[y * w + k]);
+    t[y * w + x] = m;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let m = 0;
+    for (let k = Math.max(0, y - r); k <= Math.min(h - 1, y + r); k++) m = Math.max(m, t[k * w + x]);
+    out[y * w + x] = m;
+  }
+  return out;
+}
+function boxFilter(a, w, h, r) {
+  const t = new Float32Array(a.length), out = new Float32Array(a.length);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0, n = 0;
+    for (let k = Math.max(0, x - r); k <= Math.min(w - 1, x + r); k++) { s += a[y * w + k]; n++; }
+    t[y * w + x] = s / n;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0, n = 0;
+    for (let k = Math.max(0, y - r); k <= Math.min(h - 1, y + r); k++) { s += t[k * w + x]; n++; }
+    out[y * w + x] = s / n;
+  }
+  return out;
+}
+
+/** The Create tab's subject on the picture or clip in the editor: SAM's mask
+ *  drawn over it, dots that fix it, and the background blur shown live. The
+ *  mask is kept the file's way round and is turned and mirrored here with
+ *  the picture. `spec` comes from the Create tab:
+ *    subject()   -> { found, sprite, how } or null before Find
+ *    marks       -> the dots so far, [{ time, positive, negative }] on the picture as shown
+ *    find(marks) -> Promise: SAM again, with these dots
+ *    look()      -> { blur, grow, edge } in pixels of the picture as encoded (blur 0 when off)
+ *    encScale()  -> encoded pixels per pixel of the file
+ *    flags()     -> notes about this source
+ *    controls    -> the Create tab's own sliders, shown in the bar
+ *    decode()    -> Promise<url>, for a stored frame: its Result needs a real decode */
+/** Mask or Result, kept as the editor steps from source to source. */
+let subjectView = "mask";
+
+class SubjectLayer {
+  constructor(host, spec) {
+    this.host = host;
+    this.spec = spec;
+    this.marks = clone(spec.marks || []);
+    this.mode = subjectView;
+    this.picking = false;
+    this.decoded = null;
+    this.soft = null;
+    this.canvas = el("canvas", { class: "mml-mkoverlay mml-subjcanvas",
+      onpointerdown: (e) => this.click(e), oncontextmenu: (e) => e.preventDefault() });
+    host.cropBox.prepend(this.canvas);
+    this.pickBtn = el("button", { class: "mml-btn mml-sm",
+      title: "Click the picture to fix the subject: left-click adds to it, right-click takes away. Then Find.",
+      onclick: () => this.setPicking(!this.picking) }, "◉ Dots");
+    this.modeBtns = ["mask", "result"].map((m) => el("button", { class: "mml-btn mml-sm",
+      title: m === "mask" ? "SAM's subject over the picture"
+        : spec.decode ? "Decode this frame with its background blurred: what will be saved"
+        : "The picture with its background blurred, as it will be encoded",
+      onclick: () => this.setMode(m) }, m === "mask" ? "Mask" : "Result"));
+    this.status = el("span", { class: "mml-subjstatus" });
+    this.bar = el("div", { class: "mml-subjbar" },
+      el("b", {}, "Subject"), this.pickBtn,
+      el("button", { class: "mml-btn mml-sm", title: "Find the subject again with the word in the Create tab and these dots",
+        onclick: () => this.find() }, "Find"),
+      el("button", { class: "mml-btn mml-sm", title: "Remove the dots",
+        onclick: () => { this.marks = []; this.paint(); this.draw(); } }, "Clear dots"),
+      el("span", { class: "mml-seg" }, ...this.modeBtns),
+      ...(spec.controls || []), this.status);
+    this.redraw = () => this.draw();
+    for (const ev of ["seeked", "timeupdate", "loadeddata", "load"]) host.media?.addEventListener(ev, this.redraw);
+    this.ro = new ResizeObserver(this.redraw);
+    this.ro.observe(host.cropBox);
+    this.paint();
+    this.draw();
+    // a stored frame's Result is a queue job: decode once you stay on it,
+    // not for every frame stepped past
+    if (this.mode === "result" && spec.decode) this.pending = setTimeout(() => this.setMode("result"), 500);
+  }
+
+  detach() {
+    clearTimeout(this.pending);
+    for (const ev of ["seeked", "timeupdate", "loadeddata", "load"]) this.host.media?.removeEventListener(ev, this.redraw);
+    this.ro.disconnect();
+    this.canvas.remove();
+  }
+
+  /** The look sliders moved: a stored frame's decoded Result no longer shows them. */
+  changed() {
+    this.soft = null;
+    if (this.decoded) this.decoded.stale = true;
+    this.paint();
+    this.draw();
+  }
+
+  setPicking(on) {
+    this.picking = on;
+    if (on) { this.host.cropMode = false; this.host.syncCrop(); }
+    this.canvas.style.pointerEvents = on ? "auto" : "none";
+    this.canvas.style.cursor = on ? "crosshair" : "";
+    this.paint();
+  }
+
+  async setMode(mode) {
+    clearTimeout(this.pending);
+    this.mode = subjectView = mode;
+    this.paint();
+    if (mode === "result" && this.spec.decode && (!this.decoded || this.decoded.stale)) {
+      this.decoded = { busy: true };
+      this.paint();
+      try {
+        const url = await this.spec.decode();
+        this.decoded = { img: Object.assign(new Image(), { src: url, onload: this.redraw }) };
+      } catch (err) {
+        this.decoded = { error: err.message };
+      }
+      this.paint();
+    }
+    this.draw();
+  }
+
+  click(e) {
+    if (!this.picking) return;
+    e.preventDefault();
+    const r = this.canvas.getBoundingClientRect();
+    const p = { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) };
+    const time = this.host.isStill ? 0 : +(this.host.media?.currentTime || 0).toFixed(3);
+    let mark = this.marks.find((m) => Math.abs(m.time - time) < 1 / (2 * TRIM_FPS));
+    if (!mark) this.marks.push(mark = { time, positive: [], negative: [] });
+    (e.button === 2 ? mark.negative : mark.positive).push(p);
+    this.paint();
+    this.draw();
+  }
+
+  async find() {
+    if (this.busy) return;
+    this.busy = true;
+    this.paint();
+    try {
+      await this.spec.find(clone(this.marks));
+      this.soft = null;
+      this.decoded = null;
+    } catch (err) {
+      this.error = err.message;
+    } finally {
+      this.busy = false;
+      this.paint();
+      this.draw();
+    }
+  }
+
+  paint() {
+    const subj = this.spec.subject();
+    this.pickBtn.classList.toggle("on", this.picking);
+    this.modeBtns.forEach((b, i) => b.classList.toggle("on", (i === 0) === (this.mode === "mask")));
+    const dots = this.marks.reduce((n, m) => n + m.positive.length + m.negative.length, 0);
+    const notes = [
+      this.busy ? "finding… (in the queue)" : this.error ? `Find failed: ${this.error}`
+        : !subj ? "not found yet: Find looks for the word in the Create tab"
+        : subj.found ? `found (${subj.how})` : "no subject found: kept whole, not blurred",
+      dots ? `${dots} dot${dots === 1 ? "" : "s"}` : "",
+      this.mode === "result" && this.decoded?.busy ? "decoding the Result…"
+        : this.mode === "result" && this.decoded?.error ? `decode failed: ${this.decoded.error}`
+        : this.mode === "result" && this.decoded?.stale ? "the sliders changed: press Result to decode again" : "",
+      ...(this.spec.flags() || [])];
+    this.error = null;
+    setKids(this.status, notes.filter(Boolean).join(" · "));
+  }
+
+  /** Draw the picture's own pixels the way the stage shows them: turned,
+   *  then mirrored. */
+  drawTurned(ctx, src, sx, sy, sw, sh) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const turn = ((this.host.rotate || 0) % 360 + 360) % 360, side = turn % 180 !== 0;
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    if (this.host.mirror) ctx.scale(-1, 1);
+    ctx.rotate(turn * Math.PI / 180);
+    const dw = side ? H : W, dh = side ? W : H;
+    ctx.drawImage(src, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+  }
+
+  /** This frame's tile of the mask sprite, or null outside the masked span. */
+  tile(sprite) {
+    const img = spriteImage(sprite.file);
+    if (!img.complete || !img.naturalWidth) { img.addEventListener("load", this.redraw, { once: true }); return null; }
+    const f = this.host.isStill ? 0 : Math.round((this.host.media?.currentTime || 0) * TRIM_FPS) - (sprite.start || 0);
+    const i = Math.floor(f / (sprite.step || 1));
+    if (f < 0 || i >= sprite.count) return null;
+    return { img, sx: (i % sprite.cols) * sprite.tw, sy: Math.floor(i / sprite.cols) * sprite.th, i };
+  }
+
+  draw() {
+    const box = this.host.cropBox.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const W = Math.max(1, Math.round(box.width * dpr)), H = Math.max(1, Math.round(box.height * dpr));
+    if (this.canvas.width !== W || this.canvas.height !== H) { this.canvas.width = W; this.canvas.height = H; }
+    const ctx = this.canvas.getContext("2d");
+    ctx.clearRect(0, 0, W, H);
+    const subj = this.spec.subject(), media = this.host.media;
+    const t = subj?.found ? this.tile(subj.sprite) : null;
+    if (this.mode === "result" && this.spec.decode) {
+      if (this.decoded?.img?.complete && this.decoded.img.naturalWidth) ctx.drawImage(this.decoded.img, 0, 0, W, H);
+    } else if (this.mode === "result" && t && media) {
+      this.drawResult(ctx, t, subj.sprite, media);
+    } else if (t) {
+      const tint = document.createElement("canvas");
+      tint.width = W; tint.height = H;
+      const g = tint.getContext("2d");
+      this.drawTurned(g, t.img, t.sx, t.sy, subj.sprite.tw, subj.sprite.th);
+      g.globalCompositeOperation = "source-in";
+      g.fillStyle = "rgba(26, 242, 255, 0.45)";
+      g.fillRect(0, 0, W, H);
+      ctx.drawImage(tint, 0, 0);
+    }
+    const time = this.host.isStill ? 0 : (media?.currentTime || 0);
+    const mark = this.marks.find((m) => Math.abs(m.time - time) < 1 / (2 * TRIM_FPS));
+    for (const [list, color] of [[mark?.positive || [], "#3ddc84"], [mark?.negative || [], "#ff5d5d"]]) {
+      for (const p of list) {
+        ctx.beginPath();
+        ctx.arc(p.x * W, p.y * H, 5 * dpr, 0, Math.PI * 2);
+        ctx.fillStyle = color; ctx.fill();
+        ctx.lineWidth = 1.5 * dpr; ctx.strokeStyle = "#000"; ctx.stroke();
+      }
+    }
+  }
+
+  /** The background blurred and the subject kept, for the frame on screen:
+   *  a preview of blur_outside at the canvas's scale. */
+  drawResult(ctx, t, sprite, media) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const natW = media.naturalWidth || media.videoWidth, natH = media.naturalHeight || media.videoHeight;
+    if (!natW || !natH) return;
+    const turn = ((this.host.rotate || 0) % 360 + 360) % 360;
+    const shownW = turn % 180 ? natH : natW;
+    const look = this.spec.look(), enc = this.spec.encScale() || 1;
+    const perEnc = (W / shownW) / enc;               // canvas pixels per encoded pixel
+    const tileEnc = sprite.tw / (natW * enc);         // mask pixels per encoded pixel
+    const key = `${t.i}|${look.grow}|${look.edge}|${this.host.rotate}|${this.host.mirror}`;
+    if (!this.soft || this.soft.key !== key) {
+      const c = document.createElement("canvas");
+      c.width = sprite.tw; c.height = sprite.th;
+      const g = c.getContext("2d");
+      g.drawImage(t.img, t.sx, t.sy, sprite.tw, sprite.th, 0, 0, sprite.tw, sprite.th);
+      const d = g.getImageData(0, 0, sprite.tw, sprite.th);
+      let a = new Float32Array(sprite.tw * sprite.th);
+      for (let i = 0; i < a.length; i++) a[i] = d.data[i * 4 + 3] / 255;
+      const grow = Math.round(look.grow * tileEnc), edge = Math.round(look.edge * tileEnc);
+      if (grow > 0) a = maxFilter(a, sprite.tw, sprite.th, grow);
+      if (edge > 0) a = boxFilter(a, sprite.tw, sprite.th, edge);
+      for (let i = 0; i < a.length; i++) {
+        d.data[i * 4] = d.data[i * 4 + 1] = d.data[i * 4 + 2] = 255;
+        d.data[i * 4 + 3] = Math.round(a[i] * 255);
+      }
+      g.putImageData(d, 0, 0);
+      this.soft = { key, canvas: c };
+    }
+    const sharp = document.createElement("canvas");
+    sharp.width = W; sharp.height = H;
+    const s = sharp.getContext("2d");
+    this.drawTurned(s, media, 0, 0, natW, natH);
+    s.globalCompositeOperation = "destination-in";
+    this.drawTurned(s, this.soft.canvas, 0, 0, sprite.tw, sprite.th);
+    ctx.save();
+    if (look.blur > 0) ctx.filter = `blur(${(look.blur * perEnc).toFixed(1)}px)`;
+    this.drawTurned(ctx, media, 0, 0, natW, natH);
+    ctx.restore();
+    ctx.drawImage(sharp, 0, 0);
+  }
+}
+
 /** Right-click menu on a loader video. */
 function videoMenu(panel, item, e) {
   e.preventDefault(); e.stopPropagation();
@@ -4058,7 +4373,7 @@ function coverRect(w, h, aspect) {
 
 /** The trim/crop editor for an item that doesn't live in a Media Loader.
  *  Edits are written to `item` on Apply, then `onApply(item)` runs. */
-export function openCropEditor(item, { onApply, aspect, aspectLabel, say } = {}) {
+export function openCropEditor(item, { onApply, aspect, aspectLabel, say, nav, subject, noCrop } = {}) {
   const panel = {
     node: null,
     live: () => item,
@@ -4069,7 +4384,7 @@ export function openCropEditor(item, { onApply, aspect, aspectLabel, say } = {})
   // or the item would describe a turn it never got.
   const size = [item.width, item.height];
   let applied = false;
-  const modal = new TrimModal(panel, item, { aspect, aspectLabel, noAdd: true, refmod: true });
+  const modal = new TrimModal(panel, item, { aspect, aspectLabel, noAdd: true, refmod: true, nav, subject, noCrop });
   const apply = modal.apply, close = modal.close;
   modal.apply = () => { applied = true; apply.call(modal); };
   modal.close = () => { close.call(modal); if (!applied) [item.width, item.height] = size; };
@@ -4077,7 +4392,95 @@ export function openCropEditor(item, { onApply, aspect, aspectLabel, say } = {})
   return modal;
 }
 
-function lightbox(item, tag) {
+/** A picture as its tile shows it, as [img, crop marquee, size badge].
+ *  They go in a .mml-slot as SIBLINGS: .mml-pic is absolutely positioned
+ *  against the slot, so wrapping it breaks its sizing. `onload(img, badge)`
+ *  runs when the picture arrives. */
+export function picturePreview(it, { onload, onclick } = {}) {
+  // Declaration order matters here: everything the crop overlay needs
+  // (turn, quarter, img) must exist BEFORE the overlay is built. They
+  // used to be declared after it, which threw a temporal-dead-zone
+  // ReferenceError for any cropped picture and aborted the whole
+  // render — leaving stale tiles whose buttons no longer worked.
+  const [ow, oh] = outSize(it);
+  const turn = ((parseInt(it.rotate, 10) || 0) % 360 + 360) % 360;
+  const quarter = turn === 90 || turn === 270;
+  const flip = (it.mirror || turn)
+    ? { transform: `${it.mirror ? "scaleX(-1) " : ""}rotate(${turn}deg)` }
+    : {};
+
+  const badge = el("span", { class: "mml-dims" + (it.crop ? " cut" : "") },
+    dimsLabel(ow, oh));
+
+  const img = el("img", { class: "mml-pic" + (quarter ? " turned" : ""),
+    src: viewURL(it.file),
+    style: flip,
+    title: dimsTitle(it.name, it.width, it.height)
+      + (turn ? `\nrotated ${turn}°` : "")
+      + (it.crop ? `\ncropped to ${ow}×${oh}` : "")
+      + (it.mirror ? "\nmirrored" : ""),
+    onload: () => onload?.(img, badge),
+    onclick });
+
+  // The file is untouched, so the thumbnail shows the whole picture
+  // with everything outside the crop dimmed — you can see what was
+  // dropped, not just what's left.
+  let marquee = null;
+  if (it.crop) {
+    const box = el("div", { class: "mml-cropbox" },
+      el("div", { class: "mml-cropmark", style: {
+        left: `${(it.crop.x ?? 0) * 100}%`,
+        top: `${(it.crop.y ?? 0) * 100}%`,
+        width: `${(it.crop.w ?? 1) * 100}%`,
+        height: `${(it.crop.h ?? 1) * 100}%`,
+      } }));
+    marquee = el("div", { class: "mml-cropfit", style: flip }, box);
+    // Fit against the post-rotation shape: a quarter turn swaps the
+    // sides the drawn image occupies.
+    requestAnimationFrame(() => fitToMedia(
+      img, box,
+      quarter ? it.height : it.width,
+      quarter ? it.width : it.height));
+  }
+  if (quarter) requestAnimationFrame(() => fitTurned(img));
+
+  return [img, marquee, badge];
+}
+
+/** A clip as its row shows it: on its first kept frame, playing on hover,
+ *  its sent shape in the corner and, while it's being edited, its mask
+ *  drawn over it. `onmeta(video)` runs once the clip's metadata arrives.
+ *  The caller detaches the overlay when it redraws. */
+export function clipPreview(it, { onmeta, onclick } = {}) {
+  const video = el("video", { class: "mml-vthumb",
+    style: it.mirror ? { transform: "scaleX(-1)" } : {},
+    onloadedmetadata: (e) => {
+      const t = it.trim;
+      if (t && t.start) try { e.target.currentTime = t.start; } catch (_) {}
+      onmeta?.(e.target);
+    }, src: viewURL(it.file), muted: true,
+    preload: "metadata",
+    onmouseenter: (e) => e.target.play().catch(() => {}),
+    onmouseleave: (e) => e.target.pause(),
+    onclick });
+  const sprite = it.edit && it.mask && overlayOn() ? it.mask_info?.sprite : null;
+  // What is sent: the crop and size cap applied, like a picture's badge.
+  const [ow, oh] = outSize(it);
+  video.title = dimsTitle(it.name, it.width, it.height) + (it.crop || it.resize ? `\nsent as ${ow}×${oh}` : "") +
+    (it.mirror ? "\nmirrored" : "") + (sprite ? `\n${OVERLAY_NOTE}` : "");
+  const wrap = el("span", { class: "mml-vthumbwrap" }, video,
+    el("span", { class: "mml-dims vid" + (it.crop ? " cut" : "") }, ratioLabel(ow, oh)));
+  let overlay = null;
+  if (sprite) {
+    overlay = maskOverlay(video, wrap, sprite, "contain", { append: true, look: itemLook(it), onMissing: () => wrap.append(
+      el("span", { class: "mml-maskmissing", title: "This clip's mask files are missing: mask it again, " +
+        "or clear its mask. The next run stops with an error until you do." }, "⚠")) });
+    overlay.mirror(!!it.mirror);
+  }
+  return { wrap, video, overlay };
+}
+
+export function lightbox(item, tag) {
   const url = viewURL(item.file);
   const media = item.kind === "video"
     ? el("video", { src: url, controls: true, autoplay: true, loop: true })
@@ -4278,7 +4681,7 @@ function dimsTitle(name, w, h) {
 
 /* --------------------------------------------------------- audio player */
 
-function miniPlayer(url) {
+export function miniPlayer(url) {
   const fill = el("i");
   const bar = el("div", { class: "mml-bar" }, fill);
   const time = el("span", { class: "mml-time" }, "0:00");
@@ -5401,9 +5804,6 @@ class LoaderPanel {
         `${CLIP.min}s. The model was trained on ${CLIP.min}\u2013${CLIP.max}s ` +
         "reference clips, so very short ones may be weakly followed or " +
         "ignored \u2014 pad with silence or use a longer take.");
-    if (!this.items.some((i) => isOn(i) && (i.kind === "picture" ||
-        i.kind === "video")) && audio)
-      problems.push("Audio can't be sent alone — add an image or video.");
 
     const act = !problems.length && this.msg && this.msgAction;
     kids.push(el("div", { class: "mml-msg" + (this.msgErr || problems.length ? " err" : "") },
@@ -5421,81 +5821,31 @@ class LoaderPanel {
       const tag = (tags.get(it) || "").slice(1, -1);
       picCells.push(this.reorderable(el("div",
         { class: "mml-slot filled pic" + (isOn(it) ? "" : " off") },
-        (() => {
-          // Badge and img are SIBLINGS in the slot: .mml-pic is absolutely
-          // positioned against the slot, so wrapping it breaks its sizing.
-          //
-          // Declaration order matters here: everything the crop overlay needs
-          // (turn, quarter, img) must exist BEFORE the overlay is built. They
-          // used to be declared after it, which threw a temporal-dead-zone
-          // ReferenceError for any cropped picture and aborted the whole
-          // render — leaving stale tiles whose buttons no longer worked.
-          const [ow, oh] = outSize(it);
-          const turn = ((parseInt(it.rotate, 10) || 0) % 360 + 360) % 360;
-          const quarter = turn === 90 || turn === 270;
-          const flip = (it.mirror || turn)
-            ? { transform: `${it.mirror ? "scaleX(-1) " : ""}rotate(${turn}deg)` }
-            : {};
-
-          const badge = el("span", { class: "mml-dims" + (it.crop ? " cut" : "") },
-            dimsLabel(ow, oh));
-
-          const img = el("img", { class: "mml-pic" + (quarter ? " turned" : ""),
-            src: viewURL(it.file),
-            style: flip,
-            title: dimsTitle(it.name, it.width, it.height)
-              + (turn ? `\nrotated ${turn}\u00b0` : "")
-              + (it.crop ? `\ncropped to ${ow}\u00d7${oh}` : "")
-              + (it.mirror ? "\nmirrored" : ""),
-            onload: () => {
-              // Items from before dimensions were stored learn them here.
-              if (!it.width && img.naturalWidth) {
-                // Write to the item's LIVE incarnation: commits re-parse the
-                // state, so `it` may be a dead object from a replaced render.
-                const target = this.live(it);
-                if (!target.width) {
-                  target.width = img.naturalWidth;
-                  target.height = img.naturalHeight;
-                }
-                const [nw, nh] = outSize(target);
-                badge.textContent = dimsLabel(nw, nh);
-                img.title = dimsTitle(target.name, target.width, target.height);
-                // One commit per batch of loads, not one per image: a preset
-                // full of dimension-less pictures used to fire a commit →
-                // re-render → fresh onloads → commit… burst that collapsed
-                // any open popover and churned the panel.
-                if (this.items.includes(target)) {
-                  clearTimeout(this._dimsCommit);
-                  this._dimsCommit = setTimeout(() => this.commit(), 120);
-                }
+        picturePreview(it, {
+          onload: (img, badge) => {
+            // Items from before dimensions were stored learn them here.
+            if (!it.width && img.naturalWidth) {
+              // Write to the item's LIVE incarnation: commits re-parse the
+              // state, so `it` may be a dead object from a replaced render.
+              const target = this.live(it);
+              if (!target.width) {
+                target.width = img.naturalWidth;
+                target.height = img.naturalHeight;
               }
-            },
-            onclick: () => lightbox(it, tags.get(it) || "") });
-
-          // The file is untouched, so the thumbnail shows the whole picture
-          // with everything outside the crop dimmed — you can see what was
-          // dropped, not just what's left.
-          let marquee = null;
-          if (it.crop) {
-            const box = el("div", { class: "mml-cropbox" },
-              el("div", { class: "mml-cropmark", style: {
-                left: `${(it.crop.x ?? 0) * 100}%`,
-                top: `${(it.crop.y ?? 0) * 100}%`,
-                width: `${(it.crop.w ?? 1) * 100}%`,
-                height: `${(it.crop.h ?? 1) * 100}%`,
-              } }));
-            marquee = el("div", { class: "mml-cropfit", style: flip }, box);
-            // Fit against the post-rotation shape: a quarter turn swaps the
-            // sides the drawn image occupies.
-            requestAnimationFrame(() => fitToMedia(
-              img, box,
-              quarter ? it.height : it.width,
-              quarter ? it.width : it.height));
-          }
-          if (quarter) requestAnimationFrame(() => fitTurned(img));
-
-          return [img, marquee, badge];
-        })(),
+              const [nw, nh] = outSize(target);
+              badge.textContent = dimsLabel(nw, nh);
+              img.title = dimsTitle(target.name, target.width, target.height);
+              // One commit per batch of loads, not one per image: a preset
+              // full of dimension-less pictures used to fire a commit →
+              // re-render → fresh onloads → commit… burst that collapsed
+              // any open popover and churned the panel.
+              if (this.items.includes(target)) {
+                clearTimeout(this._dimsCommit);
+                this._dimsCommit = setTimeout(() => this.commit(), 120);
+              }
+            }
+          },
+          onclick: () => lightbox(it, tags.get(it) || "") }),
         el("div", { class: "mml-picbar" },
           this.powerBtn(it),
           el("span", { class: "mml-tag pic" }, isOn(it) ? tag : "off"),
@@ -5518,59 +5868,41 @@ class LoaderPanel {
       const mode = it.audio_mode || "off";
       const splitTag = extra.get(it);
       const editing = !!it.edit;
-      let thumb = null;
+      const { wrap, video, overlay } = clipPreview(it, {
+        onmeta: (v) => {
+          // Same healing as pictures: old presets stored videos without
+          // dimensions or duration. Learn them from the element, once,
+          // against the live item, with one debounced commit per batch.
+          const target = this.live(it);
+          if ((!target.width && v.videoWidth) ||
+              (!target.duration && v.duration)) {
+            if (!target.width && v.videoWidth) {
+              target.width = v.videoWidth;
+              target.height = v.videoHeight;
+            }
+            if (!target.duration && Number.isFinite(v.duration))
+              target.duration = Math.round(v.duration * 100) / 100;
+            if (this.items.includes(target)) {
+              clearTimeout(this._dimsCommit);
+              this._dimsCommit = setTimeout(() => this.commit(), 120);
+            }
+          }
+        },
+        onclick: () => lightbox(it, tags.get(it) || "") });
+      if (overlay) {
+        video.title += " Right-click the clip to hide it.";
+        this.overlays.push(overlay);
+      }
       const row = el("div", { class: "mml-row" },
         editing
           ? el("span", { class: "mml-editbadge", title: "This clip is being edited \u2014 click to change the mask",
               onclick: (e) => { e.stopPropagation(); new TrimModal(this, it, { mask: true }); } }, "\u25d0")
           : this.powerBtn(it),
-        thumb = el("video", { class: "mml-vthumb",
-          style: it.mirror ? { transform: "scaleX(-1)" } : {},
-          onloadedmetadata: (e) => {
-            const t = it.trim;
-            if (t && t.start) try { e.target.currentTime = t.start; } catch (_) {}
-            // Same healing as pictures: old presets stored videos without
-            // dimensions or duration. Learn them from the element, once,
-            // against the live item, with one debounced commit per batch.
-            const v = e.target;
-            const target = this.live(it);
-            if ((!target.width && v.videoWidth) ||
-                (!target.duration && v.duration)) {
-              if (!target.width && v.videoWidth) {
-                target.width = v.videoWidth;
-                target.height = v.videoHeight;
-              }
-              if (!target.duration && Number.isFinite(v.duration))
-                target.duration = Math.round(v.duration * 100) / 100;
-              if (this.items.includes(target)) {
-                clearTimeout(this._dimsCommit);
-                this._dimsCommit = setTimeout(() => this.commit(), 120);
-              }
-            }
-          }, src: viewURL(it.file), muted: true,
-          preload: "metadata",
-          onmouseenter: (e) => e.target.play().catch(() => {}),
-          onmouseleave: (e) => e.target.pause(),
-          onclick: () => lightbox(it, tags.get(it) || "") }),
+        wrap,
         el("div", { class: "mml-meta" },
           el("div", { class: "mml-tag vid" + (editing ? " edit" : "") },
             isOn(it) ? (tags.get(it) || "").slice(1, -1) + (editing ? " \u00b7 editing" : "") : "off"),
           el("div", { class: "mml-name", title: it.name }, it.name)));
-      const sprite = editing && it.mask && overlayOn() ? it.mask_info?.sprite : null;
-      // What is sent: the crop and size cap applied, like a picture's badge.
-      const [ow, oh] = outSize(it);
-      thumb.title = dimsTitle(it.name, it.width, it.height) + (it.crop || it.resize ? `\nsent as ${ow}\u00d7${oh}` : "") +
-        (it.mirror ? "\nmirrored" : "") + (sprite ? `\n${OVERLAY_NOTE} Right-click the clip to hide it.` : "");
-      const wrap = el("span", { class: "mml-vthumbwrap" });
-      thumb.replaceWith(wrap);
-      wrap.append(thumb, el("span", { class: "mml-dims vid" + (it.crop ? " cut" : "") }, ratioLabel(ow, oh)));
-      if (sprite) {
-        const o = maskOverlay(thumb, wrap, sprite, "contain", { append: true, look: itemLook(it), onMissing: () => wrap.append(
-          el("span", { class: "mml-maskmissing", title: "This clip's mask files are missing: mask it again, " +
-            "or clear its mask. The next run stops with an error until you do." }, "\u26a0")) });
-        o.mirror(!!it.mirror);
-        this.overlays.push(o);
-      }
       if (it.has_audio && isOn(it)) {
         row.append(el("div", { class: "mml-segstack" },
           el("span", { class: "mml-tag aud mml-segtag" },

@@ -187,6 +187,7 @@ class H3RefMod:
     path: str = ""
     enc_times: List[float] = field(default_factory=list)   # frames stored for the text encoder, by timestamp
     enc_fps: float = 0.0          # the playback rate they were picked at
+    subject_blur: Dict = field(default_factory=dict)   # how the Create tab cropped to and blurred around the subject
 
     def __post_init__(self):
         if self.kind == "audio":
@@ -288,6 +289,7 @@ class H3RefMod:
             path=path_no_ext,
             enc_times=[float(t) for t in meta.get("enc_times") or []],
             enc_fps=float(meta.get("enc_fps") or 0.0),
+            subject_blur=meta.get("subject_blur") if isinstance(meta.get("subject_blur"), dict) else {},
         )
 
 
@@ -363,6 +365,15 @@ def stored_record(mod):
     with safe_open(mod.path + ".safetensors", framework="pt") as fh:
         packed = {f"enc_{i}": fh.get_tensor(f"enc_{i}") for i in range(len(mod.enc_times))}
     return packed, list(mod.enc_times), mod.enc_fps
+
+
+def blur_latent_outside(z, keep, background):
+    """Stored frames [1, 24, T, H, W] mixed toward the same heavy low-pass a
+    weight below 1 uses, outside the subject: `keep` [T, H, W] is how much
+    of each latent cell is subject (0..1), and `background` how much of the
+    rest stays as it was (0 blurs it fully). The shape doesn't change."""
+    w = background + (1.0 - background) * keep.to(z.device, torch.float32)[None, None]
+    return (w * z.float() + (1.0 - w) * _blur_latent(z).float()).to(z.dtype)
 
 
 def soften(frames, strength, latent_h, latent_w):

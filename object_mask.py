@@ -44,8 +44,9 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw
 
 import folder_paths
+import comfy.model_management as mm
 
-from . import media_io
+from . import latent_cache, media_io
 
 SUBFOLDER = "minimax_h3/masks"
 DECODE_CAP = 1008          # SAM 3 works at 1008 px; decoding larger only costs memory
@@ -82,7 +83,7 @@ def _track(sam3, model, frames, **kw):
     return sam3.SAM3_TrackToMask.execute(track_data=track, object_indices="").result[0]
 
 
-def _save_sprite(masks, folder, stem):
+def _save_sprite(masks, folder, stem, sub=SUBFOLDER):
     """The mask as one small PNG of tiles, one per frame, white with the mask
     as alpha. The editor and the loader card draw the tile for the frame on
     screen, so the overlay follows scrubbing exactly. Returns its layout."""
@@ -102,7 +103,7 @@ def _save_sprite(masks, folder, stem):
     name = f"{stem}.png"
     Image.fromarray(np.stack([np.full_like(alpha, 255), alpha], axis=-1), "LA").save(
         os.path.join(folder, name), optimize=True)
-    return {"file": f"{SUBFOLDER}/{name} [input]", "tw": tw, "th": th, "cols": cols,
+    return {"file": f"{sub}/{name} [input]", "tw": tw, "th": th, "cols": cols,
             "count": int(small.shape[0]), "step": int(step)}
 
 
@@ -162,25 +163,77 @@ def read_mask(annotated):
     return meta, stored > 0
 
 
-def save_mask(masks, source, first, how):
+def save_mask(masks, source, first, how, sub=SUBFOLDER, prefix=""):
     """Write bool [n, h, w] as a packed mask plus its overlay sprite; the info
-    the panel keeps on the clip."""
+    the panel keeps on the clip. `sub` is the input subfolder: the masks
+    folder, or the cache for the RefMod Create tab's subject masks, which are
+    only kept until the RefMod is made."""
     from safetensors.torch import save_file
     n, _h, w = masks.shape
     hit = int(masks.flatten(1).any(dim=1).sum())
     if not hit:
         raise ValueError("The mask is empty on every frame.")
-    folder = os.path.join(folder_paths.get_input_directory(), SUBFOLDER)
+    folder = os.path.join(folder_paths.get_input_directory(), sub)
     os.makedirs(folder, exist_ok=True)
-    tag = f"{_stem(source)}_{uuid.uuid4().hex[:8]}"
+    tag = f"{prefix}{_stem(source)}_{uuid.uuid4().hex[:8]}"
     name = f"{tag}.safetensors"
     save_file({"mask": pack(masks).contiguous()}, os.path.join(folder, name),
               metadata={"format": "packed1", "width": str(w), "fps": str(media_io.FPS),
                         "start_frame": str(first), "source": os.path.basename(str(source).split(" [")[0])})
-    sprite = _save_sprite(masks, folder, tag)
+    sprite = _save_sprite(masks, folder, tag, sub)
     sprite["start"] = first
-    return {"file": f"{SUBFOLDER}/{name} [input]", "frames": n, "hit": hit,
+    return {"file": f"{sub}/{name} [input]", "frames": n, "hit": hit,
             "share": round(np.count_nonzero(masks.numpy()) / masks.numel(), 4), "how": how, "sprite": sprite}
+
+
+def turn(masks, rotate, mirror):
+    """[n, h, w] the way the editor shows its picture: turned `rotate`
+    degrees clockwise, then mirrored (load_image's order)."""
+    k = (int(rotate or 0) % 360) // 90
+    if k:
+        masks = torch.rot90(masks, -k, dims=(1, 2))
+    return masks.flip(2) if mirror else masks
+
+
+def unturn(masks, rotate, mirror):
+    """turn() undone: back to the file's own orientation, where masks are kept
+    so a later turn or mirror still lines up."""
+    if mirror:
+        masks = masks.flip(2)
+    k = (int(rotate or 0) % 360) // 90
+    return torch.rot90(masks, k, dims=(1, 2)) if k else masks
+
+
+def _bbox(masks):
+    """The box around bool [n, h, w] on every frame, as fractions of the frame."""
+    ys, xs = torch.nonzero(masks.any(dim=0), as_tuple=True)
+    h, w = masks.shape[1:]
+    return {"x": float(xs.min()) / w, "y": float(ys.min()) / h,
+            "w": float(xs.max() + 1 - xs.min()) / w, "h": float(ys.max() + 1 - ys.min()) / h}
+
+
+def _subject_info(masks, source, first, how):
+    """A subject mask saved to the cache, for the RefMod Create tab."""
+    if not masks.any():
+        return {"found": False}
+    info = save_mask(masks, source, first, how, sub=latent_cache.SUBFOLDER, prefix="subject_")
+    info.update(found=True, bbox=_bbox(masks))
+    return info
+
+
+def drop_subject_masks(files):
+    """Delete the Create tab's subject masks, with their sprites, once the
+    RefMod they were for is saved. Only those: anything else is left alone."""
+    folder = os.path.realpath(latent_cache.folder())
+    for annotated in files:
+        if not annotated:
+            continue
+        path = os.path.realpath(media_io.resolve(annotated))
+        if os.path.dirname(path) != folder or not os.path.basename(path).startswith("subject_"):
+            continue
+        for p in (path, os.path.splitext(path)[0] + ".png"):
+            if os.path.isfile(p):
+                os.remove(p)
 
 
 def _aligned(base, first, n, h, w):
@@ -199,7 +252,8 @@ class MiniMaxH3FantasticObjectMask:
     CATEGORY = "conditioning/video_models"
     DESCRIPTION = (
         "Used by the Media Loader's Mask for editing panel: finds an object or person in a loaded clip with SAM 3.1 (core "
-        "ComfyUI's SAM 3 nodes) and saves its mask beside the clip. You don't need to place this node yourself."
+        "ComfyUI's SAM 3 nodes) and saves its mask beside the clip. The RefMod library's Create tab uses it too, to "
+        "find the subject in each picture or clip. You don't need to place this node yourself."
     )
     RETURN_TYPES = ()
     FUNCTION = "run"
@@ -230,22 +284,42 @@ class MiniMaxH3FantasticObjectMask:
                 "every_frame": ("BOOLEAN", {"default": False,
                     "tooltip": "With dots and a name: also look for the name on every frame, and use what it finds "
                                "wherever tracking lost the object (after a cut, say). Can pick up look-alikes."}),
+                "subject": ("BOOLEAN", {"default": False,
+                    "tooltip": "For the RefMod Create tab: the mask goes to the cache, kept only until the RefMod "
+                               "is made, and finding nothing is reported instead of failing the run."}),
+                "max_frames": ("INT", {"default": 0, "min": 0, "max": 100000,
+                    "tooltip": "Frames masked from the trim start; 0 masks the whole trim."}),
+                "pictures": ("STRING", {"default": "", "tooltip": "Pictures to find the subject in, instead of the "
+                    "clip, as JSON: [{\"file\", \"rotate\", \"mirror\", \"positive\", \"negative\"}], dots from 0 to 1 "
+                    "on the picture as turned and mirrored. With max_objects 1, only the largest match is kept."}),
             },
         }
 
+    @classmethod
+    def IS_CHANGED(cls, subject=False, **kwargs):
+        # subject masks are deleted once the RefMod is saved, so a cached run would name missing files
+        return float("nan") if subject else ""
+
     def run(self, model, clip, video, text, points, start=0.0, end=0.0, threshold=0.5, max_objects=4,
-            mode="replace", base="", every_frame=False):
+            mode="replace", base="", every_frame=False, subject=False, max_frames=0, pictures=""):
         try:
             import comfy_extras.nodes_sam3 as sam3
         except Exception as exc:
             raise RuntimeError("This ComfyUI has no SAM 3 support; update it.") from exc
 
-        frames = media_io.load_video_frames(video, start=start or None, end=end or None, resize=DECODE_CAP)
+        text = " ".join(text.split())
+        cond = clip.encode_from_tokens_scheduled(clip.tokenize(text)) if text else None
+        if pictures.strip():
+            found = [self.still(sam3, model, cond, text, p, threshold, max_objects) for p in json.loads(pictures)]
+            print(f"[MiniMaxH3FantasticObjectMask] subject found in {sum(f['found'] for f in found)} of "
+                  f"{len(found)} pictures")
+            return {"ui": {"mmh3_subject": found}}
+
+        frames = media_io.load_video_frames(video, start=start or None, end=end or None, resize=DECODE_CAP,
+                                            max_frames=max_frames or None)
         first = round(float(start or 0) * media_io.FPS)
         n, h, w = frames.shape[0], frames.shape[1], frames.shape[2]
         keys = _keyframes(json.loads(points) if points.strip() else {}, first, n, w, h)
-        text = " ".join(text.split())
-        cond = clip.encode_from_tokens_scheduled(clip.tokenize(text)) if text else None
 
         if keys:
             seeds, named = [], 0
@@ -285,6 +359,11 @@ class MiniMaxH3FantasticObjectMask:
             masks[filled] = named[filled]
             if filled.any():
                 how += f", re-found by name on {int(filled.sum())} frame(s)"
+        if subject:
+            info = _subject_info(masks, video, first, how)
+            print(f"[MiniMaxH3FantasticObjectMask] {os.path.basename(str(video))}: subject "
+                  + (f"on {info['hit']} of {n} frames ({how})" if info["found"] else "not found"))
+            return {"ui": {"mmh3_subject": [info]}}
         if not masks.any():
             raise ValueError("SAM didn't find the object on any frame. Try other wording or click on it.")
         if mode in ("add", "subtract") and base.strip():
@@ -297,6 +376,34 @@ class MiniMaxH3FantasticObjectMask:
         print(f"[MiniMaxH3FantasticObjectMask] {os.path.basename(str(video))}: masked on {info['hit']} of {n} "
               f"frames ({how}), saved {info['file'].split(' [')[0]}")
         return {"ui": {"mmh3_mask": [info]}}
+
+    def still(self, sam3, model, cond, text, picture, threshold, max_objects):
+        """One picture's subject for the RefMod Create tab, found on the
+        picture as the editor shows it (turned, mirrored) and stored in the
+        file's own orientation. Green dots pick the match; red dots take
+        matches out; with max_objects 1 a name keeps only the largest match."""
+        mm.throw_exception_if_processing_interrupted()
+        rotate, mirror = picture.get("rotate") or 0, bool(picture.get("mirror"))
+        frame = media_io.load_image(picture["file"], mirror=mirror, rotate=rotate, resize=DECODE_CAP)
+        h, w = frame.shape[1], frame.shape[2]
+        pos, neg = _pixels(picture.get("positive"), w, h), _pixels(picture.get("negative"), w, h)
+        if pos:
+            mask, by_name = _seed(sam3, model, cond, frame, pos, neg, threshold)
+            how = "from dots" + (f", matching {text!r}" if by_name else "")
+        elif cond is not None:
+            found = sam3.SAM3_Detect.execute(model=model, image=frame, conditioning=cond, threshold=threshold,
+                                             refine_iterations=2, individual_masks=True).result[0].cpu()
+            hits = [m for m in found if m.any() and not any(m[y, x] > 0 for x, y in neg)]
+            if max_objects == 1 and hits:
+                hits = [max(hits, key=lambda m: float((m > 0).sum()))]
+            mask = (torch.stack(hits).amax(dim=0) > 0).float()[None] if hits else torch.zeros(1, h, w)
+            how = f"found by name ({text!r})" + (", the largest match" if max_objects == 1 and len(found) > 1 else "")
+        else:
+            raise ValueError("Type what to find, or click on it, first.")
+        mask = mask.float().cpu() > 0.5
+        if tuple(mask.shape[1:]) != (h, w):
+            mask = F.interpolate(mask[:, None].float(), size=(h, w), mode="nearest")[:, 0] > 0.5
+        return _subject_info(unturn(mask, rotate, mirror), picture["file"], 0, how)
 
 
 def _stamp(stroke, h, w):
@@ -472,12 +579,12 @@ def compose_layers(clip, layers, start=0.0, end=0.0):
     return save_mask(out, clip, first, "layers: " + ", ".join(names))
 
 
-def load_mask(annotated, n, start=None, mirror=False, crop=None):
+def load_mask(annotated, n, start=None, mirror=False, crop=None, rotate=0):
     """A saved mask cut and framed the way the Media Loader sends its clip: the
-    trim's `n` frames, mirrored then cropped. It stays at the resolution it was
-    saved at; callers bring it to the size they work at. Frames it doesn't
-    cover (the trim was widened after masking) come out empty, so they are
-    kept as filmed. Returns [n, h, w] float."""
+    trim's `n` frames, turned (pictures only), mirrored then cropped. It stays
+    at the resolution it was saved at; callers bring it to the size they work
+    at. Frames it doesn't cover (the trim was widened after masking) come out
+    empty, so they are kept as filmed. Returns [n, h, w] float."""
     meta, stored = read_mask(annotated)
     at = round(float(start or 0) * media_io.FPS) - int(meta.get("start_frame", 0))
     idx = torch.arange(at, at + n)
@@ -487,7 +594,7 @@ def load_mask(annotated, n, start=None, mirror=False, crop=None):
     if not bool(inside.all()):
         print(f"[MiniMaxH3 mask] the mask covers {int(inside.sum())} of the {n} frames sent; the rest "
               "stay as filmed. Mask the clip again to cover the new trim.")
-    return media_io._apply_crop(media_io._apply_mirror(m[..., None], mirror), crop)[..., 0]
+    return media_io._apply_crop(turn(m, rotate, mirror)[..., None], crop)[..., 0]
 
 
 NODE_CLASS_MAPPINGS = {"MiniMaxH3FantasticObjectMask": MiniMaxH3FantasticObjectMask}

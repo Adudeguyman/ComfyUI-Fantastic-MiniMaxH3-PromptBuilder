@@ -7,7 +7,8 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
   safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets, setterOf, linkNodes, keepNameChars,
-  overlayOn, maskOverlay, refTokenEstimate, itemLook } from "./medialoader.js";
+  overlayOn, maskOverlay, refTokenEstimate, itemLook, picturePreview, clipPreview, miniPlayer, lightbox,
+  injectCSS as injectLoaderCSS } from "./medialoader.js";
 import { STACK_NAME, ENCODE_NAMES, readStack, deriveEntries, labelGroups,
   rangeText as refmodRange, previewURL as refmodPreviewURL, KIND as REFMOD_KIND,
   openStackModal, refreshStackLabels } from "./refmodstack.js";
@@ -925,7 +926,7 @@ function slotsFromItems(rawItems, sourceLabel) {
   const push = (tag, kind, item, note, previewKind) => {
     const n = +(tag.match(/(\d+)>/) || [])[1];
     out.push({
-      tag, kind, idx: n, cls: TAG_CLASS[kind], note, edit: !!item.edit,
+      tag, kind, idx: n, cls: TAG_CLASS[kind], note, edit: !!item.edit, name: item.name, item,
       slotName: `loader:${item.name}`,
       source: `${sourceLabel} \u2022 ${item.name}`,
       preview: { type: previewKind, url: loaderViewURL(item.file) },
@@ -1158,6 +1159,61 @@ function getRefSlots(node, opts = {}) {
   return directSlots(node);
 }
 
+/** What our RefMod Text Encode will present, in the order the model reads
+ *  it: the media on its references input (a Media Loader, or a Prompt Builder
+ *  passing media on through its mode's gate), then the RefMods on its mods
+ *  input in bundle order, each kind numbered on from the media. A source this
+ *  can't see into makes the list partial; `withheld` counts media the
+ *  builder's mode keeps back. */
+function encodeSlots(enc) {
+  const from = (name) => {
+    const i = (enc.inputs || []).findIndex((x) => x.name === name);
+    return i >= 0 && enc.inputs[i].link != null ? originNode(enc, i) : null;
+  };
+  const refSrc = from("references"), modSrc = from("mods");
+  let media = [], withheld = 0, partial = false;
+  if (refSrc?.type === LOADER_NAME) {
+    let items = [];
+    try { items = JSON.parse(refSrc.widgets?.find((w) => w.name === "media_state")?.value || "[]"); } catch (e) { items = []; }
+    media = slotsFromItems(Array.isArray(items) ? items : [], "Media Loader") || [];
+  } else if (refSrc?.type === NODE_NAME) {
+    const all = (mediaSlots(refSrc) || []).filter((m) => m.tag);
+    const cap = MODE_CAPACITY[gateMode(refSrc)];
+    media = all.filter((m) => m.idx <= (cap[m.kind] ?? 0));
+    withheld = all.length - media.length;
+  } else if (refSrc) partial = true;
+  // a clip's soundtrack is named after the clip, which is the next row
+  const rows = media.map((m) => ({ group: "Media", tag: m.tag, kind: m.kind, name: m.name || m.source,
+    more: m.kind === "Audio" && m.note && m.note !== "standalone" ? "soundtrack"
+      : m.edit && m.kind === "Video" ? "being edited" : m.name ? "" : m.slotName }));
+  // The thumbnails gather a source's rows on one card: a loader file with
+  // its soundtrack, a RefMod with its look and voice.
+  const cards = [], cardOf = new Map();
+  const onCard = (key, make, row) => {
+    let card = key != null && cardOf.get(key);
+    if (!card) { card = { ...make(), tags: [] }; cards.push(card); if (key != null) cardOf.set(key, card); }
+    card.tags.push(row);
+  };
+  media.forEach((m, i) => onCard(m.item, () => ({ group: "Media", name: rows[i].name, item: m.item, preview: m.preview }), rows[i]));
+  const offset = { Picture: 0, Video: 0, Audio: 0 };
+  for (const m of media) offset[m.kind] = Math.max(offset[m.kind], m.idx);
+  if (modSrc) {
+    const { chain, partial: unseen } = modsChain(modSrc);
+    partial = partial || unseen;
+    for (const g of labelGroups(chain.flatMap((st) => deriveEntries(readStack(st).picks)))) {
+      if (!g.nums.length) continue;
+      const kind = REFMOD_KIND[g.kind].label, nums = g.nums.map((num) => num + offset[kind]);
+      const row = { group: "RefMods", kind, name: g.name,
+        tag: nums.length > 1 ? `<${kind} ${nums[0]}\u2013${nums[nums.length - 1]}>` : `<${kind} ${nums[0]}>`,
+        more: nums.length > 1 ? `${nums.length} copies` : "" };
+      rows.push(row);
+      onCard(g.uid, () => ({ group: "RefMods", name: g.name, refmod: true, preview: g.preview }),
+        { ...row, tokens: g.tokens * nums.length });
+    }
+  }
+  return { rows, cards, partial, withheld, linked: !!(refSrc || modSrc) };
+}
+
 /** Slots from the picture_/video_/audio_ inputs, numbered as the native
  *  Reference to Video node numbers them. */
 function directSlots(node) {
@@ -1280,10 +1336,15 @@ function genRef(state) {
       // The name rides on the definition so the model ties it to the label.
       if (line && name && /^<Subject \d+>/.test(line))
         line = line.replace(/\.?\s*$/, "") + `. Their name is ${name}.`;
-      // A voice description rides on its voice line, after the drafted wording.
+      // A voice line says whose voice it is when its subject has a name, and
+      // its description rides along, after the drafted wording.
+      const bind = voiceBinding(line);
+      const owner = bind?.subj && Object.values(names).find((n) => n.tag === bind.subj);
       const voice = oneLine(d.voice);
-      if (line && voice && voiceBinding(line))
-        line = line.replace(/\.?\s*$/, "") + `. It is ${withArticle(voice)}.`;
+      if (line && bind && (owner || voice))
+        line = line.replace(/\.?\s*$/, "") + (owner
+          ? `. It is ${owner.name}'s voice${voice ? `: ${voice}` : ""}.`
+          : `. It is ${withArticle(voice)}.`);
       return line;
     }).filter(Boolean).join("\n");
   const types = TASK_TYPES.filter((t) => r.summaryTypes.includes(t)).join(" + ");
@@ -1911,6 +1972,46 @@ const CSS = `
   border-radius:6px;padding:6px 9px;font-size:calc(11px * var(--mmh3-fs, 1));line-height:1.5;color:#9aa3b2;
   overflow:hidden;cursor:default;}
 .mmh3-summary b{color:#d7dbe2;}
+.mmh3-reforder{width:100%;height:100%;box-sizing:border-box;display:flex;flex-direction:column;background:#181b21;
+  border:1px solid #2b303b;border-radius:6px;padding:4px 10px;font-size:13px;line-height:20px;color:#9aa3b2;overflow:hidden;}
+.mmh3-reforder-head{flex:0 0 24px;line-height:24px;cursor:pointer;color:#e6e9ef;font-weight:600;white-space:nowrap;
+  display:flex;align-items:center;gap:6px;min-width:0;}
+.mmh3-reforder-head > span:first-child{flex:0 0 10px;color:#8b93a3;}
+.mmh3-reforder-head .title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.mmh3-reforder-thumbs{flex:0 0 auto;background:#232833;border:1px solid #3a4252;border-radius:5px;color:#d7dbe2;
+  font:inherit;font-size:12px;font-weight:500;line-height:18px;padding:0 7px;cursor:pointer;}
+.mmh3-reforder-thumbs:hover{border-color:#59637a;}
+.mmh3-reforder-thumbs:disabled{opacity:.4;cursor:default;}
+.mmh3-reforder-list{flex:0 1 auto;min-height:0;max-height:200px;overflow-y:auto;scrollbar-width:thin;
+  scrollbar-color:#4b5363 transparent;}
+.mmh3-reforder-row{display:flex;gap:10px;height:20px;white-space:nowrap;}
+.mmh3-reforder-row .num{flex:0 0 18px;text-align:right;color:#8b93a3;}
+.mmh3-reforder-row .tag{flex:0 0 auto;min-width:96px;font-family:ui-monospace,monospace;}
+.mmh3-reforder-row .tag.pic,.mmh3-thumbtag .tag.pic{color:#e0a94c;}
+.mmh3-reforder-row .tag.vid,.mmh3-thumbtag .tag.vid{color:#4cc3e0;}
+.mmh3-reforder-row .tag.aud,.mmh3-thumbtag .tag.aud{color:#b48ce8;}
+.mmh3-reforder-row .name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:#e6e9ef;}
+.mmh3-reforder-row .more{color:#8b93a3;}
+.mmh3-reforder-group{height:20px;padding-left:28px;color:#8b93a3;font-size:12px;font-weight:600;}
+.mmh3-reforder-note{flex:0 0 auto;color:#e0a94c;}
+.mmh3-reforder-note div{height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mmh3-thumbs{width:min(1000px,94vw);height:auto;max-height:90vh;--mml-fs:1.25;}
+.mmh3-thumbscroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px 16px 16px;display:flex;flex-direction:column;
+  gap:8px;font-size:13px;}
+.mmh3-thumbsec{color:#8b93a3;font-size:12px;font-weight:600;}
+.mmh3-thumbgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;}
+.mmh3-thumbcard{display:flex;flex-direction:column;gap:3px;min-width:0;padding:6px;background:#1d2027;
+  border:1px solid #303642;border-radius:8px;}
+.mmh3-thumbart{position:relative;height:120px;margin-bottom:3px;border-radius:6px;background:#101217;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;}
+.mmh3-thumbart .mml-vthumbwrap{width:100%;height:100%;min-width:0;border-radius:0;}
+.mmh3-thumbart .mml-vthumb{width:100%;height:100%;min-width:0;max-width:none;border-radius:0;}
+.mmh3-thumbart .mml-row{width:100%;}
+.mmh3-thumbimg{width:100%;height:100%;object-fit:contain;display:block;}
+.mmh3-thumbname{font-weight:600;color:#e6e9ef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mmh3-thumbtag{display:flex;gap:6px;font-size:12px;line-height:18px;white-space:nowrap;min-width:0;}
+.mmh3-thumbtag .tag{flex:0 0 auto;font-family:ui-monospace,monospace;}
+.mmh3-thumbtag .more{min-width:0;overflow:hidden;text-overflow:ellipsis;color:#8b93a3;}
 .mmh3-libmodal{width:min(940px,94vw);height:min(640px,90vh);display:flex;
   flex-direction:column;background:#191c22;color:#d7dbe2;border:1px solid #303642;
   border-radius:10px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.55);}
@@ -6479,14 +6580,16 @@ class Editor {
         // is X." and !X anywhere else becomes "<Subject N> X".
         const nameIn = el("input", { class: "mmh3-defname", type: "text", value: d.name || "",
           placeholder: "name", title: "Optional name for this subject. The prompt adds \u201cTheir name is \u2026\u201d " +
-            `to the line, and typing ${NAME_PREFIX}Name in any field stands for \u201c<Subject N> Name\u201d.`,
+            "to the line and \u201cIt is \u2026's voice\u201d to the subject's voice line, and typing " +
+            `${NAME_PREFIX}Name in any field stands for \u201c<Subject N> Name\u201d.`,
           hidden: !/^\s*<Subject \d+>/.test(d.text || ""),
           oninput: (e) => { keepNameChars(e); d.name = e.target.value.trim(); this._paintSubjChips?.(); this.updatePreview(); } });
         // A voice description rides on a voice-timbre line: the prompt adds
         // "It is a …", and the speaker button can put it into a spoken line.
         const voiceIn = el("input", { class: "mmh3-defname mmh3-defvoice", type: "text", value: d.voice || "",
           placeholder: "voice, like low and husky", title: "Optional description of this voice. The prompt adds " +
-            "“It is a …” to the line, and the speaker button can insert it into a spoken line.",
+            "“It is a …” to the line (“It is Name's voice: …” when its subject has a name), and the speaker " +
+            "button can insert it into a spoken line.",
           hidden: !voiceBinding(d.text || ""),
           oninput: (e) => { d.voice = e.target.value; this.updatePreview(); this.refreshDialogueRow(); } });
         paintMini();
@@ -7049,6 +7152,192 @@ app.registerExtension({
     nodeType.prototype.onConnectionsChange = function () {
       const r = onConnectionsChange?.apply(this, arguments);
       setTimeout(() => { updateSummary(this); refreshStackLabels(); }, 0);
+      return r;
+    };
+  },
+});
+
+/* ------------------------------------------------------------------ */
+/* RefMod Text Encode: its references, in the order the model reads them */
+/* ------------------------------------------------------------------ */
+
+const ENCODE_NODE = "MiniMaxH3FantasticRefModTextEncode";
+// match the .mmh3-reforder CSS: past ORDER_ROWS lines the list scrolls
+const ORDER_ROWS = 10, ORDER_ROW_H = 20, ORDER_HEAD_H = 24, ORDER_FRAME_H = 10;
+const orderPanels = new Set();
+let orderTimer = 0;
+
+/** What to say under the list: [line, its tooltip] pairs. */
+function orderNotes({ rows, partial, withheld, linked }) {
+  return [
+    rows.length || partial ? null : linked
+      ? ["No references yet.", "Nothing is in the media or RefMods feeding this node."]
+      : ["Nothing connected to references or mods.",
+        "Wire a Media Loader or Prompt Builder to references, or a RefMod Stack to mods."],
+    withheld ? [`${withheld} media item${withheld === 1 ? "" : "s"} held back by the builder's mode.`,
+      "The Prompt Builder's mode doesn't pass these on to the Text Encode."] : null,
+    partial ? ["May be incomplete: a source can't be read.",
+      "Something feeding this node is a node the list can't look into."] : null].filter(Boolean);
+}
+
+/** Every reference on a Text Encode as its small preview, in the order the
+ *  model reads them: media as the Media Loader shows it, cropped ones with
+ *  the crop marked, and RefMods with their tags and tokens. A clip's
+ *  soundtrack and a RefMod's voice share their card. */
+function openRefThumbs(enc) {
+  injectCSS();
+  injectLoaderCSS();
+  const found = encodeSlots(enc);
+  const players = [], overlays = [];
+  const close = () => {
+    window.removeEventListener("keydown", onKey);
+    players.forEach((p) => p.stop());
+    overlays.forEach((o) => o.detach());
+    over.remove();
+  };
+  // Escape closes a lightbox opened from here first
+  const onKey = (e) => { if (e.key === "Escape" && !document.querySelector(".mml-light")) close(); };
+  const art = (c) => {
+    const it = c.item, vtag = c.tags.find((t) => t.kind === "Video")?.tag || c.tags[0].tag;
+    if (c.refmod) return el("div", { class: "mmh3-thumbart" }, c.preview
+      ? el("img", { class: "mmh3-thumbimg", src: refmodPreviewURL(c.preview), alt: "" })
+      : el("span", { class: "mmh3-dim" }, "no preview image"));
+    if (it?.kind === "picture") return el("div", { class: "mmh3-thumbart mml-slot filled pic" },
+      picturePreview(it, { onclick: () => lightbox(it, vtag) }));
+    if (it?.kind === "video") {
+      const { wrap, overlay } = clipPreview(it, { onclick: () => lightbox(it, vtag) });
+      if (overlay) overlays.push(overlay);
+      return el("div", { class: "mmh3-thumbart" }, wrap);
+    }
+    const p = c.preview;
+    if (p?.type === "img") return el("div", { class: "mmh3-thumbart" }, el("img", { class: "mmh3-thumbimg", src: p.url, alt: "" }));
+    if (p?.type === "video") return el("div", { class: "mmh3-thumbart" }, el("video", { class: "mmh3-thumbimg", src: p.url,
+      muted: true, preload: "metadata", onmouseenter: (e) => e.target.play().catch(() => {}), onmouseleave: (e) => e.target.pause() }));
+    if (!p?.url) return el("div", { class: "mmh3-thumbart" }, el("span", { class: "mmh3-dim" }, "no preview"));
+    const player = miniPlayer(p.url);
+    players.push(player);
+    return el("div", { class: "mmh3-thumbart" }, el("div", { class: "mml-row" }, player.btn, player.bar, player.time));
+  };
+  const line = (t) => el("div", { class: "mmh3-thumbtag" },
+    el("span", { class: `tag ${TAG_CLASS[t.kind]}` }, t.tag),
+    el("span", { class: "more" }, [t.more, t.tokens ? `${t.tokens.toLocaleString("en-US")} tok` : ""].filter(Boolean).join(" · ")));
+  const body = [];
+  let group = null, grid = null;
+  for (const c of found.cards) {
+    if (c.group !== group) {
+      group = c.group;
+      grid = el("div", { class: "mmh3-thumbgrid" });
+      body.push(el("div", { class: "mmh3-thumbsec" }, group), grid);
+    }
+    grid.append(el("div", { class: "mmh3-thumbcard" }, art(c),
+      el("div", { class: "mmh3-thumbname", title: c.name }, c.name), c.tags.map(line)));
+  }
+  for (const [t, more] of orderNotes(found)) body.push(el("div", { class: "mmh3-reforder-note", title: more }, t));
+  const over = el("div", { class: "mmh3-overlay", onmousedown: (e) => { if (e.target === over) close(); } },
+    el("div", { class: "mmh3-modal mmh3-thumbs", role: "dialog", "aria-label": "Reference thumbnails" },
+      el("div", { class: "mmh3-head" },
+        el("span", { class: "mmh3-title" }, "References, in the order the model reads them"),
+        el("button", { class: "mmh3-x", title: "Close", onclick: close }, "✕")),
+      el("div", { class: "mmh3-thumbscroll" }, body)));
+  window.addEventListener("keydown", onKey);
+  document.body.append(over);
+}
+
+/** A live list on the Text Encode of what it will present, worked out from
+ *  the graph, so the order can be checked without queueing a run. Folds
+ *  away with a click on its heading; that's saved with the workflow. */
+class RefOrderPanel {
+  constructor(node) {
+    this.node = node;
+    this.key = null;
+    this.caret = el("span", {});
+    // keep the wheel only while the list has more to show; Nodes 2.0 sends
+    // it to the canvas unless the list was clicked first (data-capture-wheel)
+    this.list = el("div", { class: "mmh3-reforder-list", tabIndex: -1, dataset: { captureWheel: "true" }, onwheel: (e) => {
+      if (this.list.scrollHeight > this.list.clientHeight && !e.ctrlKey && !e.metaKey
+        && Math.abs(e.deltaY) >= Math.abs(e.deltaX)) e.stopPropagation();
+    } });
+    this.note = el("div", { class: "mmh3-reforder-note" });
+    this.thumbs = el("button", { class: "mmh3-reforder-thumbs", title: "See every reference as a picture, in the order the model reads them",
+      onclick: (e) => { e.stopPropagation(); openRefThumbs(node); } }, "▦ Thumbnails…");
+    this.root = el("div", { class: "mmh3-reforder" },
+      el("div", { class: "mmh3-reforder-head", title: "Media from the references input comes first, then the RefMods from mods",
+        onclick: () => { node.properties.mmh3RefOrderOpen = !this.open; this.refresh(); } },
+        this.caret, el("span", { class: "title" }, "References, in model order"), this.thumbs),
+      this.list, this.note);
+    this.widget = node.addDOMWidget("mmh3_reforder", "div", this.root, { serialize: false });
+    this.widget.computeSize = (w) => [w, this.height];
+    this.fit(0);
+  }
+
+  get open() { return this.node.properties?.mmh3RefOrderOpen !== false; }
+
+  /** Height for the heading and `lines` rows. The canvas renderer takes
+   *  the widget's margin off above and below. */
+  fit(lines) {
+    this.height = ORDER_HEAD_H + ORDER_FRAME_H + ORDER_ROW_H * lines + 2 * this.widget.margin;
+    this.widget.computedHeight = this.height;
+  }
+
+  /** Redraw when what the node would present has changed. */
+  refresh() {
+    const found = encodeSlots(this.node), rows = found.rows, notes = orderNotes(found);
+    const key = JSON.stringify([this.open, rows, notes]);
+    if (key === this.key) return;
+    this.key = key;
+    this.caret.textContent = this.open ? "\u25be" : "\u25b8";
+    this.thumbs.disabled = !rows.length;
+    const lines = [];
+    let group = null;
+    if (this.open) rows.forEach((r, i) => {
+      if (r.group !== group) lines.push(el("div", { class: "mmh3-reforder-group" }, group = r.group));
+      lines.push(el("div", { class: "mmh3-reforder-row" },
+        el("span", { class: "num" }, `${i + 1}`),
+        el("span", { class: `tag ${TAG_CLASS[r.kind]}` }, r.tag),
+        el("span", { class: "name", title: r.more ? `${r.name} \u00b7 ${r.more}` : r.name }, r.name,
+          r.more ? el("span", { class: "more" }, ` \u00b7 ${r.more}`) : null)));
+    });
+    this.list.replaceChildren(...lines);
+    this.note.replaceChildren(...(this.open ? notes.map(([t, more]) => el("div", { title: more }, t)) : []));
+    this.fit(this.open ? Math.min(lines.length, ORDER_ROWS) + notes.length : 0);
+    try { this.node.setSize([this.node.size[0], this.node.computeSize()[1]]); } catch (e) { /* Vue sizes it */ }
+    this.node.setDirtyCanvas?.(true, true);
+  }
+}
+
+/** Panels recheck once a second, which catches every change upstream:
+ *  media, picks, the builder's mode, links anywhere in the chain. */
+function watchOrder(panel) {
+  orderPanels.add(panel);
+  if (orderTimer) return;
+  orderTimer = setInterval(() => {
+    if (document.hidden) return;
+    for (const p of orderPanels) p.refresh();
+  }, 1000);
+}
+
+app.registerExtension({
+  name: "MiniMaxH3.TextEncodeOrder",
+  async beforeRegisterNodeDef(nodeType, nodeData) {
+    if (nodeData.name !== ENCODE_NODE) return;
+    const onNodeCreated = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function () {
+      const r = onNodeCreated?.apply(this, arguments);
+      injectCSS();
+      const panel = this._mmh3Order = new RefOrderPanel(this);
+      watchOrder(panel);
+      setTimeout(() => panel.refresh(), 0);
+      return r;
+    };
+    const onRemoved = nodeType.prototype.onRemoved;
+    nodeType.prototype.onRemoved = function () {
+      orderPanels.delete(this._mmh3Order);
+      return onRemoved?.apply(this, arguments);
+    };
+    const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+    nodeType.prototype.onConnectionsChange = function () {
+      const r = onConnectionsChange?.apply(this, arguments);
+      setTimeout(() => this._mmh3Order?.refresh(), 0);
       return r;
     };
   },

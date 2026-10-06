@@ -19,7 +19,8 @@ import torch
 import folder_paths
 import comfy.model_management as mm
 
-from .refmod_core import check_bundle, load_cached, _blur_latent
+from .refmod_core import check_bundle, load_cached, _blur_latent, blur_latent_outside
+from .refmod_edit import stored_keep
 from .refmods import resolve_file, split_member
 
 SUBFOLDER = "minimax_h3_inspect"
@@ -105,6 +106,9 @@ class MiniMaxH3FantasticRefModInspect:
                 "index": ("INT", {"default": 0, "min": 0, "max": 10000, "tooltip": "Which entry of 'mods' to inspect."}),
                 "vae": ("VAE", {"tooltip": "MiniMax H3 video VAE, for a look."}),
                 "audio_vae": ("VAE", {"tooltip": "MiniMax H3 audio VAE, for a voice."}),
+                "stored_blur": ("STRING", {"default": "", "tooltip": "Preview the Create tab's background blur on "
+                    "stored frames, as JSON {\"background\", \"grow\", \"masks\": {frame index: subject mask}}. "
+                    "Only those frames are decoded."}),
             },
         }
 
@@ -113,7 +117,7 @@ class MiniMaxH3FantasticRefModInspect:
         return float("nan")
 
     def inspect(self, file, view, strength, audio_seconds, mods=None, index=0,
-                vae=None, audio_vae=None):
+                vae=None, audio_vae=None, stored_blur=""):
         if file and file.strip():
             path = resolve_file(file.strip(), (".safetensors",))
             if not path:
@@ -165,11 +169,17 @@ class MiniMaxH3FantasticRefModInspect:
                 ui["images"].append(_save_webp(list(frames), f"{stem}_clip"))
                 details["decoded"] = f"{frames.shape[0]} frames as a clip"
             else:
-                picked = list(range(min(t, MAX_FRAMES)))
+                blur = json.loads(stored_blur) if stored_blur.strip() else {}
+                masks = {int(k): v for k, v in (blur.get("masks") or {}).items() if v}
+                picked = sorted(i for i in masks if 0 <= i < t) if masks else list(range(min(t, MAX_FRAMES)))
                 out = []
                 for i in picked:
                     mm.throw_exception_if_processing_interrupted()
-                    f = _to_frames(vae.decode(z[:, :, i:i + 1]))[:1]
+                    zi = z[:, :, i:i + 1]
+                    if i in masks:
+                        keep = stored_keep(masks[i], int(blur.get("grow") or 0), mod.latent_h, mod.latent_w)
+                        zi = blur_latent_outside(zi, keep[None], min(1.0, max(0.0, float(blur.get("background") or 0.0))))
+                    f = _to_frames(vae.decode(zi))[:1]
                     out.append(f)
                     ui["images"].append(_save_png(f[0], f"{stem}_{i:03d}"))
                 frames = torch.cat(out, dim=0)

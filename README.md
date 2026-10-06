@@ -809,7 +809,10 @@ Every voice-timbre line in `subject_definitions`, the kind that reads
 `<Audio 1> is the voice-timbre reference for <Subject 1> (S1), …`, has a
 **voice** box beside it. Describe the voice there, like `low, husky voice
 with a slow, warm pace`, and the prompt adds *It is a low, husky voice with
-a slow, warm pace.* after the line. Singing lines don't get one.
+a slow, warm pace.* after the line. Singing lines don't get one. When the
+line's subject has a name, it says whose voice it is instead: *It is Ann's
+voice: low, husky voice with a slow, warm pace.*, or *It is Ann's voice.*
+with the box empty.
 
 The speaker button for that ID in the dialogue row becomes a split button.
 Its arrow offers two lines:
@@ -1123,8 +1126,6 @@ soundtrack spends from both totals at once: a 12-second video with its audio on
 uses 12 of your 15 video seconds *and* 12 of your 15 audio seconds, leaving 3
 seconds of audio for anything else.
 
-Audio also can't be sent without at least one image or video alongside it.
-
 The loader flags all of these, and the ✂ trim is usually the fix — see
 [Trimming and cropping clips](#trimming-and-cropping-clips).
 
@@ -1271,10 +1272,11 @@ the Create tab. Its stored frames are listed first as sources — untick or
 remove the ones you don't want, drag to reorder, and drop new pictures or
 clips in to add them; they're encoded to the file's own size and style and
 the previews show how each one is trimmed to fit. Frames you
-keep are copied exactly as they are, never decoded and re-encoded. The
+keep are copied exactly as they are, never decoded and re-encoded, unless
+you blur their background (see **Batch Masking** below). The
 voice is a source too: untick it to remove it, or add an audio file (or
-tick a clip's soundtrack) to replace it — the first *Voice seconds* are
-kept. **Save changes** writes the result through the queue and the library
+tick a clip's soundtrack) to replace it — a trimmed voice keeps its whole
+trim, otherwise the first *Voice seconds* are kept. **Save changes** writes the result through the queue and the library
 reselects the file; tick **Save as a copy** and give it a name to leave the
 original alone and write the result as a new RefMod (its voice and preview
 come along). A RefMod that had no voice is renamed to the
@@ -1319,6 +1321,31 @@ frames for up to 17 and 5 more per further 17, so 22 frames store 7, 39
 store 12, 56 store 17, and other counts are cut down to the nearest of
 those. The setting's caption shows the result live.
 
+**Batch Masking.** In the settings pane, **Find and Mask All** runs SAM 3.1
+(`sam3.1_multiplex_fp16.safetensors` in `models/checkpoints`) over every
+picture and clip in one queue job. It finds the word you type, which starts
+as `person` for the identity and pose/motion concepts, keeping the largest
+match unless **Keep every match** is ticked. A clip is masked over the same
+frames Create takes from it. **Crop to subject** crops around what was
+found with a **Margin** (1.75×), grown to the stack's shape and kept inside
+the picture. A crop you adjust by hand is kept, and **Back to auto** returns
+it. **Blur background** blurs everything but the subject in pixels before
+encoding; **Blur**, **Grow** and **Edge** are in pixels of the picture as
+encoded. The editor (**Crop…**) draws the subject over the picture, with
+**Mask | Result** for a live preview, **◉ Dots** to fix the subject, and
+‹ › or `,` `.` (PgUp/PgDn) to step through every source. In edit mode, a
+Full RefMod's stored frames can be blurred too: a latent blend outside the
+subject, with **Background kept** setting how much stays. Rows flag small
+crops (under 60% of the resolution), a subject cut off by the stack's
+shape, no subject found, and masks to find again. The masks are temporary:
+they're deleted once the RefMod is saved, and Clean up sweeps any left
+over. What was done is recorded in the file, shown as a **bg blurred**
+badge and in Details, and edit mode starts from it.
+
+Voices can be trimmed with **Trim…** on their row. A trimmed voice keeps
+its whole trim; Voice seconds only cuts untrimmed ones. The line under
+Create shows the voice's length and tokens, about 80 a second.
+
 Under the Create button the tab shows how many frames and tokens the
 result will have. If that goes over the token limit, Create is blocked
 until you raise the limit, lower the resolution, switch to Compressed or
@@ -1330,7 +1357,8 @@ when it lands, with a preview image written beside the file.
 **Fantastic H3 Create RefMod** is the node the library queues. It also
 works by hand in a graph with IMAGE and AUDIO inputs, and its `source`
 field takes a Media Loader item, or a list of them to stack, as JSON. Not carried over from the
-original pack: masks, multi-reference merging, motion-only mode and
+original pack: mask inputs (the Create tab's Batch Masking crops and blurs
+around a subject instead), multi-reference merging, motion-only mode and
 presets.
 
 **Full or Compressed?** Full keeps as much of your picture or clip as
@@ -1421,7 +1449,19 @@ first.
 voices are used — they always are. On, each voice RefMod's saved Voice
 description is also written right after its `<Audio n>:` label, where the
 encoder is introduced to the reference, instead of only in the prompt body.
-Off, the encoder sees exactly what core's node gives it.
+A RefMod set to identity with a subject name also says whose voice it is:
+`<Audio 1>: It is Kate's voice: female, medium pitched, precise.` Off, the
+encoder sees exactly what core's node gives it.
+
+The node lists its references in the order the model reads them: each
+label and the file or RefMod it stands for, under Media and then RefMods.
+The list follows the graph as you change media, picks, links or the
+builder's mode, so the order can be checked without queueing, and it counts
+media the builder's mode holds back. Past ten lines it scrolls. Click its
+heading to fold it. **▦ Thumbnails…** on the heading shows every reference
+as a small preview in the same order: media as the Media Loader shows it,
+crops marked, and RefMods with their tags and tokens. A clip's soundtrack
+and a RefMod's voice share its card.
 
 **Fantastic H3 RefMod Apply** appends the references to conditioning encoded
 elsewhere, with a `retention` multiplier on every entry. The model sees them,

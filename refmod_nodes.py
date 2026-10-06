@@ -25,7 +25,7 @@ import comfy.model_management as mm
 
 from .refmod_core import (check_bundle, _blur_latent, decode_for_encoder, pack_frames, unpack_frames,
                           stored_record, soften)
-from .refmods import KIND_LABEL
+from .refmods import KIND_LABEL, PAIR_SUFFIX, read_meta
 from . import latent_cache
 from .video_edit import bundle_edit, hide_area, shape, spec_mask, usable_frames
 
@@ -238,6 +238,37 @@ def stack_picks(n, mode, count):
     return list(range(n))
 
 
+def person_name(mod):
+    """A voice RefMod's subject name when the RefMod is a person: its look,
+    saved beside it, is set to identity. Create gives a pair's voice a voice
+    concept, so the look's header decides; a voice alone answers for itself."""
+    name = str(getattr(mod, "subject_name", "") or "").strip()
+    if not name:
+        return ""
+    concept = getattr(mod, "concept_type", "")
+    path = str(getattr(mod, "path", "") or "")
+    for suffix, role in PAIR_SUFFIX.items():
+        if role == "audio" and path.endswith(suffix):
+            looks = (read_meta(path[:-len(suffix)] + s)[0] for s, r in PAIR_SUFFIX.items() if r == "visual")
+            look = next((m for m in looks if m), None)
+            if look:
+                concept = look.get("concept_type", concept)
+            break
+    return name if concept == "identity" else ""
+
+
+def label_caption(mod):
+    """What voice_description_at_label writes after a voice's <Audio N>:
+    label: its saved Voice description, led by whose voice it is when the
+    RefMod is a named person."""
+    desc = " ".join(str(getattr(mod, "voice_description", "") or "").split())
+    name = person_name(mod)
+    if not name:
+        return desc
+    desc = desc.rstrip(" .")
+    return f"It is {name}'s voice: {desc}." if desc else f"It is {name}'s voice."
+
+
 def build_entries(tokenizer, prompt, items):
     """H3's token stream, built exactly as core's MiniMaxH3Tokenizer builds it
     (comfy/text_encoders/minimax.py), plus one thing: an audio item may carry
@@ -343,7 +374,8 @@ class MiniMaxH3FantasticRefModTextEncode:
             "voice_description_at_label": ("BOOLEAN", {"default": False,
                 "tooltip": "Your voice references are used either way; this only decides where their descriptions "
                            "go. On: each voice RefMod's saved Voice description is also written right after its "
-                           "<Audio N>: label, where H3's encoder is introduced to the reference. Off: the bare "
+                           "<Audio N>: label, where H3's encoder is introduced to the reference. A RefMod set to "
+                           "identity with a subject name leads with \"It is <name>'s voice\". Off: the bare "
                            "label, exactly as core writes it."}),
             "stack_pictures": (list(STACK_PICTURES), {"default": "every 4th",
                 "tooltip": "EXPERIMENTAL: How many pictures of a RefMod the text encoder sees (only RefMods made "
@@ -432,12 +464,11 @@ class MiniMaxH3FantasticRefModTextEncode:
                                  "node cannot label (expected image, video or audio).")
             counters[kind] += 1
             item = {"type": kind}
-            voice = " ".join(str(getattr(mod, "voice_description", "") or "").split()) \
-                if kind == "audio" and voice_description_at_label and native else ""
-            if voice:
-                item["caption"] = voice
+            caption = label_caption(mod) if kind == "audio" and voice_description_at_label and native else ""
+            if caption:
+                item["caption"] = caption
                 voiced += 1
-            mapping.append(f"<{KIND_LABEL[kind]} {counters[kind]}> = {mod.name}" + (" \u00b7 voice description at label" if voice else ""))
+            mapping.append(f"<{KIND_LABEL[kind]} {counters[kind]}> = {mod.name}" + (f" \u00b7 at label: {caption}" if caption else ""))
             if kind != "audio":
                 first = id(mod) not in shown
                 if first:
@@ -481,7 +512,7 @@ class MiniMaxH3FantasticRefModTextEncode:
 
         if voiced:
             tokens = build_entries(clip.tokenizer, prompt, items)
-            print(f"[MiniMaxH3FantasticRefModTextEncode] voice descriptions at their labels: {voiced}")
+            print(f"[MiniMaxH3FantasticRefModTextEncode] voices described at their labels: {voiced}")
         else:
             tokens = clip.tokenize(prompt, minimax_ref_items=items)
         conditioning = clip.encode_from_tokens_scheduled(tokens)

@@ -192,6 +192,7 @@ def _channel(meta, rel, tensors):
         ch["source"] = str(meta.get("source", "") or "")
         ch["source_shape"] = str(meta.get("source_shape", "") or "")
         ch["frames"] = bool(meta.get("enc_times"))     # the text encoder's frames are in the file
+        ch["subject_blur"] = meta.get("subject_blur") if isinstance(meta.get("subject_blur"), dict) else None
         # A fork "combined" file carries the voice inside the visual file.
         # The original pack's loader reads only `latent`, so that audio never
         # reaches the model — worth saying, not worth hiding the file.
@@ -674,6 +675,28 @@ def _contained_target(root, rel):
     return target
 
 
+def name_taken(rel, own=()):
+    """True when a RefMod in any refmods folder already goes by `rel`: the
+    same folder and name, ignoring case, so hero, a hero_visual + hero_audio
+    pair and Hero all take "hero" (and hero_visual, which the library would
+    pair with it). `own` are the stems of the item being renamed, which don't
+    count against it."""
+    folder, base = os.path.split(rel.replace("\\", "/"))
+    want = {base.lower(), _split_pair(base)[0].lower()}
+    own = {os.path.realpath(p) for p in own}
+    for root in search_dirs():
+        d = os.path.join(root, folder)
+        if not os.path.isdir(d):
+            continue
+        for f in os.listdir(d):
+            stem, ext = os.path.splitext(f)
+            if ext != ".safetensors" or os.path.realpath(os.path.join(d, stem)) in own:
+                continue
+            if want & {stem.lower(), _split_pair(stem)[0].lower()}:
+                return True
+    return False
+
+
 def item_files(files, preview):
     """Resolve the stems a curation request names. Every one must exist
     inside a RefMod root; the preview may be absent."""
@@ -706,6 +729,8 @@ def rename_item(files, preview, new_base):
     root = _root_of(stems[0][1])
     if root is None:
         raise ValueError("file is outside every RefMod folder")
+    if name_taken(new_base, [p for _r, p in stems]):
+        raise FileExistsError(f"a RefMod named '{new_base}' already exists")
     moves = []
     for rel, path in stems:
         base = os.path.basename(rel)
@@ -713,9 +738,6 @@ def rename_item(files, preview, new_base):
         suffix = base[len(_pair):] if role else ""
         new_rel = new_base + suffix
         moves.append((rel, path, new_rel, _contained_target(root, new_rel)))
-    for _rel, _path, new_rel, target in moves:
-        if os.path.exists(target + ".safetensors") and os.path.realpath(target) not in {os.path.realpath(p) for _r, p in stems}:
-            raise FileExistsError(f"'{new_rel}' already exists")
     out = {}
     for rel, path, new_rel, target in moves:
         os.makedirs(os.path.dirname(target) or ".", exist_ok=True)

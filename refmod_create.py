@@ -28,8 +28,11 @@ import comfy.utils
 import comfy.model_management as mm
 
 from . import media_io
+from .object_mask import drop_subject_masks, load_mask
 from .refmod_core import H3RefMod, encoder_record
-from .refmods import search_dirs, valid_rel, sanitize_name, _contained_target, clean_subject_name, clean_description, PREVIEW_EXT
+from .refmods import (search_dirs, valid_rel, sanitize_name, _contained_target, name_taken, clean_subject_name,
+                      clean_description, PREVIEW_EXT)
+from .video_edit import blur_outside
 
 CONCEPT_TYPES = ("generic", "identity", "pose_motion", "clothing", "background",
                  "voice", "singing", "music_style", "sound_fx", "ambience", "style")
@@ -151,8 +154,48 @@ def _cover(image, tw, th):
     return samples.movedim(1, -1)
 
 
+SUBJECT_KEYS = ("word", "margin", "crop", "blur", "grow", "edge")
+
+
+def subject_record(spec):
+    """What the Create tab did around the subject, as kept in the RefMod's
+    header so the library can show it and an edit can start from it."""
+    out = {}
+    for key in SUBJECT_KEYS:
+        v = spec.get(key)
+        if key == "word" and isinstance(v, str) and v.strip():
+            out[key] = " ".join(v.split())[:60]
+        elif key == "crop" and isinstance(v, bool):
+            out[key] = v
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[key] = round(float(v), 2)
+    return out
+
+
+def blur_subject(src, item, canvas):
+    """A picture or clip already fitted for encoding, with its background
+    blurred around the subject the Create tab found in it. The subject mask
+    is framed the way the source was (turn, mirror, crop, the stack's canvas)
+    and the blur, grow and edge are pixels of `src`. Unchanged when the item
+    has no subject or no blur."""
+    spec = item.get("subject") if isinstance(item, dict) else None
+    if not isinstance(spec, dict) or not spec.get("mask") or not float(spec.get("blur") or 0) > 0:
+        return src
+    is_video = item.get("kind") == "video"
+    # clips aren't turned when they're sent, so neither are their masks
+    keep = load_mask(spec["mask"], src.shape[0], start=_trim(item)[0] if is_video else None,
+                     mirror=bool(item.get("mirror")), crop=item.get("crop"),
+                     rotate=0 if is_video else item.get("rotate") or 0)
+    keep = keep[..., None].expand(-1, -1, -1, 3)
+    if canvas:
+        keep = _cover(keep, *canvas)
+    keep = F.interpolate(keep[..., 0][:, None].float(), size=tuple(src.shape[1:3]), mode="bilinear",
+                         align_corners=False)[:, 0]
+    return blur_outside(src, keep, float(spec["blur"]), int(spec.get("grow") or 0), int(spec.get("edge") or 0))
+
+
 def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
-                steps, max_tokens, label, progress=None):
+                steps, max_tokens, label, progress=None, items=None):
     """One latent from one or more sources, stacked along time.
 
     `sources` is [(frames [N,H,W,3], is_video)]. Each is encoded on its own
@@ -161,7 +204,9 @@ def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
     sets it and the others are cover-cropped to its canvas — edges trimmed,
     never squeezed — in both modes. (Compressed used to pool each photo to
     the first one's grid as it was, which squashed anything of a different
-    shape; a distorted face is a worse reference than a cropped one.)"""
+    shape; a distorted face is a worse reference than a cropped one.)
+    `items`, when given, are the Media Loader items the sources came from,
+    for the Create tab's subject blur."""
     try:
         from comfy.ldm.minimax.vae import MiniMaxH3VideoVAE
         if not isinstance(vae.first_stage_model, MiniMaxH3VideoVAE):
@@ -192,6 +237,8 @@ def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
             src = src[:snap_to_h3_grid(min(latent_frames, src.shape[0]))]
         src = _cover(src, *canvas) if canvas else resize_ref(src, ref_resolution)
         src = ensure_min_size(src)
+        if items:
+            src = blur_subject(src, items[i], canvas)
         if first_frame is None:
             first_frame = src[0].detach().cpu()
         mm.throw_exception_if_processing_interrupted()
@@ -219,6 +266,12 @@ def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
             "pool": "" if mode == "encode" else f"{latent.shape[2]}x{gh}x{gw}",
             "notes": notes, "first_frame": first_frame}
     return latent, info
+
+
+def first_seconds(audio, seconds):
+    """AUDIO cut to its first `seconds`."""
+    sr = int(audio["sample_rate"])
+    return {"waveform": audio["waveform"][..., :max(1, round(seconds * sr))], "sample_rate": sr}
 
 
 def join_audio(clips):
@@ -255,14 +308,10 @@ def encode_audio(vae, audio, max_seconds=30.0, chunk_seconds=10.0):
     if not isinstance(vae.first_stage_model, MiniMaxH3AudioVAE):
         raise ValueError("Connect the MiniMax H3 audio VAE to 'audio_vae'.")
     stages = [f"in {waveform.shape[-1]}@{sample_rate}"]
-    try:
-        max_seconds = float(max_seconds)
-    except (TypeError, ValueError):
-        max_seconds = 30.0
-    if not (max_seconds > 0):
-        max_seconds = 30.0
-    waveform = waveform[..., :max(1, round(max_seconds * sample_rate))].float()
-    stages.append(f"limit {max_seconds:g}s -> {waveform.shape[-1]}")
+    if max_seconds is not None:                  # None: a trimmed voice, kept whole
+        waveform = waveform[..., :max(1, round(float(max_seconds) * sample_rate))]
+        stages.append(f"limit {float(max_seconds):g}s -> {waveform.shape[-1]}")
+    waveform = waveform.float()
     if waveform.shape[1] == 1:
         waveform = waveform.repeat(1, 2, 1)
     vae_sr = int(getattr(vae, "audio_sample_rate", 32000) or 32000)
@@ -325,7 +374,7 @@ def save_mod(mod, path_no_ext, frames=None):
     }
     if mod.config:
         meta["refmod_config"] = json.dumps(mod.config)
-    for key in ("subject_name", "appearance", "voice_description", "retained_attributes"):
+    for key in ("subject_name", "appearance", "voice_description", "retained_attributes", "subject_blur"):
         if getattr(mod, key, ""):
             meta[key] = getattr(mod, key)
     dest = path_no_ext + ".safetensors"
@@ -453,7 +502,7 @@ class MiniMaxH3FantasticRefModCreate:
             "required": {
                 "name": ("STRING", {"default": "", "tooltip": "File name. A look plus a voice is saved as <name>_visual and <name>_audio."}),
                 "subfolder": ("STRING", {"default": "", "tooltip": "Folder under models/refmods, e.g. characters."}),
-                "mode": (list(MODES.keys()), {"default": "Compressed Reference",
+                "mode": (list(MODES.keys()), {"default": "Full Reference",
                     "tooltip": "Full keeps the most detail and is heavier to use. Compressed keeps the overall look and is much lighter."}),
                 "ref_resolution": ("INT", {"default": 768, "min": 256, "max": 2048, "step": 32,
                     "tooltip": "Short edge each source is scaled down to before encoding (never up)."}),
@@ -533,15 +582,22 @@ class MiniMaxH3FantasticRefModCreate:
         items = parse_sources(source)
 
         # --- gather: connected inputs replace what the source list provides
+        look_items = None
         if image is not None:
             looks = [(image, image.shape[0] > 1)]
         else:
-            looks = [lk for lk in (load_look(it) for it in items) if lk is not None]
+            loaded = [(it, load_look(it)) for it in items]
+            looks = [lk for _it, lk in loaded if lk is not None]
+            look_items = [it for it, lk in loaded if lk is not None]
         if audio is not None:
-            voice = audio
+            voice, voice_cap = audio, audio_max_seconds
         else:
-            voices = [v for v in (load_voice(it) for it in items) if v is not None] if audio_vae is not None else []
-            voice = voices[0] if len(voices) == 1 else (join_audio(voices) if voices else None)
+            # a trimmed voice keeps its whole trim; Voice seconds limits the others
+            voices = [(v, any(_trim(it))) for it, v in ((it, load_voice(it)) for it in items) if v is not None] \
+                if audio_vae is not None else []
+            parts = [v if trimmed else first_seconds(v, audio_max_seconds) for v, trimmed in voices]
+            voice = parts[0] if len(parts) == 1 else (join_audio(parts) if parts else None)
+            voice_cap = None
         if not looks and voice is None:
             raise ValueError("Nothing to encode: connect an image or audio, or give source items.")
         if looks and vae is None:
@@ -558,6 +614,8 @@ class MiniMaxH3FantasticRefModCreate:
         # valid_rel already refused '..', drives and absolute paths; check the
         # resolved target against the root as well, and refuse, never rewrite.
         _contained_target(root, base)
+        if name_taken(base):
+            raise ValueError(f"A RefMod named '{base}' already exists — pick another name.")
         both = bool(looks) and voice is not None
         pbar = comfy.utils.ProgressBar(100)
 
@@ -567,10 +625,11 @@ class MiniMaxH3FantasticRefModCreate:
             latent, info = encode_look(
                 vae, looks, mode=mode_key, ref_resolution=ref_resolution, grid=grid,
                 latent_frames=latent_frames, steps=refinement_steps, max_tokens=max_tokens,
-                label=clean, progress=lambda f: pbar.update_absolute(int(70 * f)))
+                label=clean, progress=lambda f: pbar.update_absolute(int(70 * f)), items=look_items)
             n_img = sum(1 for _f, v in looks if not v)
             n_vid = len(looks) - n_img
             tag = ", ".join(t for t in (f"{n_img} img" if n_img else "", f"{n_vid} vid" if n_vid else "") if t)
+            subject = next((it["subject"] for it in look_items or [] if isinstance(it.get("subject"), dict)), None)
             look = (H3RefMod(
                 name=clean, kind="video" if latent.shape[2] > 1 else "image", latent=latent,
                 latent_h=latent.shape[3], latent_w=latent.shape[4], latent_t=latent.shape[2],
@@ -579,12 +638,12 @@ class MiniMaxH3FantasticRefModCreate:
                 source_shape=info["source_shape"], pool=info["pool"],
                 optimize_steps=refinement_steps if mode_key == "training" else 0,
                 tags=[tag], description=description or "", concept_type=concept_type,
-                **described), info)
+                subject_blur=subject_record(subject) if subject else {}, **described), info)
             look_frames = encoder_record(look[0], vae)
         pbar.update_absolute(75)
         vmod = None
         if voice is not None:
-            alat = encode_audio(audio_vae, voice, max_seconds=audio_max_seconds)
+            alat = encode_audio(audio_vae, voice, max_seconds=voice_cap)
             vmod = H3RefMod(
                 name=clean, kind="audio", latent=alat, mode="encode", source="audio",
                 source_shape=f"audio:{alat.shape[-1]}", pool=f"{alat.shape[-1]} audio",
@@ -618,6 +677,7 @@ class MiniMaxH3FantasticRefModCreate:
                 except OSError:
                     pass
             raise
+        drop_subject_masks(it["subject"].get("mask") for it in items if isinstance(it.get("subject"), dict))
         pbar.update_absolute(100)
 
         rel = [os.path.relpath(p, root).replace("\\", "/") for p in saved]

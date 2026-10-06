@@ -7,7 +7,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { postApi, LOADER_NAME, computeTags, viewURL, openCropEditor, keepNameChars, outputTargets, setterOf,
-         clampScale, SCALE_MIN, SCALE_MAX, TEXT_SCALE_MAX } from "./medialoader.js";
+         clampScale, SCALE_MIN, SCALE_MAX, TEXT_SCALE_MAX, MASK_NODE, SAM_KEY, SAM_LINK, samCheckpoints } from "./medialoader.js";
 
 export const STACK_NAME = "MiniMaxH3RefModStack";
 const BUILDER_NAME = "MiniMaxH3PromptBuilder";
@@ -689,6 +689,16 @@ const CSS = `
 .mmr-srchint.warn,.mmr-fitcap.warn{color:#e3a64a;}
 .mmr-fitcap{font-size:calc(10.5px * var(--mmh3-fs, 1));color:#8a93a3;}
 .mmr-srcacts{display:flex;gap:6px;margin-top:2px;}
+.mmr-subjline{display:flex;flex-direction:column;gap:2px;}
+.mmr-subjline .mmr-dim{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:calc(10.5px * var(--mmh3-fs, 1));}
+.mmr-subjsec{display:flex;flex-direction:column;gap:6px;}
+.mmr-subjsec .mmr-search{flex:0 0 auto;} .mmr-subjsec .mmr-maskall{align-self:flex-start;}
+.mmr-subjctls{display:flex;flex-direction:column;gap:4px;}
+.mmr-subjctl{display:flex;align-items:center;gap:6px;font-size:calc(11px * var(--mmh3-fs, 1));color:#8a93a3;}
+.mmr-subjctl input[type=range]{flex:1;min-width:60px;accent-color:#4d6ea6;margin:0;}
+.mmr-subjctl .mmr-subjnum{width:calc(48px * var(--mmh3-fs, 1));flex:0 0 auto;background:#12151b;border:1px solid #3a4252;
+  border-radius:4px;color:#d7dbe2;padding:1px 4px;font:inherit;}
+.mml-subjbar .mmr-subjctl{flex:0 1 220px;color:#c9cfda;}
 .mmr-srcacts .mmr-btn{padding:2px 9px;}
 .mmr-src .mmr-grip{align-self:center;}
 .mmr-src.dragging{outline:1px dashed #4d6ea6;}
@@ -1485,10 +1495,13 @@ const VOICE_TIP = "Optional. How the voice sounds: Draft from RefMods adds it to
 const RETAINED_TIP = "Optional. Specific small details the model should keep, like a tattoo or a scar: Draft from RefMods " +
   "adds them to the end of the subject's retention note. Saved inside the file.";
 const RETAINED_HINT = "Specific small details that should be kept, such as tattoo descriptions, etc.";
+const VOICE_SECONDS_TIP = "Seconds kept from the start of a voice you haven't trimmed. A trimmed voice keeps its whole trim. " +
+  "A voice costs about 80 tokens a second.";
 const stem = (f) => cleanName(String(f || "").split("/").pop().replace(/\.[^.]+$/, ""));
 
 const SETTING_RANGES = { ref_resolution: [256, 2048], grid: [2, 64], latent_frames: [1, 1024],
-  refinement_steps: [0, 5000], max_tokens: [0, 1048576], audio_max_seconds: [0.5, 600] };
+  refinement_steps: [0, 5000], max_tokens: [0, 1048576], audio_max_seconds: [0.5, 600],
+  subject_margin: [1.25, 3], subject_blur: [1, 256], subject_background: [0, 100] };
 /** A numeric setting kept inside its range; anything unusable becomes the default. */
 function clampSetting(key, value, fallback) {
   const r = SETTING_RANGES[key];
@@ -1497,19 +1510,90 @@ function clampSetting(key, value, fallback) {
   return Math.min(r[1], Math.max(r[0], v));
 }
 function loadSettings() {
-  const d = { mode: "Compressed Reference", ref_resolution: 768, grid: 16, latent_frames: 22,
+  const d = { mode: "Full Reference", ref_resolution: 768, grid: 16, latent_frames: 22,
     refinement_steps: 500, max_tokens: 5120, audio_max_seconds: 30, concept_type: "generic",
-    subfolder: "", write_preview: true, videoVae: "", audioVae: "", combine: true };
+    subfolder: "", write_preview: true, videoVae: "", audioVae: "", combine: true,
+    // Batch Masking; grow and edge stay null to follow the resolution
+    subject_crop: true, subject_margin: 1.75, subject_blur_on: true, subject_blur: 24,
+    subject_grow: null, subject_edge: null, subject_keep_all: false, subject_background: 0 };
   let st = d;
   try { st = { ...d, ...(JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}")) }; } catch (e) { st = d; }
   // Settings saved by 1.7.0 carry its Clip frames default of 16, which on
   // H3's real frame grid is cut to 5 and stores only 2 frames. Move that one
   // value to the new default once; a number the user chose is left alone.
   if (!(st.v >= 2)) { if (st.latent_frames === 16) st.latent_frames = 22; st.v = 2; }
+  // Compressed was the default before and was saved along with every other
+  // setting, picked or not. Move everyone to Full once; picking Compressed
+  // again is remembered.
+  if (!(st.v >= 3)) { st.mode = "Full Reference"; st.v = 3; }
   for (const k of Object.keys(SETTING_RANGES)) st[k] = clampSetting(k, st[k], d[k]);
   return st;
 }
 function saveSettings(st) { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(st)); } catch (e) { /* private mode */ } }
+
+/** Queue a hidden prompt and resolve with each node's output once it has
+ *  run. The live connection carries them; /history is asked every few
+ *  seconds too, for a message missed in a reconnect. */
+function runHidden(prompt) {
+  return new Promise((resolve, reject) => {
+    let pid = null, done = false;
+    const outputs = {};
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      clearInterval(timer);
+      for (const [k, f] of Object.entries(on)) api.removeEventListener(k, f);
+      if (err) reject(err); else resolve(outputs);
+    };
+    const on = {
+      executed: (e) => { if (e.detail?.prompt_id === pid) outputs[e.detail.node] = e.detail.output || {}; },
+      execution_success: (e) => { if (e.detail?.prompt_id === pid) finish(); },
+      execution_error: (e) => {
+        if (e.detail?.prompt_id === pid) finish(new Error(e.detail.exception_message || "the job failed; the ComfyUI console has the details"));
+      },
+      execution_interrupted: (e) => { if (e.detail?.prompt_id === pid) finish(new Error("the job was cancelled")); },
+    };
+    for (const [k, f] of Object.entries(on)) api.addEventListener(k, f);
+    const timer = setInterval(async () => {
+      if (!pid) return;
+      try {
+        const entry = (await (await api.fetchApi(`/history/${pid}`)).json())?.[pid];
+        if (!entry?.status || entry.status.completed === undefined) return;
+        Object.assign(outputs, entry.outputs || {});
+        const err = (entry.status.messages || []).map((m) => m[0] === "execution_error" ? m[1]?.exception_message : "").find(Boolean);
+        finish(entry.status.status_str === "success" ? null : new Error(err || "the job failed"));
+      } catch (e) { /* server away: ask again */ }
+    }, 4000);
+    api.fetchApi("/prompt", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, client_id: api.clientId }) })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok || d.error) {
+          const errs = Object.values(d.node_errors || {}).flatMap((n) => (n.errors || []).map((x) => x.details || x.message || ""));
+          throw new Error((d.error?.message || d.error || `HTTP ${r.status}`) + (errs.length ? `: ${errs.join("; ")}` : ""));
+        }
+        pid = d.prompt_id;
+      })
+      .catch(finish);
+  });
+}
+
+/** What the Create tab did around a RefMod's subject, from the record in
+ *  its header, for the library badge and Details. */
+function subjectText(r) {
+  return [r.word ? `subject “${r.word}”` : "",
+    r.crop ? `cropped to it, margin ${r.margin}×` : "",
+    r.blur > 0 ? `background blurred ${r.blur} px (grow ${r.grow}, edge ${r.edge})` : "",
+    r.background != null ? `stored frames blurred, ${Math.round(r.background * 100)}% of the background kept` : ""]
+    .filter(Boolean).join("; ");
+}
+
+/** A normalised rect on a picture after it's turned `turn` degrees
+ *  clockwise and then mirrored, as the editor shows it. */
+function turnRect(r, turn, mirror) {
+  for (let k = (((turn || 0) % 360) + 360) % 360 / 90; k > 0; k--) r = { x: 1 - r.y - r.h, y: r.x, w: r.h, h: r.w };
+  return mirror ? { ...r, x: 1 - r.x - r.w } : r;
+}
 
 /** Media Loader items -> Create sources. Anything the loader can hold. */
 function sourcesFromItems(items, origin) {
@@ -1844,6 +1928,9 @@ export function openLibrary(panel, opts = {}) {
     if (!hasFiles(e)) return;
     e.preventDefault(); e.stopPropagation();
     e.dataTransfer.dropEffect = "copy";
+    // A drag from a file manager can enter before it says it holds files,
+    // so the enter above didn't count it: light up on the next move instead.
+    if (!dragDepth) { dragDepth = 1; setDropping(true); }
   });
   overlay.addEventListener("dragleave", (e) => {
     if (!hasFiles(e)) return;
@@ -1893,6 +1980,8 @@ export function openLibrary(panel, opts = {}) {
   const files = (it) => [it.visual?.file, it.audio?.file].filter(Boolean);
   const filesShort = (it) => files(it).map((f) => f.split("/").pop()).join(" + ");
   const byName = (name) => items.find((i) => i.name === name);
+  /** A RefMod already goes by this folder and name, ignoring case. */
+  const nameTaken = (name) => items.some((i) => i.name.toLowerCase() === name.toLowerCase());
 
   function drawFolders() {
     const counts = {};
@@ -1942,6 +2031,9 @@ export function openLibrary(panel, opts = {}) {
         ? "Full: keeps the most detail. Heavier to use."
         : "Compressed: keeps the overall look, not the fine detail. Lighter to use." },
       `${it.visual.mode === "encode" ? "full" : "compressed"} ${it.visual.t > 1 ? `${it.visual.t} fr · ` : ""}${it.visual.h}×${it.visual.w}`));
+    const sb = it.visual?.subject_blur;
+    if (sb && (sb.blur > 0 || sb.background != null || sb.crop)) b.push(el("span", { class: "mmr-b", title: subjectText(sb) },
+      sb.blur > 0 || sb.background != null ? "bg blurred" : "subject crop"));
     if (it.visual?.embedded_audio_ignored) b.push(el("span", { class: "mmr-b warn",
       title: "Audio stored inside the visual file (fork format) is ignored." }, "embedded audio ignored"));
     const thumb = it.preview
@@ -2090,6 +2182,8 @@ export function openLibrary(panel, opts = {}) {
       voiceIn ? el("label", { class: "mmr-ilabel", title: VOICE_TIP }, "Voice", voiceIn,
         el("span", { class: "mmr-dim mmr-numhint" }, "Drafted onto the voice line \u2014 optional")) : null,
       el("div", { class: "mmr-idetails" }, chanRow("Look", it.visual), chanRow("Voice", it.audio),
+        it.visual?.subject_blur && subjectText(it.visual.subject_blur)
+          ? el("div", { class: "mmr-irow" }, el("span", {}, "Subject"), el("span", {}, subjectText(it.visual.subject_blur))) : null,
         el("div", { class: "mmr-irow" }, el("span", {}, "Files"), el("span", { class: "mmr-cfiles" }, files(it).join("\n")))),
       storedSection(it),
       el("div", { class: "mmr-iactions" }, saveBtn, delBtn),
@@ -2360,11 +2454,18 @@ export function openLibrary(panel, opts = {}) {
     if (it.visual && it.visual.mode !== "encode" && first.length === 3) { h = (+first[1] || 0) * 16; w = (+first[2] || 0) * 16; }
     editing.px = [Math.max(16, w), Math.max(16, h)];
     editing.clipRuns = clipRuns(it.visual);
+    // Batch Masking starts from what was done to this RefMod before
+    const rec = it.visual?.subject_blur || {};
+    editing.subjCfg = Object.fromEntries(Object.entries(st).filter(([k]) => k.startsWith("subject_")));
+    for (const k of ["crop", "margin", "grow", "edge"]) if (rec[k] != null) editing.subjCfg[`subject_${k}`] = rec[k];
+    if (rec.blur != null) Object.assign(editing.subjCfg, { subject_blur_on: rec.blur > 0, subject_blur: rec.blur || st.subject_blur });
+    if (rec.background != null) editing.subjCfg.subject_background = Math.round(rec.background * 100);
+    subjectWord = rec.word || null;
     const inClip = new Set(editing.clipRuns.flat());
     const stored = [];
     for (let i = 0; i < (it.visual?.t || 0); i++) {
       stored.push({ stored: i, name: `Frame ${i + 1}`, origin: "stored", use: true, clip: inClip.has(i),
-        rec: { kind: "picture", file: "" }, dim: { w: editing.px[0], h: editing.px[1], turned: true } });
+        rec: { kind: "picture", file: "", name: `Frame ${i + 1}` }, dim: { w: editing.px[0], h: editing.px[1], turned: true } });
     }
     if (it.audio) stored.push({ storedVoice: true, name: "Voice", origin: "stored", use: true, voice: true,
       rec: { kind: "audio", file: "" }, dim: { w: 0, h: 0, dur: it.audio.seconds || 0, turned: true } });
@@ -2387,6 +2488,7 @@ export function openLibrary(panel, opts = {}) {
   }
   function cancelEdit(repaint = true) {
     editing = null;
+    subjectWord = null;
     for (let i = sources.length - 1; i >= 0; i--) if (isStored(sources[i])) sources.splice(i, 1);
     if (repaint) paintTabs();
   }
@@ -2418,8 +2520,9 @@ export function openLibrary(panel, opts = {}) {
     const retained = oneLine(editing.retained);
     const retainedChanged = retained !== (editing.it.retained_attributes || "");
     const descBad = appearance.length > DESC_LIMIT || voiceDesc.length > DESC_LIMIT || retained.length > DESC_LIMIT;
-    return { order, adds, same, voice, newVoice, looks: looks.length,
-      changed: !same || !!voice || nameChanged || appearanceChanged || voiceDescChanged || retainedChanged,
+    const blur = storedBlurPlan(), blurred = blur ? Object.keys(blur.masks).length : 0;
+    return { order, adds, same, voice, newVoice, looks: looks.length, blur, blurred,
+      changed: !same || !!voice || nameChanged || appearanceChanged || voiceDescChanged || retainedChanged || !!blurred,
       subject, nameChanged, nameBad, appearance, appearanceChanged, voiceDesc, voiceDescChanged,
       retained, retainedChanged, descBad };
   }
@@ -2461,7 +2564,7 @@ export function openLibrary(panel, opts = {}) {
   function keepDraft() {
     const busy = jobs.some((j) => j.status !== "done" && j.status !== "error");
     if (!editing && !sources.length && !stackName && !subjectName && !appearanceText && !voiceText && !retainedText && !busy) return;
-    libDraft = { sources: [...sources], editing, combine, stackName, subjectName,
+    libDraft = { sources: [...sources], editing, combine, stackName, subjectName, subjectWord,
       appearance: appearanceText, voice: voiceText, retained: retainedText, jobs: [...jobs], decodes: [...inspectJobs], tab: view.tab };
   }
   /** Take a draft back up. Sources the caller sent again (a loader's "send
@@ -2470,8 +2573,14 @@ export function openLibrary(panel, opts = {}) {
     const had = new Set(d.sources.map((x) => x.rec.file).filter(Boolean));
     for (let i = sources.length - 1; i >= 0; i--) if (had.has(sources[i].rec.file)) sources.splice(i, 1);
     sources.unshift(...d.sources);
-    editing = d.editing; combine = d.combine; stackName = d.stackName;
+    editing = d.editing; combine = d.combine; stackName = d.stackName; subjectWord = d.subjectWord ?? null;
     subjectName = d.subjectName; appearanceText = d.appearance; voiceText = d.voice; retainedText = d.retained || "";
+    // Clean up may have swept the subject masks while the library was shut
+    for (const x of d.sources) {
+      if (!x.subj?.found) continue;
+      fetch(viewURL(x.subj.sprite.file), { method: "HEAD" })
+        .then((r) => { if (r.status === 404) { x.subjGone = true; schedulePaint(); } }).catch(() => {});
+    }
     jobs.push(...d.jobs);
     for (const [pid, job] of d.decodes) inspectJobs.set(pid, job);
     // Queue runs carry on while the library is shut; listen again and let the
@@ -2587,6 +2696,22 @@ export function openLibrary(panel, opts = {}) {
     const t1 = x.rec.trim?.end != null ? Number(x.rec.trim.end) : x.dim.dur;
     return Math.max(1, Math.round(Math.max(0, t1 - t0) * 24) + (x.rec.trim ? 1 : 0));
   }
+  /** A trimmed voice keeps its whole trim; Voice seconds only cuts the others. */
+  const voiceTrimmed = (x) => Number(x.rec.trim?.start) > 0 || Number(x.rec.trim?.end) > 0;
+  /** Seconds of a voice Create keeps, or null while its length is unknown. */
+  function voiceSeconds(x) {
+    const dur = x.dim?.dur || +x.rec.duration || 0;
+    if (!voiceTrimmed(x)) return dur ? Math.min(dur, st.audio_max_seconds) : null;
+    const t1 = Number(x.rec.trim.end) > 0 ? Number(x.rec.trim.end) : dur;
+    return t1 ? Math.max(0, t1 - (Number(x.rec.trim.start) || 0)) : null;
+  }
+  /** "12.0 s voice (about 960 tokens)" for the voices kept, at about 80 tokens a second. */
+  function voicesText(list) {
+    const secs = list.map(voiceSeconds);
+    if (secs.some((v) => v == null)) return "voice";
+    const total = secs.reduce((a, b) => a + b, 0);
+    return `${total.toFixed(1)} s voice (about ${fmt(Math.round(total * 80))} tokens)`;
+  }
   /** Latent frames one source contributes, or null while its length is unknown. */
   function framesOf(x) {
     if (x.rec.kind === "picture") return 1;
@@ -2662,7 +2787,8 @@ export function openLibrary(panel, opts = {}) {
     let line, cls = "";
     if (editing) {
       const plan = editPlan(), e = estimate(u), t = editing.visual?.t || 0;
-      const voiceNote = (plan.voice === "new" ? " · new voice" : plan.voice === "remove" ? " · voice removed" : "") +
+      const voiceNote = (plan.voice === "new" ? ` · new ${voicesText([plan.newVoice])}` : plan.voice === "remove" ? " · voice removed" : "") +
+        (plan.blurred ? ` · background blurred on ${plan.blurred} stored` : "") +
         (plan.nameChanged ? (plan.subject ? ` · named ${plan.subject}` : " · subject name cleared") : "") +
         (plan.appearanceChanged || plan.voiceDescChanged || plan.retainedChanged ? " · descriptions updated" : "");
       const copyTo = editing.copy ? copyTarget() : null;
@@ -2670,7 +2796,7 @@ export function openLibrary(panel, opts = {}) {
       else if (plan.nameBad) { blocked = true; cls = "over"; line = SUBJECT_RULE; }
       else if (plan.descBad) { blocked = true; cls = "over"; line = DESC_RULE; }
       else if (editing.copy && !copyTo) { blocked = true; cls = "over"; line = "Give the copy a name."; }
-      else if (editing.copy && byName(copyTo)) { blocked = true; cls = "over"; line = `"${copyTo}" already exists — pick another name.`; }
+      else if (editing.copy && nameTaken(copyTo)) { blocked = true; cls = "over"; line = `"${copyTo}" already exists — pick another name.`; }
       else if (!plan.changed && !editing.copy) line = `${t} frame${t === 1 ? "" : "s"} · ${fmt(editing.visual?.tokens || 0)} tokens · nothing changed yet`;
       else if (editing.visual && !plan.looks) { blocked = true; cls = "over"; line = "That would leave no frames — delete the RefMod instead."; }
       else if (!e.known) line = `${t} → ${e.frames}+ frames${voiceNote} · working out the size…`;
@@ -2686,17 +2812,24 @@ export function openLibrary(panel, opts = {}) {
       createBtn.textContent = blocked ? "Can't save" : editing.copy ? "Save as a copy" : plan.changed ? "Save changes" : "No changes";
       return;
     }
+    // where Create saves each one: the Folder setting plus its name
+    const target = (name) => [...String(st.subfolder || "").split("/").map(cleanName), cleanName(name)].filter(Boolean).join("/");
+    const taken = !u.length ? [] : (combine ? [stackName || defaultStackName()] : u.map((x) => x.name))
+      .filter((name) => nameTaken(target(name)));
     if (!u.length) { line = ""; }
-    else if (combine) {
+    else if (taken.length) {
+      blocked = true; cls = "over";
+      line = `${taken.map((name) => `"${name}"`).join(", ")} ${taken.length === 1 ? "is" : "are"} already in the library — pick another name.`;
+    } else if (combine) {
       const e = estimate(u), looks = u.filter(isLook).length;
-      const voice = u.some((x) => x.voice) ? " + voice" : "";
-      if (!looks) line = "One voice RefMod";
+      const voices = u.filter((x) => x.voice), voice = voices.length ? ` + ${voicesText(voices)}` : "";
+      if (!looks) line = `One voice RefMod · ${voicesText(voices)}`;
       else if (!e.known) line = `One RefMod · ${looks} source${looks === 1 ? "" : "s"}${voice} · working out the size…`;
       else if (st.max_tokens > 0 && e.tokens > st.max_tokens) {
         blocked = true; cls = "over";
         line = `About ${fmt(e.tokens)} tokens — over the ${fmt(st.max_tokens)} limit. Raise the limit, lower the ` +
           "resolution or clip frames, use Compressed, or untick some sources.";
-      } else line = `One RefMod · ${e.frames} frame${e.frames === 1 ? "" : "s"}${voice} · about ${fmt(e.tokens)} tokens (${limitText()})`;
+      } else line = `One RefMod · ${e.frames} frame${e.frames === 1 ? "" : "s"} · about ${fmt(e.tokens)} tokens (${limitText()})${voice}`;
     } else {
       const each = u.map((x) => ({ x, e: estimate([x]) }));
       const over = each.filter(({ e }) => e.known && st.max_tokens > 0 && e.tokens > st.max_tokens);
@@ -2711,7 +2844,7 @@ export function openLibrary(panel, opts = {}) {
     budgetEl.textContent = (cls ? "⚠ " : "") + line;
     const n = u.length;
     createBtn.disabled = !n || blocked;
-    createBtn.textContent = blocked ? "Over the token limit"
+    createBtn.textContent = blocked ? (taken.length ? "Name taken" : "Over the token limit")
       : !n ? "Create" : combine ? "Create 1 RefMod" : `Create ${n} RefMod${n === 1 ? "" : "s"}`;
   }
 
@@ -2795,7 +2928,7 @@ export function openLibrary(panel, opts = {}) {
     if (combine) {
       kids.push(el("label", { class: "mmr-ilabel" }, "Name",
         el("input", { class: "mmr-search", value: stackName || defaultStackName(), "aria-label": "RefMod name",
-          onchange: (e) => { stackName = cleanName(e.target.value); e.target.value = stackName || defaultStackName(); } })));
+          onchange: (e) => { stackName = cleanName(e.target.value); e.target.value = stackName || defaultStackName(); paintBudget(); } })));
       if (looks > 1) {
         const full = st.mode === "Full Reference";
         kids.push(el("div", { class: "mmr-srchint" },
@@ -2821,6 +2954,7 @@ export function openLibrary(panel, opts = {}) {
     setChildren(pullSel, loaders.length ? loaders.map((L, i) => el("option", { value: i }, `${L.title} (${L.items.length})`))
       : el("option", { value: "" }, "no Media Loader in graph"));
     sources.forEach(probe);
+    subjectKept = applyAutoCrops();
     paintSrcBar();
     const firstLook = editing ? null : used().find(isLook);
     const target = stackTarget();
@@ -2895,7 +3029,8 @@ export function openLibrary(panel, opts = {}) {
           num("max_tokens", "Max tokens", 0, 1048576, 256, "Refuses to save anything bigger than this, unless it's no " +
             "bigger than the file already is. 0 = no limit."),
           num("latent_frames", "Clip frames", 1, 1024, 1, "Frames taken from the start of each added clip, after its trim.", clipFramesHint),
-          num("audio_max_seconds", "Voice seconds", 0.5, 600, 0.5, "Seconds of a new voice kept from the start.")),
+          num("audio_max_seconds", "Voice seconds", 0.5, 600, 0.5, VOICE_SECONDS_TIP)),
+        subjectSection(),
         el("div", { class: "mmr-fh", style: { marginTop: "8px" } }, "Models"),
         needLook ? vaeSel("videoVae", "H3 video VAE", /minimax.*video|h3.*video/i) : null,
         needVoice ? vaeSel("audioVae", "H3 audio VAE", /minimax.*audio|h3.*audio/i) : null,
@@ -2908,7 +3043,7 @@ export function openLibrary(panel, opts = {}) {
     setChildren(form,
       el("div", { class: "mmr-fh" }, "Settings"),
       el("label", { class: "mmr-ilabel" }, "Folder", el("input", { class: "mmr-search", value: st.subfolder, placeholder: "(root)",
-        onchange: (e) => { st.subfolder = e.target.value.trim(); saveSettings(st); } })),
+        onchange: (e) => { st.subfolder = e.target.value.trim(); saveSettings(st); paintBudget(); } })),
       subjectField(),
       el("label", { class: "mmr-ilabel" }, "Mode", el("select", { class: "mmr-sel", onchange: (e) => { st.mode = e.target.value; saveSettings(st); paintCreate(); } },
         ["Full Reference", "Compressed Reference"].map((m) => el("option", { value: m, selected: st.mode === m }, m)))),
@@ -2919,11 +3054,13 @@ export function openLibrary(panel, opts = {}) {
         st.mode === "Compressed Reference" ? num("grid", "Grid (long edge)", 2, 64, 2, "How small Compressed goes. 16 is up to 64 tokens per frame.") : null,
         st.mode === "Compressed Reference" ? num("refinement_steps", "Refinement steps", 0, 5000, 50, "How long Compressed is tuned toward the full picture.") : null,
         num("latent_frames", "Clip frames", 1, 1024, 1, "Frames taken from the start of each clip, after its trim. Trim the clip to the moment you want first.", clipFramesHint),
-        num("audio_max_seconds", "Voice seconds", 0.5, 600, 0.5, "Seconds of voice kept from the start.")),
-      el("label", { class: "mmr-ilabel" }, "Concept", el("select", { class: "mmr-sel", onchange: (e) => { st.concept_type = e.target.value; saveSettings(st); } },
+        num("audio_max_seconds", "Voice seconds", 0.5, 600, 0.5, VOICE_SECONDS_TIP)),
+      el("label", { class: "mmr-ilabel" }, "Concept", el("select", { class: "mmr-sel",
+          onchange: (e) => { st.concept_type = e.target.value; saveSettings(st); paintCreate(); } },   // the masking word follows it
         CONCEPTS.map((c) => el("option", { value: c, selected: c === st.concept_type }, c)))),
       el("label", { class: "mmr-inline" }, el("input", { type: "checkbox", checked: st.write_preview,
         onchange: (e) => { st.write_preview = e.target.checked; saveSettings(st); } }), "Save a preview image beside each file"),
+      subjectSection(),
       el("div", { class: "mmr-fh", style: { marginTop: "8px" } }, "Models"),
       needLook || !needVoice ? vaeSel("videoVae", "H3 video VAE", /minimax.*video|h3.*video/i) : null,
       needVoice ? vaeSel("audioVae", "H3 audio VAE", /minimax.*audio|h3.*audio/i) : null,
@@ -2938,24 +3075,370 @@ export function openLibrary(panel, opts = {}) {
    *  you choose which part is kept instead of taking the centre. */
   function cropButton(x, setsFrame, target) {
     const lock = target && !setsFrame && x.use ? (target.lock || (target.first && effDims(target.first))) : null;
-    const ratio = lock ? lock[0] / lock[1] : 0;
     const label = lock ? "Crop to fit…" : (x.rec.kind === "video" ? "Crop / trim…" : "Crop…");
     return el("button", { class: "mmr-btn", title: lock
         ? "Choose which part of this photo is kept. The box is locked to the first photo's shape."
         : "Crop, rotate or mirror this source for the RefMod (the Media Loader is left as it is).",
-      onclick: () => {
-        // The editor sizes its crop box from the record, and expects the
-        // turned size there.
-        if (x.dim) { const [w, h] = turnedDims(x); x.rec.width = Math.round(w); x.rec.height = Math.round(h); }
-        if (x.dim?.dur && !x.rec.duration) x.rec.duration = x.dim.dur;
-        hidePeek();
-        openCropEditor(x.rec, {
-          aspect: ratio || undefined,
-          aspectLabel: lock ? `first photo (${Math.round(lock[0])}×${Math.round(lock[1])})` : undefined,
-          say: (m) => toast(m, 4000),
-          onApply: () => { x.dim = null; x.probing = false; paintCreate(); },
+      onclick: () => openSourceEditor(x) }, label);
+  }
+
+  /** Every source the editor can step through, in list order: pictures and
+   *  clips, voices to trim, and a Full RefMod's stored frames for the subject. */
+  const editable = (x) => ((isLook(x) || x.rec.kind === "audio") && !isStored(x)) || (x.stored != null && subjectable(x));
+  const sameRect = (a, b) => !!a && !!b && ["x", "y", "w", "h"].every((k) => Math.abs(a[k] - b[k]) < 1e-3);
+
+  /** The crop and trim editor for one source, with its subject when the
+   *  Batch Masking applies to it, and ‹ › to the next. */
+  function openSourceEditor(x) {
+    const list = sources.filter(editable), i = list.indexOf(x);
+    const target = stackTarget(), setsFrame = !editing && x === used().find(isLook);
+    const lock = target && !setsFrame && x.use && isLook(x) && !isStored(x)
+      ? (target.lock || (target.first && effDims(target.first))) : null;
+    // The editor sizes its crop box from the record, and expects the turned size there.
+    if (x.dim) { const [w, h] = turnedDims(x); x.rec.width = Math.round(w); x.rec.height = Math.round(h); }
+    if (x.dim?.dur && !x.rec.duration) x.rec.duration = x.dim.dur;
+    hidePeek();
+    const before = JSON.stringify([x.rec.rotate || 0, !!x.rec.mirror]);
+    let modal = null;
+    const subject = subjectable(x) ? {
+      subject: () => x.subj || null,
+      marks: x.marks || [],
+      find: async (marks) => {
+        // the dots are on the picture as the editor shows it now, applied or not
+        Object.assign(x, { marks, markTurn: [modal.rotate || 0, !!modal.mirror] });
+        await findSubjects([x]);
+        if (x.autoCrop === "auto" && (modal.rotate || 0) === (x.rec.rotate || 0) && !!modal.mirror === !!x.rec.mirror) {
+          modal.crop = { ...x.rec.crop };
+          modal.syncCrop();
+        }
+      },
+      look: () => ({ blur: subjectCfg().subject_blur_on ? subjectCfg().subject_blur : 0, grow: subjGrow(), edge: subjEdge() }),
+      encScale: () => encScaleOf(x),
+      flags: () => subjectFlags(x, setsFrame, target),
+      controls: subjControls(x.stored != null ? "stored" : "editor",
+        (done) => { modal?.subjectLayer?.changed(); if (done) schedulePaint(); }),
+      decode: x.stored != null ? () => decodeStored(x) : undefined,
+    } : undefined;
+    modal = openCropEditor(x.rec, {
+      aspect: lock ? lock[0] / lock[1] : undefined,
+      aspectLabel: lock ? `first photo (${Math.round(lock[0])}×${Math.round(lock[1])})` : undefined,
+      say: (m) => toast(m, 4000),
+      noCrop: x.stored != null,
+      subject,
+      nav: list.length > 1 ? { label: `${i + 1} of ${list.length}`,
+        step: (d) => openSourceEditor(list[(i + d + list.length) % list.length]) } : undefined,
+      onApply: () => {
+        // after a turn or mirror an auto crop is worked out again; moved by hand, it's yours
+        const turned = JSON.stringify([x.rec.rotate || 0, !!x.rec.mirror]) !== before;
+        if (x.autoCrop === "auto" && !turned && !sameRect(x.rec.crop, x.autoRect)) x.autoCrop = "adjusted";
+        x.dim = null; x.probing = false; paintCreate();
+      },
+    });
+  }
+
+  /* ---- subject: SAM finds what each picture or clip is of. Its mask sets
+   *      the crop (Crop to subject) and keeps the subject sharp while the
+   *      rest is blurred (Blur background); a Full RefMod's stored frames in
+   *      edit mode get the blur on their latent instead. The masks are only
+   *      kept until the RefMod is saved: the Create and Edit nodes delete
+   *      them then. */
+  const subjectCfg = () => (editing ? editing.subjCfg : st);
+  const subjRes = () => (editing?.visual ? Math.min(...editing.px) : st.ref_resolution);
+  const subjGrow = () => Math.min(64, Math.max(0, subjectCfg().subject_grow ?? Math.round(16 * subjRes() / 768)));
+  const subjEdge = () => Math.min(64, Math.max(0, subjectCfg().subject_edge ?? Math.round(12 * subjRes() / 768)));
+  let subjectWord = null;              // Batch Masking's word box; null follows the concept
+  const wordNow = () => subjectWord
+    ?? (["identity", "pose_motion"].includes(editing ? editing.it.concept : st.concept_type) ? "person" : "");
+  const fullEdit = () => !!editing && editing.visual?.mode === "encode";
+  /** New pictures and clips, and the decoded stored frames of a Full RefMod being edited. */
+  const subjectable = (x) => x.use && ((isLook(x) && !isStored(x)) || (x.stored != null && fullEdit() && !!x.rec.file));
+  /** A clip's mask covers the frames Create took when it was found. */
+  const clipKey = (x) => JSON.stringify([x.rec.trim || null, st.latent_frames]);
+  const subjStale = (x) => !!x.subj && x.rec.kind === "video" && x.subjAt !== clipKey(x);
+  let samList = null, subjectKept = 0;
+
+  async function samChoice() {
+    if (!samList) samList = await samCheckpoints();
+    let saved = "";
+    try { saved = localStorage.getItem(SAM_KEY) || ""; } catch (e) { /* private mode */ }
+    return samList.includes(saved) ? saved : (samList.find((c) => /sam3/i.test(c)) || "");
+  }
+
+  /** The turn and mirror a source's dots were placed on. Stored frames are never turned. */
+  const turnOf = (x) => (isStored(x) ? [0, false] : x.markTurn || [x.rec.rotate || 0, !!x.rec.mirror]);
+
+  /** SAM on these sources in one queue job: the pictures together, each clip
+   *  over the frames Create takes from it. Dots from the editor pick the
+   *  subject; the word finds it, the largest match unless Keep every match. */
+  async function findSubjects(list) {
+    const word = wordNow().trim(), ckpt = await samChoice();
+    if (!ckpt || !/sam3/i.test(ckpt)) { toast("Masking needs the SAM 3.1 checkpoint in models/checkpoints — see Batch Masking", 6000); return; }
+    // with no word, only sources with dots can be found
+    if (!word) list = list.filter((x) => (x.marks || []).some((m) => m.positive.length));
+    if (!list.length) { toast("Type what to mask first, like person", 4000); return; }
+    const stills = list.filter((x) => x.rec.kind === "picture" && x.rec.file), clips = list.filter((x) => x.rec.kind === "video");
+    const base = { model: ["1", 0], clip: ["1", 1], text: word, threshold: 0.5,
+      max_objects: subjectCfg().subject_keep_all ? 4 : 1, subject: true };
+    const prompt = { 1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: ckpt } } }, targets = {};
+    let id = 2;
+    if (stills.length) {
+      prompt[id] = { class_type: MASK_NODE, inputs: { ...base, video: "", points: "", start: 0, end: 0,
+        pictures: JSON.stringify(stills.map((x) => { const [rotate, mirror] = turnOf(x);
+          return { file: x.rec.file, rotate, mirror, positive: x.marks?.[0]?.positive || [], negative: x.marks?.[0]?.negative || [] }; })) } };
+      targets[id++] = stills;
+    }
+    for (const x of clips) {
+      // clips are masked on the file's own frame: dots on a mirrored view are flipped back
+      const back = (p) => ({ x: turnOf(x)[1] ? 1 - p.x : p.x, y: p.y });
+      const marks = (x.marks || []).filter((m) => m.positive.length);
+      prompt[id] = { class_type: MASK_NODE, inputs: { ...base, video: x.rec.file,
+        start: Number(x.rec.trim?.start) || 0, end: x.rec.trim?.end != null ? Number(x.rec.trim.end) : 0,
+        max_frames: h3Take(Math.min(st.latent_frames, clipFrames(x) || st.latent_frames)),
+        points: marks.length ? JSON.stringify({ frames: marks.map((m) => ({ time: m.time,
+          positive: m.positive.map(back), negative: m.negative.map(back) })) }) : "" } };
+      targets[id++] = [x];
+    }
+    list.forEach((x) => { x.finding = true; });
+    paintCreate();
+    try {
+      const out = await runHidden(prompt);
+      for (const [node, xs] of Object.entries(targets)) {
+        const found = out[node]?.mmh3_subject || [];
+        xs.forEach((x, k) => {
+          x.subj = found[k] || { found: false };
+          x.subjAt = clipKey(x);
+          x.subjGone = false;
         });
-      } }, label);
+      }
+      subjectKept = applyAutoCrops();
+    } catch (err) {
+      toast(`Find failed: ${err.message}`, 6000);
+      throw err;
+    } finally {
+      list.forEach((x) => { x.finding = false; });
+      paintCreate();
+    }
+  }
+
+  /** The crop around a source's subject: its box enlarged by the margin,
+   *  grown (never shrunk) to `aspect` when the stack locks one, slid to stay
+   *  inside the picture. `cut` when the locked shape can't hold the subject. */
+  function autoCropRect(x, aspect) {
+    const b = x.subj?.bbox;
+    if (!b || !x.dim) return null;
+    const video = x.rec.kind === "video";             // clips aren't turned when they're sent
+    const side = x.dim.turned && ((parseInt(x.rec.rotate, 10) || 0) % 180 + 180) % 180 === 90;
+    const [W, H] = !video ? turnedDims(x) : side ? [x.dim.h, x.dim.w] : [x.dim.w, x.dim.h];
+    const r = turnRect(b, video ? 0 : x.rec.rotate, !!x.rec.mirror);
+    const m = subjectCfg().subject_margin, sw = r.w * W, sh = r.h * H;
+    const cx = (r.x + r.w / 2) * W, cy = (r.y + r.h / 2) * H;
+    let bw = sw * m, bh = sh * m, cut = false;
+    if (aspect) {
+      if (bw / bh < aspect) bw = bh * aspect; else bh = bw / aspect;
+      if (bw > W || bh > H) {
+        const k = Math.min(W / bw, H / bh);
+        bw *= k; bh *= k;
+        cut = bw < sw - 0.5 || bh < sh - 0.5;
+      }
+    } else { bw = Math.min(bw, W); bh = Math.min(bh, H); }
+    const x0 = Math.min(W - bw, Math.max(0, cx - bw / 2)), y0 = Math.min(H - bh, Math.max(0, cy - bh / 2));
+    return { rect: { x: x0 / W, y: y0 / H, w: bw / W, h: bh / H }, cut };
+  }
+
+  /** Crops that follow the subject, worked out again from what's set now:
+   *  the first picture's own box sets the stack's shape for the rest. A crop
+   *  you adjusted (or set before Find) is left alone. Returns how many were. */
+  function applyAutoCrops() {
+    const c = subjectCfg();
+    let kept = 0;
+    for (const x of used().filter((y) => isLook(y) && !isStored(y))) {
+      if (x.autoCrop === "adjusted" || (x.autoCrop !== "auto" && x.rec.crop)) { if (x.subj?.found) kept++; continue; }
+      const t = stackTarget();
+      const aspect = editing ? editing.px[0] / editing.px[1] : (t && x !== t.first ? t.aspect : 0);
+      const r = c.subject_crop && x.subj?.found && !subjStale(x) ? autoCropRect(x, aspect) : null;
+      if (r) Object.assign(x, { autoCrop: "auto", autoRect: r.rect, subjCut: r.cut }), x.rec.crop = r.rect;
+      else if (x.autoCrop === "auto") { x.rec.crop = null; Object.assign(x, { autoCrop: null, autoRect: null, subjCut: false }); }
+    }
+    return kept;
+  }
+
+  /** Encoded pixels per pixel of the file, after its crop: what Create's
+   *  resolution, the stack's frame or the edited file's size does to it. */
+  function encScaleOf(x) {
+    const d = effDims(x);
+    if (!d) return 1;
+    if (editing) return Math.max(editing.px[0] / d[0], editing.px[1] / d[1]);
+    const t = stackTarget();
+    if (t && x !== t.first) {
+      const f = effDims(t.first);
+      if (!f) return 1;
+      const sc = Math.min(1, st.ref_resolution / Math.min(...f));
+      return Math.max(Math.max(32, pyRound(f[0] * sc / 32) * 32) / d[0], Math.max(32, pyRound(f[1] * sc / 32) * 32) / d[1]);
+    }
+    return Math.min(1, st.ref_resolution / Math.min(...d));
+  }
+
+  /** What to know about a source's subject and crop, for its row and the editor. */
+  function subjectFlags(x, setsFrame, target) {
+    const out = [];
+    if (x.subjGone) out.push("Find again: the subject mask was cleaned up");
+    else if (subjStale(x)) out.push("Find again: the trim or Clip frames changed since its subject was found");
+    else if (x.subj && !x.subj.found) out.push("No subject found: kept whole, not blurred");
+    if (x.subjCut && x.autoCrop === "auto") out.push("Subject cut off: the locked shape can't fit around it with this margin");
+    const d = isLook(x) && !isStored(x) && x.rec.crop ? effDims(x) : null;
+    if (d) {
+      const short = Math.min(...d);
+      const stacked = editing || (target && !setsFrame);
+      const f = target?.first ? effDims(target.first) : null;
+      const frame = editing ? Math.min(...editing.px) : stacked && f ? Math.min(st.ref_resolution, ...f) : st.ref_resolution;
+      if (short < 0.6 * frame) out.push(stacked
+        ? `Small crop: ${Math.round(short)} px, enlarged ${(frame / short).toFixed(1)}× to fit`
+        : `Small crop: the RefMod will be ${Math.round(d[0])}×${Math.round(d[1])} (set to ${st.ref_resolution})`);
+    }
+    return out;
+  }
+
+  /** The look sliders: `where` is Batch Masking ("section"), the
+   *  editor for a picture or clip ("editor"), or for a stored frame ("stored"). */
+  function subjControls(where, changed) {
+    const c = subjectCfg(), save = () => { if (!editing) saveSettings(st); };
+    const slider = (label, title, min, max, step, typedMax, get, set, unit) => {
+      const num = el("input", { class: "mmr-num mmr-subjnum", type: "number", min, max: typedMax, step, value: get(),
+        onchange: (e) => { if (e.target.value !== "" && Number.isFinite(+e.target.value)) set(+e.target.value);
+          e.target.value = get(); range.value = Math.min(max, get()); save(); changed(true); } });
+      const range = el("input", { type: "range", min, max, step, value: Math.min(max, get()),
+        oninput: (e) => { set(+e.target.value); num.value = get(); changed(false); },
+        onchange: () => { save(); changed(true); } });
+      return el("label", { class: "mmr-subjctl", title }, el("span", {}, label), range, num, el("span", { class: "mmr-dim" }, unit));
+    };
+    const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v)));
+    const blur = slider("Blur", "How much the background is blurred: the Gaussian radius, in pixels of the picture as it's " +
+      "encoded. The subject itself stays sharp.", 1, 64, 1, 256, () => c.subject_blur, (v) => { c.subject_blur = clampTo(v, 1, 256); }, "px");
+    const grow = slider("Grow", "Widens the subject before the blur so hair and edges stay sharp, in pixels of the picture " +
+      "as it's encoded. Starts at a size that suits the RefMod's resolution.", 0, 64, 1, 64, subjGrow,
+      (v) => { c.subject_grow = clampTo(v, 0, 64); }, "px");
+    const edge = slider("Edge", "Softens the edge of the subject over this many pixels, so the blur fades in instead of " +
+      "starting at a line. Starts at a size that suits the RefMod's resolution.", 0, 64, 1, 64, subjEdge,
+      (v) => { c.subject_edge = clampTo(v, 0, 64); }, "px");
+    const background = slider("Background kept", "Stored frames: how much of the background outside the subject stays as " +
+      "it was. 0% blurs it fully. It's blended on the stored frame itself, so its edge follows the latent's 16-pixel cells.",
+      0, 100, 5, 100, () => c.subject_background, (v) => { c.subject_background = clampTo(v, 0, 100); }, "%");
+    if (where === "stored") return [background, grow];
+    if (where === "editor") return [blur, grow, edge];
+    const margin = slider("Margin", "How much room the crop keeps around the subject: its box enlarged this many times, " +
+      "then fitted to the stack's shape and kept inside the picture.", 1.25, 3, 0.25, 3, () => c.subject_margin,
+      (v) => { c.subject_margin = Math.min(3, Math.max(1.25, Math.round(v * 4) / 4)); }, "×");
+    return { margin, blur, grow, edge, background };
+  }
+
+  /** Batch Masking in the settings pane, while there's something it applies to. */
+  function subjectSection() {
+    const list = used().filter(subjectable);
+    if (!list.length) return null;
+    const c = subjectCfg(), save = () => { if (!editing) saveSettings(st); };
+    const finding = list.some((x) => x.finding);
+    const ctl = subjControls("section", (done) => { if (done) { applyAutoCrops(); paintCreate(); } });
+    const sel = el("select", { class: "mmr-sel", onchange: (e) => { try { localStorage.setItem(SAM_KEY, e.target.value); } catch (err) { /* private mode */ } } });
+    const samNote = el("div", { class: "mmr-dim" });
+    samChoice().then((pick) => {
+      setChildren(sel, samList.map((m) => el("option", { value: m, selected: m === pick }, m)));
+      if (!samList.some((m) => /sam3/i.test(m))) setChildren(samNote, "No SAM 3.1 checkpoint found. Put ",
+        el("a", { href: SAM_LINK, target: "_blank", rel: "noopener" }, "sam3.1_multiplex_fp16.safetensors"),
+        " in models/checkpoints; nothing is downloaded for you.");
+    });
+    const tried = list.filter((x) => x.subj), found = tried.filter((x) => x.subj.found).length;
+    const storedTo = editing && list.some((x) => x.stored != null);
+    return el("div", { class: "mmr-subjsec" },
+      el("div", { class: "mmr-fh", style: { marginTop: "8px" } }, "Batch Masking"),
+      el("input", { class: "mmr-search", value: wordNow(), placeholder: "what to mask, like person",
+        "aria-label": "What to mask", oninput: (e) => { subjectWord = e.target.value; } }),
+      el("button", { class: "mmr-btn primary mmr-maskall", disabled: finding,
+        title: "Find this in every picture and clip with SAM 3.1 and mask it, all in one queue job",
+        onclick: () => findSubjects(list).catch(() => {}) }, finding ? "Masking…" : "Find and Mask All"),
+      el("label", { class: "mmr-inline", title: "Off: the largest match in each picture is the subject. On: every " +
+          "match is, for a RefMod of more than one person." },
+        el("input", { type: "checkbox", checked: c.subject_keep_all,
+          onchange: (e) => { c.subject_keep_all = e.target.checked; save(); } }), "Keep every match"),
+      el("label", { class: "mmr-ilabel", title: "The SAM 3.1 checkpoint masking runs with (from models/checkpoints)" }, "SAM model", sel),
+      samNote,
+      el("label", { class: "mmr-inline", title: "Crop each picture and clip to its subject, with room around it. A crop " +
+          "you adjust by hand is kept; Back to auto hands it back." },
+        el("input", { type: "checkbox", checked: c.subject_crop,
+          onchange: (e) => { c.subject_crop = e.target.checked; save(); applyAutoCrops(); paintCreate(); } }), "Crop to subject"),
+      c.subject_crop ? ctl.margin : null,
+      el("label", { class: "mmr-inline", title: "Blur everything but the subject before it's encoded, so props and the " +
+          "background don't bleed into the RefMod. It doesn't change the token count." },
+        el("input", { type: "checkbox", checked: c.subject_blur_on,
+          onchange: (e) => { c.subject_blur_on = e.target.checked; save(); paintCreate(); } }), "Blur background"),
+      c.subject_blur_on ? el("div", { class: "mmr-subjctls" }, ctl.blur, ctl.grow, ctl.edge,
+        storedTo ? ctl.background : null) : null,
+      editing && !fullEdit() && sources.some((x) => x.stored != null) ? el("div", { class: "mmr-dim" },
+        "Stored frames of a Compressed RefMod can't have their background blurred: they hold too little detail " +
+        "to mask. Pictures you add still can.") : null,
+      el("div", { class: "mmr-dim" }, finding ? "Finding the subject… (in the queue)"
+        : tried.length ? `Found in ${found} of ${tried.length}` +
+          (subjectKept ? ` · kept ${subjectKept} crop${subjectKept === 1 ? "" : "s"} you adjusted` : "")
+        : "Find and Mask All looks for this in every picture and clip, then crops and blurs around it."));
+  }
+
+  /** The Create tab's record of a source's subject, for the Create and Edit
+   *  nodes: its mask and what to do with it. */
+  function subjectSpec(x) {
+    const c = subjectCfg();
+    if (!x.subj?.found || x.subjGone || subjStale(x) || isStored(x)) return null;
+    const crop = !!c.subject_crop && x.autoCrop === "auto", blur = c.subject_blur_on ? c.subject_blur : 0;
+    if (!crop && !blur) return null;
+    return { mask: x.subj.file, word: wordNow().trim(), margin: c.subject_margin, crop, blur, grow: subjGrow(), edge: subjEdge() };
+  }
+
+  /** The stored frames to blur in edit mode, for the Edit node's stored_blur. */
+  function storedBlurPlan() {
+    const c = subjectCfg();
+    if (!fullEdit() || !c.subject_blur_on) return null;
+    const masks = {};
+    for (const x of used()) if (x.stored != null && x.subj?.found && !x.subjGone) masks[x.stored] = x.subj.file;
+    return Object.keys(masks).length
+      ? { background: c.subject_background / 100, grow: subjGrow(), word: wordNow().trim(), masks } : null;
+  }
+
+  /** A stored frame decoded with its background blurred, for the editor's Result. */
+  async function decodeStored(x) {
+    const vae = guessVae("videoVae", /minimax.*video|h3.*video/i);
+    if (!vae) throw new Error("choose the H3 video VAE on the Create tab first");
+    const c = subjectCfg();
+    const out = await runHidden({
+      1: { class_type: "VAELoader", inputs: { vae_name: vae } },
+      2: { class_type: INSPECT_NAME, inputs: { file: editing.visual.file, view: "frames", strength: 1, audio_seconds: 30,
+        vae: ["1", 0], stored_blur: JSON.stringify({ background: c.subject_background / 100, grow: subjGrow(),
+          masks: { [x.stored]: x.subj.file } }) } },
+    });
+    const img = out["2"]?.images?.[0];
+    if (!img) throw new Error("nothing came back");
+    return tempURL(img);
+  }
+
+  /** What a voice keeps, for its row. */
+  function voiceRow(x) {
+    const s = voiceSeconds(x), dur = x.dim?.dur || +x.rec.duration || 0;
+    const what = voiceTrimmed(x) ? (s == null ? "its trim kept" : `${s.toFixed(1)} s kept (its trim)`)
+      : s == null ? `up to ${st.audio_max_seconds} s kept (Voice seconds)`
+      : dur > st.audio_max_seconds ? `first ${s.toFixed(1)} s kept (Voice seconds)` : `all ${s.toFixed(1)} s kept`;
+    return `voice: ${what}` + (s != null ? ` · about ${fmt(Math.round(s * 80))} tokens` : "");
+  }
+  /** A source's subject on its row: found or not, who set its crop, and
+   *  anything to look at. */
+  function subjectLine(x, setsFrame, target) {
+    const c = subjectCfg(), flags = subjectFlags(x, setsFrame, target);
+    const live = x.subj?.found && !x.subjGone && !subjStale(x);
+    const back = live && c.subject_crop && x.stored == null && x.autoCrop !== "auto" && (x.autoCrop === "adjusted" || !!x.rec.crop);
+    const state = x.finding ? "finding the subject… (in the queue)"
+      : !live ? "" : `subject found${x.autoCrop === "auto" ? " · the crop follows it" : back ? " · crop set by hand" : ""}`;
+    if (!state && !flags.length) return null;
+    return el("div", { class: "mmr-subjline" },
+      state ? el("div", { class: "mmr-dim" }, state,
+        back ? el("button", { class: "mmr-btn mmr-sm", title: "Crop around the subject again, as Find does",
+          onclick: () => { x.autoCrop = null; x.rec.crop = null; paintCreate(); } }, "Back to auto") : null) : null,
+      flags.map((f) => el("div", { class: "mmr-fitcap warn" }, f)));
   }
 
   let dragSrc = null;
@@ -2998,7 +3481,8 @@ export function openLibrary(panel, opts = {}) {
                   "The others have their edges trimmed to match." },
                 "Sets dataset size and aspect ratio") : null)
           : el("input", { class: "mmr-search", value: x.name, "aria-label": "RefMod name", onchange: (e) => {
-              x.name = cleanName(e.target.value); e.target.value = x.name; if (x._subjLabel) x._subjLabel.textContent = x.name; } }),
+              x.name = cleanName(e.target.value); e.target.value = x.name; if (x._subjLabel) x._subjLabel.textContent = x.name;
+              paintBudget(); } }),
         el("div", { class: "mmr-dim" }, [x.origin, ...bits].filter(Boolean).join(" · ")),
         f != null ? el("div", { class: "mmr-dim" }, x.rec.kind === "video"
           ? (() => { const n = clipFrames(x), take = h3Take(Math.min(st.latent_frames, n));
@@ -3010,7 +3494,15 @@ export function openLibrary(panel, opts = {}) {
         })() : null,
         (x.rec.kind === "video" && x.rec.has_audio) ? el("label", { class: "mmr-inline" },
           el("input", { type: "checkbox", checked: x.voice, onchange: (e) => { x.voice = e.target.checked; paintCreate(); } }), "include its soundtrack as a voice") : null,
-        isLook(x) && !isStored(x) ? el("div", { class: "mmr-srcacts" }, cropButton(x, setsFrame, target)) : null),
+        x.voice && x.use && !isStored(x) ? el("div", { class: "mmr-dim" }, voiceRow(x)) : null,
+        subjectable(x) ? subjectLine(x, setsFrame, target) : null,
+        isLook(x) && !isStored(x) ? el("div", { class: "mmr-srcacts" }, cropButton(x, setsFrame, target))
+        : x.stored != null && subjectable(x) ? el("div", { class: "mmr-srcacts" }, el("button", { class: "mmr-btn",
+            title: "Find the subject in this stored frame and see its background blurred", onclick: () => openSourceEditor(x) }, "Subject…"))
+        : x.rec.kind === "audio" && !isStored(x) ? el("div", { class: "mmr-srcacts" }, el("button", { class: "mmr-btn",
+            title: "Trim this voice for the RefMod (the Media Loader is left as it is). A trimmed voice keeps its whole trim.",
+            onclick: () => openSourceEditor(x) }, "Trim…"))
+        : null),
       el("button", { class: "mmr-x", title: isStored(x) ? "Drop this from the RefMod" : "Remove from the list",
         onclick: () => { sources.splice(i, 1); paintTabs(); } }, "×"));
     row.addEventListener("dragstart", (e) => {
@@ -3038,12 +3530,14 @@ export function openLibrary(panel, opts = {}) {
     const use = used();
     if (!use.length) return;
     paintBudget();
-    if (blocked) { toast("Over the token limit — see the note under Create", 5000); return; }
+    if (blocked) { toast(budgetEl.textContent.replace(/^⚠ /, ""), 5000); return; }
     const needLook = use.some(isLook), needVoice = use.some((x) => x.voice);
     if (needLook && !st.videoVae) { toast("Choose the H3 video VAE first", 4000); return; }
     if (needVoice && !st.audioVae) { toast("Choose the H3 audio VAE first", 4000); return; }
+    if (use.some((x) => x.finding)) { toast("Wait for Find to finish", 4000); return; }
     // Create's resolution decides size, so a loader's size cap doesn't ride along.
-    const recOf = (x) => { const r = { ...x.rec }; delete r.resize; if (r.kind === "video") r.audio_mode = x.voice ? "paired" : "off"; return r; };
+    const recOf = (x) => { const r = { ...x.rec }; delete r.resize; if (r.kind === "video") r.audio_mode = x.voice ? "paired" : "off";
+      const subject = subjectSpec(x); if (subject) r.subject = subject; return r; };
     const groups = combine
       ? [{ name: stackName || defaultStackName(), members: use, subject: subjectName, appearance: appearanceText, voiceDesc: voiceText,
            retained: retainedText }]
@@ -3054,7 +3548,7 @@ export function openLibrary(panel, opts = {}) {
     if (groups.some((g) => g.subject && !SUBJECT_OK.test(g.subject))) { toast(SUBJECT_RULE, 5000); return; }
     if (groups.some((g) => [g.appearance, g.voiceDesc, g.retained].some((t) => oneLine(t).length > DESC_LIMIT))) {
       toast(DESC_RULE, 5000); return; }
-    if (new Set(names).size !== names.length) { toast("Two sources have the same name", 4000); return; }
+    if (new Set(names.map((n) => n.toLowerCase())).size !== names.length) { toast("Two sources have the same name", 4000); return; }
     const prompt = {}; let id = 1;
     const vid = needLook ? String(id++) : null;
     if (vid) prompt[vid] = { class_type: "VAELoader", inputs: { vae_name: st.videoVae } };
@@ -3100,10 +3594,13 @@ export function openLibrary(panel, opts = {}) {
     paintBudget();
     if (!plan || (!plan.changed && !editing.copy) || blocked) return;
     const saveAs = editing.copy ? copyTarget() : "";
-    const needLook = plan.adds.length > 0, needVoice = plan.voice === "new";
+    // blurred stored frames get their encoder frames remade, which needs the VAE too
+    const needLook = plan.adds.length > 0 || plan.blurred > 0, needVoice = plan.voice === "new";
     if (needLook && !st.videoVae) { toast("Choose the H3 video VAE first", 4000); return; }
     if (needVoice && !st.audioVae) { toast("Choose the H3 audio VAE first", 4000); return; }
-    const recOf = (x) => { const r = { ...x.rec }; delete r.resize; if (r.kind === "video") r.audio_mode = x.voice ? "paired" : "off"; return r; };
+    if (used().some((x) => x.finding)) { toast("Wait for Find to finish", 4000); return; }
+    const recOf = (x) => { const r = { ...x.rec }; delete r.resize; if (r.kind === "video") r.audio_mode = x.voice ? "paired" : "off";
+      const subject = subjectSpec(x); if (subject) r.subject = subject; return r; };
     const prompt = {}; let id = 1;
     const vid = needLook ? String(id++) : null;
     if (vid) prompt[vid] = { class_type: "VAELoader", inputs: { vae_name: st.videoVae } };
@@ -3116,13 +3613,14 @@ export function openLibrary(panel, opts = {}) {
       subject_name: plan.nameChanged ? (plan.subject || "-") : "",
       appearance: plan.appearanceChanged ? (plan.appearance || "-") : "",
       voice_description: plan.voiceDescChanged ? (plan.voiceDesc || "-") : "",
-      retained_attributes: plan.retainedChanged ? (plan.retained || "-") : "" };
+      retained_attributes: plan.retainedChanged ? (plan.retained || "-") : "",
+      stored_blur: plan.blur ? JSON.stringify(plan.blur) : "" };
     if (vid) inputs.vae = [vid, 0];
     if (aid) inputs.audio_vae = [aid, 0];
     prompt[String(id++)] = { class_type: EDIT_NAME, inputs };
     if (needVoice) {
       const dur = plan.newVoice.dim?.dur || plan.newVoice.rec.duration || 0, cap = st.audio_max_seconds;
-      if (dur > cap + 0.05) toast(`Keeping the first ${cap} s of the ${dur.toFixed(1)} s voice — "Voice seconds" sets the limit`, 6000);
+      if (!voiceTrimmed(plan.newVoice) && dur > cap + 0.05) toast(`Keeping the first ${cap} s of the ${dur.toFixed(1)} s voice — "Voice seconds" sets the limit`, 6000);
     }
     createBtn.disabled = true;
     try {
@@ -3204,7 +3702,7 @@ export function openLibrary(panel, opts = {}) {
       if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
       items = data.items || []; roots = data.roots || []; packInstalled = data.pack_installed !== false;
       if (vr && vr.ok) { try { const v = await vr.json(); vaes = Array.isArray(v) ? v : []; } catch (e) { vaes = []; } }
-      drawFolders(); drawGrid(); paintFramesBtn();
+      drawFolders(); drawGrid(); paintFramesBtn(); paintBudget();
       if (view.selected) { if (byName(view.selected)) paintInspector(); else select(null); }
       if (rescan && panel) panel.refreshFrom(items);
     } catch (e) {

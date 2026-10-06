@@ -193,11 +193,7 @@ def hide_area(frames, obj, box, w, h, invert, how, radius):
         obj = obj[:, round(y * mh / h):round((y + bh) * mh / h), round(x * mw / w):round((x + bw) * mw / w)]
     n, th, tw = frames.shape[:3]
     dev = mm.get_torch_device()
-    if how != "invert":
-        sigma = radius * tw / (box[2] if box else w)     # source pixels, on the cited clip's size
-        r = max(1, math.ceil(3 * sigma))
-        k = torch.exp(-0.5 * (torch.arange(-r, r + 1, device=dev, dtype=torch.float32) / sigma) ** 2)
-        k = (k / k.sum()).repeat(3, 1, 1, 1)
+    sigma = radius * tw / (box[2] if box else w)         # source pixels, on the cited clip's size
     out = torch.empty_like(frames)
     for i in range(0, n, CHUNK):
         m = resize_mask(obj[i:i + CHUNK], tw, th).to(dev)[:, None]
@@ -207,11 +203,40 @@ def hide_area(frames, obj, box, w, h, invert, how, radius):
         if how == "invert":
             hidden = 1.0 - f
         else:
-            hidden = F.conv2d(F.pad(f, (r, r, 0, 0), mode="replicate"), k.view(3, 1, 1, -1), groups=3)
-            hidden = F.conv2d(F.pad(hidden, (0, 0, r, r), mode="replicate"), k.view(3, 1, -1, 1), groups=3)
+            hidden = gaussian_blur(f, sigma)
             if how == "blur_invert":
                 hidden = 1.0 - hidden
         out[i:i + CHUNK] = torch.lerp(f, hidden, m).movedim(1, -1).to(out.device, out.dtype)
+    return out
+
+
+def gaussian_blur(f, sigma):
+    """[n, 3, h, w] through an exact separable Gaussian of `sigma` pixels; the
+    edges are extended rather than darkened."""
+    r = max(1, math.ceil(3 * sigma))
+    k = torch.exp(-0.5 * (torch.arange(-r, r + 1, device=f.device, dtype=torch.float32) / sigma) ** 2)
+    k = (k / k.sum()).repeat(3, 1, 1, 1)
+    f = F.conv2d(F.pad(f, (r, r, 0, 0), mode="replicate"), k.view(3, 1, 1, -1), groups=3)
+    return F.conv2d(F.pad(f, (0, 0, r, r), mode="replicate"), k.view(3, 1, -1, 1), groups=3)
+
+
+def blur_outside(frames, keep, radius, grow, edge):
+    """`frames` [n, h, w, 3] with everything but the subject blurred by a
+    Gaussian of `radius` pixels, for a RefMod picture or clip before it's
+    encoded. `keep` [n or 1, h, w] is the subject at the frames' size; it is
+    widened by `grow` pixels so hair and edges stay sharp, and its edge
+    softened over `edge` pixels so the blur fades in. Returns new frames."""
+    n = frames.shape[0]
+    dev = mm.get_torch_device()
+    out = torch.empty_like(frames)
+    for i in range(0, n, CHUNK):
+        m = (keep[i:i + CHUNK] if keep.shape[0] > 1 else keep).to(dev, torch.float32)[:, None]
+        if grow > 0:
+            m = _separable(F.max_pool2d, m, grow)
+        if edge > 0:
+            m = _separable(_box, m, edge)
+        f = frames[i:i + CHUNK].to(dev, torch.float32).movedim(-1, 1)
+        out[i:i + CHUNK] = torch.lerp(gaussian_blur(f, radius), f, m.clamp(0, 1)).movedim(1, -1).to(out.device, out.dtype)
     return out
 
 
