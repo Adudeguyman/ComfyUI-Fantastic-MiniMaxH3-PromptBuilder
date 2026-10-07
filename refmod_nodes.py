@@ -25,7 +25,7 @@ import comfy.model_management as mm
 
 from .refmod_core import (check_bundle, _blur_latent, decode_for_encoder, pack_frames, unpack_frames,
                           stored_record, soften)
-from .refmods import KIND_LABEL, PAIR_SUFFIX, read_meta
+from .refmods import KIND_LABEL, PAIR_SUFFIX, read_meta, refmod_label
 from . import latent_cache
 from .video_edit import bundle_edit, hide_area, shape, spec_mask, usable_frames
 
@@ -45,13 +45,13 @@ def _budget(rows, limit):
     return total
 
 
-def media_refs(references, vae, audio_vae, ref_image_size, width, height, length, counters):
+def media_refs(references, vae, audio_vae, ref_image_size, width, height, length):
     """Loader media as the encoder's items and the DiT's reference blocks,
     prepared exactly as core's MiniMax H3 Reference to Video prepares its own
     inputs (its helpers do the sizing and the audio encode). The bundle is a
     Media Loader's / Prompt Builder's: pictures, videos, index-paired
-    video_audios, standalone audios. Labels continue `counters`, one per
-    kind, in that node's order: a video's soundtrack is labelled before it."""
+    video_audios, standalone audios, in that node's order: a video's
+    soundtrack comes just before it, as reference_lines labels them."""
     try:
         from comfy_extras.nodes_minimax_h3 import (_resize, _encode_ref_audio, adapt_canvas,
                                                    temporal_shape, CANVAS_MULTIPLE, FPS,
@@ -61,7 +61,7 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
     if not isinstance(references, dict):
         raise ValueError("'references' is not a Media Loader bundle.")
     frame_count, _t, _a = temporal_shape(length)
-    items, blocks, mapping = [], [], []
+    items, blocks = [], []
     tokens_of = lambda b: int(b.get("latent_t", 1)) * ((b["latent_h"] + 1) // 2) * ((b["latent_w"] + 1) // 2)
     seq = lambda key: [v for v in (references.get(key) or []) if v is not None] if key != "video_audios" else list(references.get(key) or [])
 
@@ -74,8 +74,6 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
         tw = max(CANVAS_MULTIPLE, round(w * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)
         th = max(CANVAS_MULTIPLE, round(h * scale / CANVAS_MULTIPLE) * CANVAS_MULTIPLE)
         resized = _resize(img[:1], tw, th, "disabled")
-        counters["image"] += 1
-        mapping.append(f"<Picture {counters['image']}> = picture {n} (media)")
         items.append({"type": "image", "data": resized})
         if vae is not None:
             t0 = time.perf_counter()
@@ -124,11 +122,7 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
             frames = hide_area(frames, obj, box, source_shape[2], source_shape[1], bool(edit.get("invert")), hide,
                                float(edit.get("blur") or 24.0))
         if soundtrack is not None:
-            counters["audio"] += 1
-            mapping.append(f"<Audio {counters['audio']}> = soundtrack of video {n} (media)")
             items.append({"type": "audio"})
-        counters["video"] += 1
-        mapping.append(f"<Video {counters['video']}> = video {n} (media)")
         sample_idx = list(range(0, frames.shape[0], FPS // 2))
         items.append({"type": "video", "data": frames[sample_idx],
                       "timestamps": [i / 2.0 for i in range(len(sample_idx))]})
@@ -192,14 +186,48 @@ def media_refs(references, vae, audio_vae, ref_image_size, width, height, length
                   f"{tokens_of(blocks[-1])} reference tokens to every sampling step. Trim it, or turn on "
                   "crop to mask in its mask settings to cite only the area around the mask.")
 
-    for n, audio in enumerate(seq("audios"), 1):
-        counters["audio"] += 1
-        mapping.append(f"<Audio {counters['audio']}> = audio {n} (media)")
+    for audio in seq("audios"):
         items.append({"type": "audio"})
         if audio_vae is not None:
             audio_latent, ref_audio_t = _encode_ref_audio(audio_vae, audio)
             blocks.append({"kind": "audio", "ref_audio_t": ref_audio_t, "audio_latent": audio_latent})
-    return items, blocks, mapping
+    return items, blocks
+
+
+def reference_lines(references, active, captions=None):
+    """reference_map's lines from the bundles alone: the media in the order
+    media_refs presents them (a clip's soundtrack just before it), then the
+    RefMods in bundle order, numbered on per kind. `active` holds the
+    (mod, strength) pairs that send something; `captions` maps id(mod) to
+    what the Text Encode wrote at that RefMod's label."""
+    counters = {"image": 0, "video": 0, "audio": 0}
+    lines = []
+
+    def add(kind, what):
+        counters[kind] += 1
+        lines.append(f"<{KIND_LABEL[kind]} {counters[kind]}> = {what}")
+
+    if references is not None:
+        for n, _ in enumerate([p for p in references.get("pictures") or [] if p is not None], 1):
+            add("image", f"picture {n} (media)")
+        tracks = list(references.get("video_audios") or [])
+        for n, frames in enumerate(references.get("videos") or [], 1):
+            if frames is None:
+                continue
+            if n - 1 < len(tracks) and tracks[n - 1] is not None:
+                add("audio", f"soundtrack of video {n} (media)")
+            add("video", f"video {n} (media)")
+        for n, _ in enumerate([a for a in references.get("audios") or [] if a is not None], 1):
+            add("audio", f"audio {n} (media)")
+    for mod, _strength in active:
+        if mod.kind not in counters:
+            raise ValueError(f"Reference '{mod.name}' has kind '{mod.kind}', which can't be labelled "
+                             "(expected image, video or audio).")
+        caption = (captions or {}).get(id(mod), "")
+        add(mod.kind, refmod_label(mod) + (f" \u00b7 at label: {caption}" if caption else ""))
+    if references is not None and references.get("edit") is not None:
+        lines.append(f"Editing {references['edit']['name']} (masked area regenerated)")
+    return lines
 
 
 def encoder_view(mod, vae, fps):
@@ -438,12 +466,10 @@ class MiniMaxH3FantasticRefModTextEncode:
                       "outside the mask you'll get the VAE's copy of the footage, not the original pixels. "
                       "Add it between VAE Decode and Create Video.")
 
-        counters = {"image": 0, "video": 0, "audio": 0}
-        items, blocks, mapping = [], [], []
+        items, blocks, captions = [], [], {}
         t_start = time.perf_counter()
         if references is not None:
-            items, blocks, mapping = media_refs(references, vae, audio_vae, ref_image_size,
-                                                width, height, length, counters)
+            items, blocks = media_refs(references, vae, audio_vae, ref_image_size, width, height, length)
             if items and audio_vae is None and any(i["type"] == "audio" for i in items):
                 print("[MiniMaxH3FantasticRefModTextEncode] media audio has no audio VAE: "
                       "it conditions the text encoder only")
@@ -459,16 +485,15 @@ class MiniMaxH3FantasticRefModTextEncode:
                 continue
             block["refmod"] = True          # lets a step-curve wrapper find it
             kind = block["kind"]
-            if kind not in counters:
+            if kind not in KIND_LABEL:
                 raise ValueError(f"Reference '{mod.name}' has kind '{kind}', which this "
                                  "node cannot label (expected image, video or audio).")
-            counters[kind] += 1
             item = {"type": kind}
             caption = label_caption(mod) if kind == "audio" and voice_description_at_label and native else ""
             if caption:
                 item["caption"] = caption
+                captions[id(mod)] = caption
                 voiced += 1
-            mapping.append(f"<{KIND_LABEL[kind]} {counters[kind]}> = {mod.name}" + (f" \u00b7 at label: {caption}" if caption else ""))
             if kind != "audio":
                 first = id(mod) not in shown
                 if first:
@@ -495,7 +520,7 @@ class MiniMaxH3FantasticRefModTextEncode:
                     item["timestamps"] = times
                     what = f"{frames.shape[0]} frame{'s' if frames.shape[0] != 1 else ''}"
                 if first:
-                    print(f"[MiniMaxH3FantasticRefModTextEncode] {mod.name} for the encoder: {what}, {how} "
+                    print(f"[MiniMaxH3FantasticRefModTextEncode] {refmod_label(mod)} for the encoder: {what}, {how} "
                           f"({time.perf_counter() - t0:.1f}s)")
             items.append(item)
             blocks.append(block)
@@ -528,9 +553,7 @@ class MiniMaxH3FantasticRefModTextEncode:
                 metadata["minimax_refs"] = list(metadata.get("minimax_refs", [])) + blocks
             out.append([embedding, metadata])
         latent = edit[0] if edit is not None else _empty_av_latent(width, height, length)[0]
-        if edit is not None:
-            mapping.append(f"Editing {references['edit']['name']} (masked area regenerated)")
-        return out, "\n".join(mapping) or "No references.", latent
+        return out, "\n".join(reference_lines(references, active, captions)) or "No references.", latent
 
 
 class MiniMaxH3FantasticRefModApply:
@@ -578,11 +601,37 @@ class MiniMaxH3FantasticRefModApply:
         return (out,)
 
 
+class MiniMaxH3FantasticReferenceMap:
+    DESCRIPTION = ("The Text Encode's reference_map without the encode: every reference's label in the order the "
+                   "model reads them, the media first and the RefMods numbered on from them. Wire it the same "
+                   "references and mods as the Text Encode. It shows the map as you edit the graph, with a Copy "
+                   "button for pasting it into an LLM, and outputs it for an LLM node writing the prompt.")
+    CATEGORY = CATEGORY
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("reference_map",)
+    FUNCTION = "reference_map"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"optional": {
+            "mods": ("H3_REF_MODS", {"tooltip": "The RefMod bundle the Text Encode gets."}),
+            "references": ("H3_REFS", {"tooltip": "The Media Loader bundle the Text Encode gets."}),
+        }}
+
+    def reference_map(self, mods=None, references=None):
+        if references is not None and not isinstance(references, dict):
+            raise ValueError("'references' is not a Media Loader bundle.")
+        active = [(m, s) for m, s in check_bundle(mods, "Reference Map") if s > 0]
+        return ("\n".join(reference_lines(references, active)) or "No references.",)
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3FantasticRefModTextEncode": MiniMaxH3FantasticRefModTextEncode,
     "MiniMaxH3FantasticRefModApply": MiniMaxH3FantasticRefModApply,
+    "MiniMaxH3FantasticReferenceMap": MiniMaxH3FantasticReferenceMap,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3FantasticRefModTextEncode": "Fantastic H3 RefMod Text Encode",
     "MiniMaxH3FantasticRefModApply": "Fantastic H3 RefMod Apply",
+    "MiniMaxH3FantasticReferenceMap": "Fantastic H3 Reference Map",
 }

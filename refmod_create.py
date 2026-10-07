@@ -28,7 +28,7 @@ import comfy.utils
 import comfy.model_management as mm
 
 from . import media_io
-from .object_mask import drop_subject_masks, load_mask
+from .object_mask import drop_subject_masks, subject_mask
 from .refmod_core import H3RefMod, encoder_record
 from .refmods import (search_dirs, valid_rel, sanitize_name, _contained_target, name_taken, clean_subject_name,
                       clean_description, PREVIEW_EXT)
@@ -159,7 +159,10 @@ SUBJECT_KEYS = ("word", "margin", "crop", "blur", "grow", "edge")
 
 def subject_record(spec):
     """What the Create tab did around the subject, as kept in the RefMod's
-    header so the library can show it and an edit can start from it."""
+    header so the library can show it and an edit can start from it: Batch
+    Masking's settings, which a picture with settings of its own sends
+    alongside them."""
+    spec = spec.get("batch") or spec
     out = {}
     for key in SUBJECT_KEYS:
         v = spec.get(key)
@@ -174,18 +177,18 @@ def subject_record(spec):
 
 def blur_subject(src, item, canvas):
     """A picture or clip already fitted for encoding, with its background
-    blurred around the subject the Create tab found in it. The subject mask
+    blurred around the subject the Create tab masked in it. The subject mask
     is framed the way the source was (turn, mirror, crop, the stack's canvas)
     and the blur, grow and edge are pixels of `src`. Unchanged when the item
     has no subject or no blur."""
     spec = item.get("subject") if isinstance(item, dict) else None
-    if not isinstance(spec, dict) or not spec.get("mask") or not float(spec.get("blur") or 0) > 0:
+    if not isinstance(spec, dict) or not (spec.get("mask") or spec.get("strokes")) or not float(spec.get("blur") or 0) > 0:
         return src
     is_video = item.get("kind") == "video"
     # clips aren't turned when they're sent, so neither are their masks
-    keep = load_mask(spec["mask"], src.shape[0], start=_trim(item)[0] if is_video else None,
-                     mirror=bool(item.get("mirror")), crop=item.get("crop"),
-                     rotate=0 if is_video else item.get("rotate") or 0)
+    keep = subject_mask(spec, src.shape[0], start=_trim(item)[0] if is_video else None,
+                        mirror=bool(item.get("mirror")), crop=item.get("crop"),
+                        rotate=0 if is_video else item.get("rotate") or 0, size=spec.get("size"))
     keep = keep[..., None].expand(-1, -1, -1, 3)
     if canvas:
         keep = _cover(keep, *canvas)

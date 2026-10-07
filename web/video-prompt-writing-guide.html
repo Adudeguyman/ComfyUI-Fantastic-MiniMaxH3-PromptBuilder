@@ -972,7 +972,7 @@ N/A
 <li><strong>📷 Use frame</strong> captures the frame on screen as a new picture reference. <strong>🎵 Use audio</strong> saves the kept range as its own audio reference.</li>
 <li>The <strong>◐ Mask</strong> tab marks part of a clip to regenerate. See <a href="#e-top">Part E</a>.</li>
 </ul>
-<p>Each row on the loader shows the length it sends beside its ✂, like ✂ 10.5s: the kept span once trimmed, the whole clip until then. With unsaved changes, a click outside the editor doesn't close it; ✕ or Esc pressed twice drops them.</p>
+<p>Each row on the loader shows the length it sends beside its ✂, like ✂ 10.5s: the kept span once trimmed, the whole clip until then. Closing with unsaved changes asks first: <strong>Apply</strong>, <strong>Close without applying</strong> or <strong>Keep editing</strong>.</p>
 <table>
 <thead><tr><th>Key</th><th>Does</th></tr></thead>
 <tbody>
@@ -984,7 +984,7 @@ N/A
 <tr><td>M</td><td>Mute or unmute the preview</td></tr>
 <tr><td>A</td><td>Save the kept range as an audio reference</td></tr>
 <tr><td>C</td><td>Capture the current frame (video only)</td></tr>
-<tr><td>esc</td><td>Close without applying (twice with unsaved changes)</td></tr>
+<tr><td>esc</td><td>Close (with unsaved changes it asks first)</td></tr>
 </tbody>
 </table></section>
 <section class="chunk lvl3" id="c-3-3-how-tags-get-their-numbers" data-toc="c-3-3-how-tags-get-their-numbers"><h3 class="head"><span class="num">3.3</span><span class="htext">How Tags Get Their Numbers</span><a class="anchor" href="#c-3-3-how-tags-get-their-numbers" aria-label="Link to this section">#</a></h3><p>H3 numbers references by the order they arrive, not by the slot they're plugged into.</p>
@@ -1093,7 +1093,7 @@ Sent to the model:
 <tr><td><code>stack_pictures</code></td><td>Experimental. How many pictures of a RefMod made from several the text encoder sees: every 4th (the default), up to N (<code>stack_pictures_n</code> sets N, 8 by default), or all. More may help lock in identity and reduce bleeding between RefMods, but cost memory and generation time.</td></tr>
 <tr><td><code>conditioning</code></td><td>To your sampler or guider.</td></tr>
 <tr><td><code>latent</code></td><td>The empty video to sample into, so no separate Empty Latent node is needed.</td></tr>
-<tr><td><code>reference_map</code></td><td>Text listing every label and where it came from. Handy with a preview node.</td></tr>
+<tr><td><code>reference_map</code></td><td>Text listing every label and where it came from. Handy with a preview node. <strong>Fantastic H3 Reference Map</strong> gives the same text without encoding. It shows it as you edit the graph, before anything is queued, with <strong>⧉ Copy</strong> for pasting it into an LLM, and outputs it for an LLM node writing the prompt.</td></tr>
 </tbody>
 </table>
 <p>Below its settings, the node lists its references in the order the model reads them: each label and the file or RefMod it stands for, media first and then RefMods. It updates as you change the graph, so you can check the order without queueing a run. Click the heading to fold it away. <strong>▦ Thumbnails…</strong> on the heading shows every reference as a small preview in the same order, each RefMod with its tags and tokens.</p>
@@ -1111,16 +1111,24 @@ Sent to the model:
 <ul>
 <li>Put your best-framed photo at the top. Drag rows to reorder.</li>
 <li>Each preview shows what will be cut off to fit.</li>
-<li><strong>Crop to fit…</strong> lets you choose which part is kept. The box is locked to the right aspect ratio.</li>
+<li><strong>Crop and mask…</strong> lets you choose which part is kept. The crop box is locked to the right aspect ratio.</li>
 </ul></section>
 <section class="chunk lvl3" id="d-3-4-crop-to-the-subject" data-toc="d-3-4-crop-to-the-subject"><h3 class="head"><span class="num">3.4</span><span class="htext">Crop to the Subject</span><a class="anchor" href="#d-3-4-crop-to-the-subject" aria-label="Link to this section">#</a></h3><p><strong>Batch Masking</strong> in the settings finds who or what the RefMod is of in every picture and clip, using SAM 3.1. It needs <code>sam3.1_multiplex_fp16.safetensors</code> in <code>models/checkpoints</code>, the same file <strong>Mask for editing</strong> uses. Nothing is downloaded for you.</p>
 <ul>
-<li>Type what to mask, like <code>person</code>, and click <strong>Find and Mask All</strong>. For the identity and pose/motion concepts, the box starts as <code>person</code>. Each picture keeps its largest match; tick <strong>Keep every match</strong> for a RefMod of more than one person.</li>
+<li>Type what to mask, like <code>person</code>, and click <strong>Find and Mask All</strong>. For the identity and pose/motion concepts, the box starts as <code>person</code>. Each picture keeps its largest match; tick <strong>Keep every match</strong> for a RefMod of more than one person. A picture with its own word uses that, and pictures you brushed are left alone.</li>
 <li><strong>Crop to subject</strong> crops each picture and clip around what was found, with room around it set by <strong>Margin</strong>. In a stack the crop takes the first photo's shape and only grows to fit it. A crop you move by hand stays as you left it; <strong>Back to auto</strong> on its row hands it back.</li>
 <li><strong>Blur background</strong> blurs everything but the subject before it's encoded. <strong>Blur</strong> sets how strong it is, <strong>Grow</strong> widens the subject first so hair and edges stay sharp, and <strong>Edge</strong> softens the border. The blur doesn't change the token count.</li>
-<li><strong>Crop…</strong> on a row opens the editor with the subject drawn over the picture. <strong>Mask | Result</strong> shows what SAM found or the blurred result. <strong>◉ Dots</strong> fixes the subject: left-click adds, right-click takes away, then <strong>Find</strong>. <strong>‹ ›</strong>, <code>,</code> and <code>.</code>, or PgUp and PgDn step through every source.</li>
 </ul>
-<p>Rows flag a <strong>small crop</strong> (under 60% of the resolution), a <strong>subject cut off</strong> by the stack's shape, <strong>no subject found</strong> (kept whole, not blurred), and masks to <strong>find again</strong>. The masks are temporary and are deleted once the RefMod is made. The RefMod's card shows <strong>bg blurred</strong>, and editing it later starts from the same settings.</p></section>
+<p><strong>Crop and mask…</strong> on a row (<strong>Trim, crop and mask…</strong> on a clip) opens the editor with the mask drawn over the picture. <strong>‹ ›</strong>, <code>,</code> and <code>.</code>, or PgUp and PgDn step through every source. Its masking bar works on that picture alone:</p>
+<ul>
+<li><strong>What to mask</strong>: left empty, it uses Batch Masking's word. Type in it to give this picture its own; Enter runs Auto mask.</li>
+<li><strong>▶ Auto mask</strong> masks the picture with SAM from the word and any dots. <strong>◉ Dots</strong> steers it: left-click what to mask, right-click what to leave out. It starts fresh: brush strokes on the picture are dropped.</li>
+<li><strong>✎ Brush</strong> paints the mask by hand: <strong>Paint</strong> adds, <strong>Erase</strong> takes away, <strong>Size</strong> sets the brush. Ctrl+Z undoes a stroke and <strong>Clear brush</strong> removes them all. On a clip, a stroke covers every frame. It works without Auto mask too.</li>
+<li><strong>Mask | Result</strong> switches between the mask and the blurred result.</li>
+<li>Under them are the picture's own settings. Each follows Batch Masking until you change it here; a changed one is marked, and <strong>Use batch settings</strong> hands them all back.</li>
+</ul>
+<p><strong>Apply</strong> or <strong>‹ ›</strong> keeps what you did in the window. Closing it with unsaved changes asks first.</p>
+<p>Rows flag a <strong>small crop</strong> (under 60% of the resolution), a <strong>subject cut off</strong> by the stack's shape, <strong>no subject found</strong> (kept whole, not blurred), <strong>nothing left masked</strong> after the brush, and masks to redo with <strong>Auto mask</strong>. The masks are temporary and are deleted once the RefMod is made. The RefMod's card shows <strong>bg blurred</strong>, and editing it later starts from Batch Masking's settings.</p></section>
 <section class="chunk lvl3" id="d-3-5-clips" data-toc="d-3-5-clips"><h3 class="head"><span class="num">3.5</span><span class="htext">Clips</span><a class="anchor" href="#d-3-5-clips" aria-label="Link to this section">#</a></h3><p>A clip becomes a short run of stored frames, so the model can read a motion or a look in movement.</p>
 <ul>
 <li><strong>Trim first.</strong> Only the start of the clip is used, so trim it to the moment you want.</li>
@@ -1165,7 +1173,7 @@ Sent to the model:
 <li><strong>Add photos or clips</strong>: drop them in. They're fitted to the RefMod's existing resolution and aspect ratio.</li>
 <li><strong>Replace the voice</strong>: drop in a new audio file. <strong>Remove it</strong>: untick the stored voice row.</li>
 <li><strong>Name and describe the subject</strong>: fill in or clear <strong>Subject name</strong>, <strong>Appearance</strong>, <strong>Retained attributes</strong> and <strong>Voice</strong> in the settings. If that's all you change, only the file's header is rewritten.</li>
-<li><strong>Blur the background of stored frames</strong> (Full RefMods only): click <strong>Find and Mask All</strong> in Batch Masking, and the stored frames are blurred when you save. <strong>Background kept</strong> sets how much stays; <strong>Subject…</strong> on a stored frame decodes it so you can check it first.</li>
+<li><strong>Blur the background of stored frames</strong> (Full RefMods only): click <strong>Find and Mask All</strong> in Batch Masking, and the stored frames are blurred when you save. <strong>Background kept</strong> sets how much stays. <strong>Mask…</strong> on a stored frame opens it in the same window, with Auto mask, the brush, and Background kept and Grow for that frame alone; <strong>Result</strong> decodes it so you can check it first.</li>
 </ul>
 <p>Editing never re-encodes what's already in a RefMod. Frames you keep are copied exactly, unless you blur their background, and only what you add gets encoded.</p>
 <blockquote><p><strong>RefMods made from a clip:</strong> a clip's frames were encoded together and are marked <em>part of a clip</em>. Keep them together and in order. Removing or reordering them breaks up the motion, and the editor warns you. To change a clip, re-trim it and create the RefMod again. Adding or removing whole photos is always safe.</p></blockquote></section>
@@ -1256,7 +1264,7 @@ detailed_description:
 <section class="chunk lvl3" id="d-6-9-drafts" data-toc="d-6-9-drafts"><h3 class="head"><span class="num">6.9</span><span class="htext">Drafts</span><a class="anchor" href="#d-6-9-drafts" aria-label="Link to this section">#</a></h3><p>In Draft mode, <strong>◈ RefMods</strong> edits the draft's own copy of the stack. The live stack isn't touched until you <strong>Commit to Live</strong>, and the draft banner says whether the draft is following the stack or has its own RefMods.</p></section>
 <section class="chunk lvl2" id="d-7-tips-and-fixes" data-toc="d-7-tips-and-fixes"><h2 class="head"><span class="num">7</span><span class="htext">Tips and Fixes</span><a class="anchor" href="#d-7-tips-and-fixes" aria-label="Link to this section">#</a></h2><p><strong>Generation got really slow, or memory spikes.</strong> Every reference adds work on every step. The usual causes are a long video left in the Media Loader, high weights, or several Full RefMods at once. Try Compressed, lower the weights, or trim clips to the moment you need.</p>
 <p><strong>The model seems to ignore a RefMod.</strong> Check that you're using a ref2va or hybrid model, and that the prompt cites the label. The editor warns you if it doesn't. A weight a little above 1 can help.</p>
-<p><strong>Photos came out cropped strangely.</strong> They all follow the first photo's resolution and aspect ratio. Put your best-framed photo first, or use <strong>Crop to fit…</strong> on the others.</p>
+<p><strong>Photos came out cropped strangely.</strong> They all follow the first photo's resolution and aspect ratio. Put your best-framed photo first, or use <strong>Crop and mask…</strong> on the others.</p>
 <p><strong>The editor shows "No RefMods loaded".</strong> The stack is connected but empty, or every row is switched off.</p>
 <p><strong>The chips say something isn't reaching the Text Encode.</strong> Click <strong>+ RefMods</strong> or <strong>+ Media loader</strong> on the builder again to finish the connection.</p>
 <p><strong>A voice sounds wrong or empty.</strong> Open <strong>Show what's stored</strong> and listen. If it's silent or very short, edit the RefMod and drop the recording in again, and check that Voice seconds isn't set very low.</p>

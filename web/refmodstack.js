@@ -699,6 +699,8 @@ const CSS = `
 .mmr-subjctl .mmr-subjnum{width:calc(48px * var(--mmh3-fs, 1));flex:0 0 auto;background:#12151b;border:1px solid #3a4252;
   border-radius:4px;color:#d7dbe2;padding:1px 4px;font:inherit;}
 .mml-subjbar .mmr-subjctl{flex:0 1 220px;color:#c9cfda;}
+.mml-subjbar .mmr-inline{color:#c9cfda;}
+.mmr-subjctl.mmr-own > span:first-child,.mml-subjbar .mmr-inline.mmr-own{color:#e0b45a;}
 .mmr-srcacts .mmr-btn{padding:2px 9px;}
 .mmr-src .mmr-grip{align-self:center;}
 .mmr-src.dragging{outline:1px dashed #4d6ea6;}
@@ -3070,16 +3072,15 @@ export function openLibrary(panel, opts = {}) {
     paintJobs();
   }
 
-  /** Crop, turn or trim a source here without touching its Media Loader.
-   *  In a stack, the other photos open locked to the first one's shape, so
-   *  you choose which part is kept instead of taking the centre. */
+  /** Crop, turn, trim or mask a source here without touching its Media
+   *  Loader. In a stack, the other photos open locked to the first one's
+   *  shape, so you choose which part is kept instead of taking the centre. */
   function cropButton(x, setsFrame, target) {
     const lock = target && !setsFrame && x.use ? (target.lock || (target.first && effDims(target.first))) : null;
-    const label = lock ? "Crop to fit…" : (x.rec.kind === "video" ? "Crop / trim…" : "Crop…");
     return el("button", { class: "mmr-btn", title: lock
-        ? "Choose which part of this photo is kept. The box is locked to the first photo's shape."
-        : "Crop, rotate or mirror this source for the RefMod (the Media Loader is left as it is).",
-      onclick: () => openSourceEditor(x) }, label);
+        ? "Choose which part of this photo is kept, and mask it. The crop box is locked to the first photo's shape."
+        : "Crop, rotate, mirror or mask this source for the RefMod (the Media Loader is left as it is).",
+      onclick: () => openSourceEditor(x) }, x.rec.kind === "video" ? "Trim, crop and mask…" : "Crop and mask…");
   }
 
   /** Every source the editor can step through, in list order: pictures and
@@ -3087,8 +3088,10 @@ export function openLibrary(panel, opts = {}) {
   const editable = (x) => ((isLook(x) || x.rec.kind === "audio") && !isStored(x)) || (x.stored != null && subjectable(x));
   const sameRect = (a, b) => !!a && !!b && ["x", "y", "w", "h"].every((k) => Math.abs(a[k] - b[k]) < 1e-3);
 
-  /** The crop and trim editor for one source, with its subject when the
-   *  Batch Masking applies to it, and ‹ › to the next. */
+  /** The crop, trim and mask editor for one source, with its masking when
+   *  Batch Masking applies to it, and ‹ › to the next. Settings changed in
+   *  it become the source's own, and like the brush they reach the source
+   *  on Apply or ‹ ›; Auto mask keeps the word it ran with straight away. */
   function openSourceEditor(x) {
     const list = sources.filter(editable), i = list.indexOf(x);
     const target = stackTarget(), setsFrame = !editing && x === used().find(isLook);
@@ -3100,24 +3103,58 @@ export function openLibrary(panel, opts = {}) {
     hidePeek();
     const before = JSON.stringify([x.rec.rotate || 0, !!x.rec.mirror]);
     let modal = null;
+    // this window's settings, the brush's box, and where the crop was last put while it follows the subject
+    const pend = { own: { ...(x.own || {}) }, box: undefined, autoRect: x.autoCrop === "auto" ? x.autoRect : null };
+    const unturned = () => (modal.rotate || 0) === (x.rec.rotate || 0) && !!modal.mirror === !!x.rec.mirror;
+    /** While the crop follows the subject, move it with this window's settings and brush. */
+    const refit = () => {
+      if (!modal || x.autoCrop !== "auto" || !sameRect(modal.crop, pend.autoRect) || !unturned()) return;
+      const t = stackTarget(), aspect = editing ? editing.px[0] / editing.px[1] : (t && x !== t.first ? t.aspect : 0);
+      const r = valIn(pend.own, "subject_crop")
+        ? autoCropRect(x, aspect, pend.own, pend.box !== undefined ? pend.box : maskBox(x)) : null;
+      if (!r) return;
+      modal.crop = { ...r.rect };
+      pend.autoRect = r.rect;
+      modal.syncCrop();
+    };
     const subject = subjectable(x) ? {
       subject: () => x.subj || null,
       marks: x.marks || [],
-      find: async (marks) => {
+      word: x.word || "",
+      batchWord: wordNow,
+      find: async (marks, word) => {
         // the dots are on the picture as the editor shows it now, applied or not
-        Object.assign(x, { marks, markTurn: [modal.rotate || 0, !!modal.mirror] });
-        await findSubjects([x]);
-        if (x.autoCrop === "auto" && (modal.rotate || 0) === (x.rec.rotate || 0) && !!modal.mirror === !!x.rec.mirror) {
+        const own = { ...(x.own || {}) };
+        if ("subject_keep_all" in pend.own) own.subject_keep_all = pend.own.subject_keep_all;
+        else delete own.subject_keep_all;
+        Object.assign(x, { marks, markTurn: [modal.rotate || 0, !!modal.mirror], word: word || undefined, own });
+        if (!(await findSubjects([x]))) return false;
+        Object.assign(x, { brush: [], brushBox: undefined });       // a fresh mask drops the brush
+        pend.box = undefined;
+        if (x.autoCrop === "auto" && unturned()) {
           modal.crop = { ...x.rec.crop };
+          pend.autoRect = x.autoRect;
+          refit();
           modal.syncCrop();
         }
+        return true;
       },
-      look: () => ({ blur: subjectCfg().subject_blur_on ? subjectCfg().subject_blur : 0, grow: subjGrow(), edge: subjEdge() }),
+      strokes: x.brush || [],
+      look: () => ({ blur: valIn(pend.own, "subject_blur_on") ? valIn(pend.own, "subject_blur") : 0,
+        grow: growIn(pend.own), edge: edgeIn(pend.own) }),
       encScale: () => encScaleOf(x),
       flags: () => subjectFlags(x, setsFrame, target),
-      controls: subjControls(x.stored != null ? "stored" : "editor",
-        (done) => { modal?.subjectLayer?.changed(); if (done) schedulePaint(); }),
-      decode: x.stored != null ? () => decodeStored(x) : undefined,
+      controls: () => subjControls(x.stored != null ? "stored" : "editor",
+        (done) => { modal?.subjectLayer?.changed(done); refit(); }, pend.own),
+      own: () => Object.keys(pend.own).length,
+      reset: () => { for (const k of Object.keys(pend.own)) delete pend.own[k]; refit(); },
+      dirty: () => !sameOwn(pend.own, x.own || {}),
+      brushed: (box) => { pend.box = box; refit(); },
+      commit: ({ strokes, word, box, size }) => {
+        Object.assign(x, { own: { ...pend.own }, word: word || undefined });
+        if (box !== undefined) Object.assign(x, { brush: strokes, brushBox: box, brushSize: size });
+      },
+      decode: x.stored != null ? (strokes) => decodeStored(x, pend.own, strokes) : undefined,
     } : undefined;
     modal = openCropEditor(x.rec, {
       aspect: lock ? lock[0] / lock[1] : undefined,
@@ -3130,7 +3167,7 @@ export function openLibrary(panel, opts = {}) {
       onApply: () => {
         // after a turn or mirror an auto crop is worked out again; moved by hand, it's yours
         const turned = JSON.stringify([x.rec.rotate || 0, !!x.rec.mirror]) !== before;
-        if (x.autoCrop === "auto" && !turned && !sameRect(x.rec.crop, x.autoRect)) x.autoCrop = "adjusted";
+        if (x.autoCrop === "auto" && !turned && !sameRect(x.rec.crop, pend.autoRect ?? x.autoRect)) x.autoCrop = "adjusted";
         x.dim = null; x.probing = false; paintCreate();
       },
     });
@@ -3144,17 +3181,31 @@ export function openLibrary(panel, opts = {}) {
    *      them then. */
   const subjectCfg = () => (editing ? editing.subjCfg : st);
   const subjRes = () => (editing?.visual ? Math.min(...editing.px) : st.ref_resolution);
-  const subjGrow = () => Math.min(64, Math.max(0, subjectCfg().subject_grow ?? Math.round(16 * subjRes() / 768)));
-  const subjEdge = () => Math.min(64, Math.max(0, subjectCfg().subject_edge ?? Math.round(12 * subjRes() / 768)));
+  /** A setting from `own` (a source's own settings) where it's there, Batch Masking's otherwise. */
+  const valIn = (own, key) => (own && key in own ? own[key] : subjectCfg()[key]);
+  const cfgOf = (x, key) => valIn(x.own, key);
+  const growIn = (own) => Math.min(64, Math.max(0, valIn(own, "subject_grow") ?? Math.round(16 * subjRes() / 768)));
+  const edgeIn = (own) => Math.min(64, Math.max(0, valIn(own, "subject_edge") ?? Math.round(12 * subjRes() / 768)));
+  const subjGrow = () => growIn(null), subjEdge = () => edgeIn(null);
+  const sameOwn = (a, b) => Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((k) => a[k] === b[k]);
   let subjectWord = null;              // Batch Masking's word box; null follows the concept
   const wordNow = () => subjectWord
     ?? (["identity", "pose_motion"].includes(editing ? editing.it.concept : st.concept_type) ? "person" : "");
+  /** What a source is masked for: its own word, or Batch Masking's. */
+  const wordOf = (x) => (x.word || wordNow()).trim();
+  /** How many settings a source has of its own: its word and those changed in its window. */
+  const ownCount = (x) => Object.keys(x.own || {}).length + (x.word ? 1 : 0);
   const fullEdit = () => !!editing && editing.visual?.mode === "encode";
   /** New pictures and clips, and the decoded stored frames of a Full RefMod being edited. */
   const subjectable = (x) => x.use && ((isLook(x) && !isStored(x)) || (x.stored != null && fullEdit() && !!x.rec.file));
   /** A clip's mask covers the frames Create took when it was found. */
   const clipKey = (x) => JSON.stringify([x.rec.trim || null, st.latent_frames]);
   const subjStale = (x) => !!x.subj && x.rec.kind === "video" && x.subjAt !== clipKey(x);
+  /** The box around what's masked, the file's way round: SAM's, or with the
+   *  brush, the box Apply worked out. Null when nothing is masked, or SAM's
+   *  mask no longer covers the clip's frames. */
+  const maskBox = (x) => (x.subj?.found && subjStale(x) ? null
+    : x.brush?.length ? x.brushBox || null : x.subj?.found ? x.subj.bbox : null);
   let samList = null, subjectKept = 0;
 
   async function samChoice() {
@@ -3167,31 +3218,38 @@ export function openLibrary(panel, opts = {}) {
   /** The turn and mirror a source's dots were placed on. Stored frames are never turned. */
   const turnOf = (x) => (isStored(x) ? [0, false] : x.markTurn || [x.rec.rotate || 0, !!x.rec.mirror]);
 
-  /** SAM on these sources in one queue job: the pictures together, each clip
-   *  over the frames Create takes from it. Dots from the editor pick the
-   *  subject; the word finds it, the largest match unless Keep every match. */
+  /** SAM on these sources in one queue job: pictures that share a word and
+   *  Keep every match together, each clip over the frames Create takes from
+   *  it. Dots from the editor pick the subject; the word finds it, the
+   *  largest match unless Keep every match. True once it has run. */
   async function findSubjects(list) {
-    const word = wordNow().trim(), ckpt = await samChoice();
-    if (!ckpt || !/sam3/i.test(ckpt)) { toast("Masking needs the SAM 3.1 checkpoint in models/checkpoints — see Batch Masking", 6000); return; }
+    const ckpt = await samChoice();
+    if (!ckpt || !/sam3/i.test(ckpt)) { toast("Masking needs the SAM 3.1 checkpoint in models/checkpoints — see Batch Masking", 6000); return false; }
     // with no word, only sources with dots can be found
-    if (!word) list = list.filter((x) => (x.marks || []).some((m) => m.positive.length));
-    if (!list.length) { toast("Type what to mask first, like person", 4000); return; }
+    list = list.filter((x) => wordOf(x) || (x.marks || []).some((m) => m.positive.length));
+    if (!list.length) { toast("Type what to mask first, like person", 4000); return false; }
     const stills = list.filter((x) => x.rec.kind === "picture" && x.rec.file), clips = list.filter((x) => x.rec.kind === "video");
-    const base = { model: ["1", 0], clip: ["1", 1], text: word, threshold: 0.5,
-      max_objects: subjectCfg().subject_keep_all ? 4 : 1, subject: true };
+    const base = { model: ["1", 0], clip: ["1", 1], threshold: 0.5, subject: true };
+    const most = (x) => (cfgOf(x, "subject_keep_all") ? 4 : 1);
     const prompt = { 1: { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: ckpt } } }, targets = {};
     let id = 2;
-    if (stills.length) {
-      prompt[id] = { class_type: MASK_NODE, inputs: { ...base, video: "", points: "", start: 0, end: 0,
-        pictures: JSON.stringify(stills.map((x) => { const [rotate, mirror] = turnOf(x);
+    const groups = new Map();
+    for (const x of stills) {
+      const key = JSON.stringify([wordOf(x), most(x)]);
+      groups.set(key, [...(groups.get(key) || []), x]);
+    }
+    for (const [key, xs] of groups) {
+      const [text, max_objects] = JSON.parse(key);
+      prompt[id] = { class_type: MASK_NODE, inputs: { ...base, text, max_objects, video: "", points: "", start: 0, end: 0,
+        pictures: JSON.stringify(xs.map((x) => { const [rotate, mirror] = turnOf(x);
           return { file: x.rec.file, rotate, mirror, positive: x.marks?.[0]?.positive || [], negative: x.marks?.[0]?.negative || [] }; })) } };
-      targets[id++] = stills;
+      targets[id++] = xs;
     }
     for (const x of clips) {
       // clips are masked on the file's own frame: dots on a mirrored view are flipped back
       const back = (p) => ({ x: turnOf(x)[1] ? 1 - p.x : p.x, y: p.y });
       const marks = (x.marks || []).filter((m) => m.positive.length);
-      prompt[id] = { class_type: MASK_NODE, inputs: { ...base, video: x.rec.file,
+      prompt[id] = { class_type: MASK_NODE, inputs: { ...base, text: wordOf(x), max_objects: most(x), video: x.rec.file,
         start: Number(x.rec.trim?.start) || 0, end: x.rec.trim?.end != null ? Number(x.rec.trim.end) : 0,
         max_frames: h3Take(Math.min(st.latent_frames, clipFrames(x) || st.latent_frames)),
         points: marks.length ? JSON.stringify({ frames: marks.map((m) => ({ time: m.time,
@@ -3211,8 +3269,9 @@ export function openLibrary(panel, opts = {}) {
         });
       }
       subjectKept = applyAutoCrops();
+      return true;
     } catch (err) {
-      toast(`Find failed: ${err.message}`, 6000);
+      toast(`Masking failed: ${err.message}`, 6000);
       throw err;
     } finally {
       list.forEach((x) => { x.finding = false; });
@@ -3223,14 +3282,13 @@ export function openLibrary(panel, opts = {}) {
   /** The crop around a source's subject: its box enlarged by the margin,
    *  grown (never shrunk) to `aspect` when the stack locks one, slid to stay
    *  inside the picture. `cut` when the locked shape can't hold the subject. */
-  function autoCropRect(x, aspect) {
-    const b = x.subj?.bbox;
+  function autoCropRect(x, aspect, own = x.own, b = maskBox(x)) {
     if (!b || !x.dim) return null;
     const video = x.rec.kind === "video";             // clips aren't turned when they're sent
     const side = x.dim.turned && ((parseInt(x.rec.rotate, 10) || 0) % 180 + 180) % 180 === 90;
     const [W, H] = !video ? turnedDims(x) : side ? [x.dim.h, x.dim.w] : [x.dim.w, x.dim.h];
     const r = turnRect(b, video ? 0 : x.rec.rotate, !!x.rec.mirror);
-    const m = subjectCfg().subject_margin, sw = r.w * W, sh = r.h * H;
+    const m = valIn(own, "subject_margin"), sw = r.w * W, sh = r.h * H;
     const cx = (r.x + r.w / 2) * W, cy = (r.y + r.h / 2) * H;
     let bw = sw * m, bh = sh * m, cut = false;
     if (aspect) {
@@ -3247,15 +3305,14 @@ export function openLibrary(panel, opts = {}) {
 
   /** Crops that follow the subject, worked out again from what's set now:
    *  the first picture's own box sets the stack's shape for the rest. A crop
-   *  you adjusted (or set before Find) is left alone. Returns how many were. */
+   *  you adjusted (or set before masking) is left alone. Returns how many were. */
   function applyAutoCrops() {
-    const c = subjectCfg();
     let kept = 0;
     for (const x of used().filter((y) => isLook(y) && !isStored(y))) {
-      if (x.autoCrop === "adjusted" || (x.autoCrop !== "auto" && x.rec.crop)) { if (x.subj?.found) kept++; continue; }
+      if (x.autoCrop === "adjusted" || (x.autoCrop !== "auto" && x.rec.crop)) { if (maskBox(x)) kept++; continue; }
       const t = stackTarget();
       const aspect = editing ? editing.px[0] / editing.px[1] : (t && x !== t.first ? t.aspect : 0);
-      const r = c.subject_crop && x.subj?.found && !subjStale(x) ? autoCropRect(x, aspect) : null;
+      const r = cfgOf(x, "subject_crop") ? autoCropRect(x, aspect) : null;
       if (r) Object.assign(x, { autoCrop: "auto", autoRect: r.rect, subjCut: r.cut }), x.rec.crop = r.rect;
       else if (x.autoCrop === "auto") { x.rec.crop = null; Object.assign(x, { autoCrop: null, autoRect: null, subjCut: false }); }
     }
@@ -3281,9 +3338,10 @@ export function openLibrary(panel, opts = {}) {
   /** What to know about a source's subject and crop, for its row and the editor. */
   function subjectFlags(x, setsFrame, target) {
     const out = [];
-    if (x.subjGone) out.push("Find again: the subject mask was cleaned up");
-    else if (subjStale(x)) out.push("Find again: the trim or Clip frames changed since its subject was found");
-    else if (x.subj && !x.subj.found) out.push("No subject found: kept whole, not blurred");
+    if (x.subj?.found && x.subjGone) out.push("Auto mask again: the subject mask was cleaned up");
+    else if (x.subj?.found && subjStale(x)) out.push("Auto mask again: the trim or Clip frames changed since it was masked");
+    else if (x.subj && !x.subj.found && !x.brush?.length) out.push("No subject found: kept whole, not blurred");
+    else if (x.brush?.length && !x.brushBox) out.push("Nothing left masked after the brush: kept whole, not blurred");
     if (x.subjCut && x.autoCrop === "auto") out.push("Subject cut off: the locked shape can't fit around it with this margin");
     const d = isLook(x) && !isStored(x) && x.rec.crop ? effDims(x) : null;
     if (d) {
@@ -3298,44 +3356,65 @@ export function openLibrary(panel, opts = {}) {
     return out;
   }
 
-  /** The look sliders: `where` is Batch Masking ("section"), the
-   *  editor for a picture or clip ("editor"), or for a stored frame ("stored"). */
-  function subjControls(where, changed) {
-    const c = subjectCfg(), save = () => { if (!editing) saveSettings(st); };
-    const slider = (label, title, min, max, step, typedMax, get, set, unit) => {
-      const num = el("input", { class: "mmr-num mmr-subjnum", type: "number", min, max: typedMax, step, value: get(),
-        onchange: (e) => { if (e.target.value !== "" && Number.isFinite(+e.target.value)) set(+e.target.value);
-          e.target.value = get(); range.value = Math.min(max, get()); save(); changed(true); } });
-      const range = el("input", { type: "range", min, max, step, value: Math.min(max, get()),
-        oninput: (e) => { set(+e.target.value); num.value = get(); changed(false); },
+  /** The masking settings as controls: `where` is Batch Masking ("section"),
+   *  or the Crop and mask window for a picture or clip ("editor") or a stored
+   *  frame ("stored"). The window's are `own`, the source's: each follows
+   *  Batch Masking until it's changed there, and is marked once it is.
+   *  `changed(done)` follows every move, `done` once a value is set. */
+  function subjControls(where, changed, own = null) {
+    const c = subjectCfg(), save = () => { if (!editing && !own) saveSettings(st); };
+    const get = (key) => valIn(own, key);
+    const put = (key, v) => { (own || c)[key] = v; };
+    const mine = (key) => (own && key in own ? " mmr-own" : "");
+    const tip = (key, title) => (own && key in own ? `${title} Changed for this picture only.` : title);
+    const slider = (key, label, title, min, max, step, typedMax, read, write, unit) => {
+      const num = el("input", { class: "mmr-num mmr-subjnum", type: "number", min, max: typedMax, step, value: read(),
+        onchange: (e) => { if (e.target.value !== "" && Number.isFinite(+e.target.value)) write(+e.target.value);
+          e.target.value = read(); range.value = Math.min(max, read()); save(); changed(true); } });
+      const range = el("input", { type: "range", min, max, step, value: Math.min(max, read()),
+        oninput: (e) => { write(+e.target.value); num.value = read(); changed(false); },
         onchange: () => { save(); changed(true); } });
-      return el("label", { class: "mmr-subjctl", title }, el("span", {}, label), range, num, el("span", { class: "mmr-dim" }, unit));
+      return el("label", { class: "mmr-subjctl" + mine(key), title: tip(key, title) },
+        el("span", {}, label), range, num, el("span", { class: "mmr-dim" }, unit));
     };
+    const check = (key, label, title) => el("label", { class: "mmr-inline" + mine(key), title: tip(key, title) },
+      el("input", { type: "checkbox", checked: !!get(key), onchange: (e) => { put(key, e.target.checked); save(); changed(true); } }),
+      label);
     const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v)));
-    const blur = slider("Blur", "How much the background is blurred: the Gaussian radius, in pixels of the picture as it's " +
-      "encoded. The subject itself stays sharp.", 1, 64, 1, 256, () => c.subject_blur, (v) => { c.subject_blur = clampTo(v, 1, 256); }, "px");
-    const grow = slider("Grow", "Widens the subject before the blur so hair and edges stay sharp, in pixels of the picture " +
-      "as it's encoded. Starts at a size that suits the RefMod's resolution.", 0, 64, 1, 64, subjGrow,
-      (v) => { c.subject_grow = clampTo(v, 0, 64); }, "px");
-    const edge = slider("Edge", "Softens the edge of the subject over this many pixels, so the blur fades in instead of " +
-      "starting at a line. Starts at a size that suits the RefMod's resolution.", 0, 64, 1, 64, subjEdge,
-      (v) => { c.subject_edge = clampTo(v, 0, 64); }, "px");
-    const background = slider("Background kept", "Stored frames: how much of the background outside the subject stays as " +
-      "it was. 0% blurs it fully. It's blended on the stored frame itself, so its edge follows the latent's 16-pixel cells.",
-      0, 100, 5, 100, () => c.subject_background, (v) => { c.subject_background = clampTo(v, 0, 100); }, "%");
-    if (where === "stored") return [background, grow];
-    if (where === "editor") return [blur, grow, edge];
-    const margin = slider("Margin", "How much room the crop keeps around the subject: its box enlarged this many times, " +
-      "then fitted to the stack's shape and kept inside the picture.", 1.25, 3, 0.25, 3, () => c.subject_margin,
-      (v) => { c.subject_margin = Math.min(3, Math.max(1.25, Math.round(v * 4) / 4)); }, "×");
-    return { margin, blur, grow, edge, background };
+    const blur = slider("subject_blur", "Blur", "How much the background is blurred: the Gaussian radius, in pixels of the " +
+      "picture as it's encoded. The subject itself stays sharp.", 1, 64, 1, 256, () => get("subject_blur"),
+      (v) => put("subject_blur", clampTo(v, 1, 256)), "px");
+    const grow = slider("subject_grow", "Grow", "Widens the subject before the blur so hair and edges stay sharp, in pixels " +
+      "of the picture as it's encoded. Starts at a size that suits the RefMod's resolution.", 0, 64, 1, 64, () => growIn(own),
+      (v) => put("subject_grow", clampTo(v, 0, 64)), "px");
+    const edge = slider("subject_edge", "Edge", "Softens the edge of the subject over this many pixels, so the blur fades in " +
+      "instead of starting at a line. Starts at a size that suits the RefMod's resolution.", 0, 64, 1, 64, () => edgeIn(own),
+      (v) => put("subject_edge", clampTo(v, 0, 64)), "px");
+    const background = slider("subject_background", "Background kept", "Stored frames: how much of the background outside " +
+      "the subject stays as it was. 0% blurs it fully. It's blended on the stored frame itself, so its edge follows the " +
+      "latent's 16-pixel cells.", 0, 100, 5, 100, () => get("subject_background"),
+      (v) => put("subject_background", clampTo(v, 0, 100)), "%");
+    const keepAll = check("subject_keep_all", "Keep every match", "Off: the largest match in each picture is the subject. " +
+      "On: every match is, for a RefMod of more than one person.");
+    if (where === "stored") return [background, grow, keepAll];
+    const margin = slider("subject_margin", "Margin", "How much room the crop keeps around the subject: its box enlarged " +
+      "this many times, then fitted to the stack's shape and kept inside the picture.", 1.25, 3, 0.25, 3,
+      () => get("subject_margin"), (v) => put("subject_margin", Math.min(3, Math.max(1.25, Math.round(v * 4) / 4))), "×");
+    const crop = check("subject_crop", "Crop to subject", "Crop each picture and clip to its subject, with room around it. " +
+      "A crop you adjust by hand is kept; Back to auto hands it back.");
+    const blurOn = check("subject_blur_on", "Blur background", "Blur everything but the subject before it's encoded, so " +
+      "props and the background don't bleed into the RefMod. It doesn't change the token count.");
+    if (where === "editor") {
+      return [crop, get("subject_crop") ? margin : null, blurOn, ...(get("subject_blur_on") ? [blur, grow, edge] : []), keepAll];
+    }
+    return { margin, blur, grow, edge, background, crop, blurOn, keepAll };
   }
 
   /** Batch Masking in the settings pane, while there's something it applies to. */
   function subjectSection() {
     const list = used().filter(subjectable);
     if (!list.length) return null;
-    const c = subjectCfg(), save = () => { if (!editing) saveSettings(st); };
+    const c = subjectCfg();
     const finding = list.some((x) => x.finding);
     const ctl = subjControls("section", (done) => { if (done) { applyAutoCrops(); paintCreate(); } });
     const sel = el("select", { class: "mmr-sel", onchange: (e) => { try { localStorage.setItem(SAM_KEY, e.target.value); } catch (err) { /* private mode */ } } });
@@ -3347,70 +3426,82 @@ export function openLibrary(panel, opts = {}) {
         " in models/checkpoints; nothing is downloaded for you.");
     });
     const tried = list.filter((x) => x.subj), found = tried.filter((x) => x.subj.found).length;
+    const fresh = list.filter((x) => !x.brush?.length), brushed = list.length - fresh.length;
+    const own = list.filter((x) => ownCount(x)).length;
     const storedTo = editing && list.some((x) => x.stored != null);
     return el("div", { class: "mmr-subjsec" },
       el("div", { class: "mmr-fh", style: { marginTop: "8px" } }, "Batch Masking"),
       el("input", { class: "mmr-search", value: wordNow(), placeholder: "what to mask, like person",
         "aria-label": "What to mask", oninput: (e) => { subjectWord = e.target.value; } }),
       el("button", { class: "mmr-btn primary mmr-maskall", disabled: finding,
-        title: "Find this in every picture and clip with SAM 3.1 and mask it, all in one queue job",
-        onclick: () => findSubjects(list).catch(() => {}) }, finding ? "Masking…" : "Find and Mask All"),
-      el("label", { class: "mmr-inline", title: "Off: the largest match in each picture is the subject. On: every " +
-          "match is, for a RefMod of more than one person." },
-        el("input", { type: "checkbox", checked: c.subject_keep_all,
-          onchange: (e) => { c.subject_keep_all = e.target.checked; save(); } }), "Keep every match"),
+        title: "Find this in every picture and clip with SAM 3.1 and mask it, all in one queue job. A picture with its " +
+          "own word uses that; pictures you brushed are left alone.",
+        onclick: () => {
+          if (!fresh.length) { toast("Every picture here is brushed: Auto mask in its Crop and mask… window redoes one", 5000); return; }
+          findSubjects(fresh).catch(() => {});
+        } }, finding ? "Masking…" : "Find and Mask All"),
+      ctl.keepAll,
       el("label", { class: "mmr-ilabel", title: "The SAM 3.1 checkpoint masking runs with (from models/checkpoints)" }, "SAM model", sel),
       samNote,
-      el("label", { class: "mmr-inline", title: "Crop each picture and clip to its subject, with room around it. A crop " +
-          "you adjust by hand is kept; Back to auto hands it back." },
-        el("input", { type: "checkbox", checked: c.subject_crop,
-          onchange: (e) => { c.subject_crop = e.target.checked; save(); applyAutoCrops(); paintCreate(); } }), "Crop to subject"),
+      ctl.crop,
       c.subject_crop ? ctl.margin : null,
-      el("label", { class: "mmr-inline", title: "Blur everything but the subject before it's encoded, so props and the " +
-          "background don't bleed into the RefMod. It doesn't change the token count." },
-        el("input", { type: "checkbox", checked: c.subject_blur_on,
-          onchange: (e) => { c.subject_blur_on = e.target.checked; save(); paintCreate(); } }), "Blur background"),
+      ctl.blurOn,
       c.subject_blur_on ? el("div", { class: "mmr-subjctls" }, ctl.blur, ctl.grow, ctl.edge,
         storedTo ? ctl.background : null) : null,
       editing && !fullEdit() && sources.some((x) => x.stored != null) ? el("div", { class: "mmr-dim" },
         "Stored frames of a Compressed RefMod can't have their background blurred: they hold too little detail " +
         "to mask. Pictures you add still can.") : null,
-      el("div", { class: "mmr-dim" }, finding ? "Finding the subject… (in the queue)"
-        : tried.length ? `Found in ${found} of ${tried.length}` +
-          (subjectKept ? ` · kept ${subjectKept} crop${subjectKept === 1 ? "" : "s"} you adjusted` : "")
-        : "Find and Mask All looks for this in every picture and clip, then crops and blurs around it."));
+      el("div", { class: "mmr-dim" }, finding ? "Masking… (in the queue)"
+        : [tried.length ? `Found in ${found} of ${tried.length}`
+            : "Find and Mask All looks for this in every picture and clip, then crops and blurs around it.",
+          subjectKept ? `kept ${subjectKept} crop${subjectKept === 1 ? "" : "s"} you adjusted` : "",
+          brushed ? `${brushed} brushed, left alone` : "",
+          own ? `${own} with settings of ${own === 1 ? "its" : "their"} own` : ""].filter(Boolean).join(" · ")));
   }
 
   /** The Create tab's record of a source's subject, for the Create and Edit
-   *  nodes: its mask and what to do with it. */
+   *  nodes: its mask, its brush and what to do with them. A source with
+   *  settings of its own sends Batch Masking's too, for the RefMod's details. */
   function subjectSpec(x) {
-    const c = subjectCfg();
-    if (!x.subj?.found || x.subjGone || subjStale(x) || isStored(x)) return null;
-    const crop = !!c.subject_crop && x.autoCrop === "auto", blur = c.subject_blur_on ? c.subject_blur : 0;
+    if (isStored(x) || !maskBox(x) || (x.subj?.found && x.subjGone)) return null;
+    const c = subjectCfg(), own = x.own;
+    const crop = !!valIn(own, "subject_crop") && x.autoCrop === "auto";
+    const blur = valIn(own, "subject_blur_on") ? valIn(own, "subject_blur") : 0;
     if (!crop && !blur) return null;
-    return { mask: x.subj.file, word: wordNow().trim(), margin: c.subject_margin, crop, blur, grow: subjGrow(), edge: subjEdge() };
+    const spec = { mask: x.subj?.found ? x.subj.file : null, word: wordOf(x), margin: valIn(own, "subject_margin"),
+      crop, blur, grow: growIn(own), edge: edgeIn(own) };
+    if (x.brush?.length) Object.assign(spec, { strokes: x.brush, size: x.brushSize });
+    if (ownCount(x)) spec.batch = { word: wordNow().trim(), margin: c.subject_margin, crop: !!c.subject_crop,
+      blur: c.subject_blur_on ? c.subject_blur : 0, grow: subjGrow(), edge: subjEdge() };
+    return spec;
   }
 
-  /** The stored frames to blur in edit mode, for the Edit node's stored_blur. */
+  /** A stored frame's mask, brush and settings, as the Edit and Inspect nodes take them. */
+  const storedEntry = (x, own, strokes) => ({ mask: x.subj?.found ? x.subj.file : null,
+    ...(strokes.length ? { strokes } : {}), background: valIn(own, "subject_background") / 100, grow: growIn(own) });
+
+  /** The stored frames to blur in edit mode, for the Edit node's stored_blur.
+   *  The top-level values are Batch Masking's, for the RefMod's details. */
   function storedBlurPlan() {
     const c = subjectCfg();
     if (!fullEdit() || !c.subject_blur_on) return null;
     const masks = {};
-    for (const x of used()) if (x.stored != null && x.subj?.found && !x.subjGone) masks[x.stored] = x.subj.file;
+    for (const x of used()) {
+      if (x.stored != null && maskBox(x) && !(x.subj?.found && x.subjGone)) masks[x.stored] = storedEntry(x, x.own, x.brush || []);
+    }
     return Object.keys(masks).length
       ? { background: c.subject_background / 100, grow: subjGrow(), word: wordNow().trim(), masks } : null;
   }
 
-  /** A stored frame decoded with its background blurred, for the editor's Result. */
-  async function decodeStored(x) {
+  /** A stored frame decoded with its background blurred, for the editor's
+   *  Result: with the window's settings and brush, applied or not. */
+  async function decodeStored(x, own, strokes) {
     const vae = guessVae("videoVae", /minimax.*video|h3.*video/i);
     if (!vae) throw new Error("choose the H3 video VAE on the Create tab first");
-    const c = subjectCfg();
     const out = await runHidden({
       1: { class_type: "VAELoader", inputs: { vae_name: vae } },
       2: { class_type: INSPECT_NAME, inputs: { file: editing.visual.file, view: "frames", strength: 1, audio_seconds: 30,
-        vae: ["1", 0], stored_blur: JSON.stringify({ background: c.subject_background / 100, grow: subjGrow(),
-          masks: { [x.stored]: x.subj.file } }) } },
+        vae: ["1", 0], stored_blur: JSON.stringify({ masks: { [x.stored]: storedEntry(x, own, strokes) } }) } },
     });
     const img = out["2"]?.images?.[0];
     if (!img) throw new Error("nothing came back");
@@ -3428,15 +3519,17 @@ export function openLibrary(panel, opts = {}) {
   /** A source's subject on its row: found or not, who set its crop, and
    *  anything to look at. */
   function subjectLine(x, setsFrame, target) {
-    const c = subjectCfg(), flags = subjectFlags(x, setsFrame, target);
-    const live = x.subj?.found && !x.subjGone && !subjStale(x);
-    const back = live && c.subject_crop && x.stored == null && x.autoCrop !== "auto" && (x.autoCrop === "adjusted" || !!x.rec.crop);
-    const state = x.finding ? "finding the subject… (in the queue)"
-      : !live ? "" : `subject found${x.autoCrop === "auto" ? " · the crop follows it" : back ? " · crop set by hand" : ""}`;
+    const flags = subjectFlags(x, setsFrame, target);
+    const live = !!maskBox(x) && !(x.subj?.found && x.subjGone);
+    const back = live && cfgOf(x, "subject_crop") && x.stored == null && x.autoCrop !== "auto" && (x.autoCrop === "adjusted" || !!x.rec.crop);
+    const state = x.finding ? "masking… (in the queue)"
+      : [live ? (x.subj?.found ? "subject found" : "masked by hand") : "", live && x.subj?.found && x.brush?.length ? "brushed" : "",
+        live && x.autoCrop === "auto" ? "the crop follows it" : back ? "crop set by hand" : "",
+        ownCount(x) ? "own mask settings" : ""].filter(Boolean).join(" · ");
     if (!state && !flags.length) return null;
     return el("div", { class: "mmr-subjline" },
       state ? el("div", { class: "mmr-dim" }, state,
-        back ? el("button", { class: "mmr-btn mmr-sm", title: "Crop around the subject again, as Find does",
+        back ? el("button", { class: "mmr-btn mmr-sm", title: "Crop around the subject again, as masking does",
           onclick: () => { x.autoCrop = null; x.rec.crop = null; paintCreate(); } }, "Back to auto") : null) : null,
       flags.map((f) => el("div", { class: "mmr-fitcap warn" }, f)));
   }
@@ -3498,7 +3591,7 @@ export function openLibrary(panel, opts = {}) {
         subjectable(x) ? subjectLine(x, setsFrame, target) : null,
         isLook(x) && !isStored(x) ? el("div", { class: "mmr-srcacts" }, cropButton(x, setsFrame, target))
         : x.stored != null && subjectable(x) ? el("div", { class: "mmr-srcacts" }, el("button", { class: "mmr-btn",
-            title: "Find the subject in this stored frame and see its background blurred", onclick: () => openSourceEditor(x) }, "Subject…"))
+            title: "Mask this stored frame and see its background blurred", onclick: () => openSourceEditor(x) }, "Mask…"))
         : x.rec.kind === "audio" && !isStored(x) ? el("div", { class: "mmr-srcacts" }, el("button", { class: "mmr-btn",
             title: "Trim this voice for the RefMod (the Media Loader is left as it is). A trimmed voice keeps its whole trim.",
             onclick: () => openSourceEditor(x) }, "Trim…"))
@@ -3534,7 +3627,7 @@ export function openLibrary(panel, opts = {}) {
     const needLook = use.some(isLook), needVoice = use.some((x) => x.voice);
     if (needLook && !st.videoVae) { toast("Choose the H3 video VAE first", 4000); return; }
     if (needVoice && !st.audioVae) { toast("Choose the H3 audio VAE first", 4000); return; }
-    if (use.some((x) => x.finding)) { toast("Wait for Find to finish", 4000); return; }
+    if (use.some((x) => x.finding)) { toast("Wait for masking to finish", 4000); return; }
     // Create's resolution decides size, so a loader's size cap doesn't ride along.
     const recOf = (x) => { const r = { ...x.rec }; delete r.resize; if (r.kind === "video") r.audio_mode = x.voice ? "paired" : "off";
       const subject = subjectSpec(x); if (subject) r.subject = subject; return r; };
@@ -3598,7 +3691,7 @@ export function openLibrary(panel, opts = {}) {
     const needLook = plan.adds.length > 0 || plan.blurred > 0, needVoice = plan.voice === "new";
     if (needLook && !st.videoVae) { toast("Choose the H3 video VAE first", 4000); return; }
     if (needVoice && !st.audioVae) { toast("Choose the H3 audio VAE first", 4000); return; }
-    if (used().some((x) => x.finding)) { toast("Wait for Find to finish", 4000); return; }
+    if (used().some((x) => x.finding)) { toast("Wait for masking to finish", 4000); return; }
     const recOf = (x) => { const r = { ...x.rec }; delete r.resize; if (r.kind === "video") r.audio_mode = x.voice ? "paired" : "off";
       const subject = subjectSpec(x); if (subject) r.subject = subject; return r; };
     const prompt = {}; let id = 1;

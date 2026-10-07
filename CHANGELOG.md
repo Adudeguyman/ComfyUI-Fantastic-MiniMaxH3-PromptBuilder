@@ -3,6 +3,38 @@
 Every release of **ComfyUI Fantastic H3 Prompt Builder**, newest first. The
 [README](README.md) keeps the recent ones; everything older lives here.
 
+## 1.8.2
+
+- **Masking in RefMod Create.** Crop each picture and clip to its subject
+  and blur the background, so props and backgrounds don't bleed into the
+  RefMod. **Find and Mask All** in **Batch Masking** finds the subject in
+  every source with SAM 3.1, from a word (starting as `person`); **Crop to
+  subject** crops around it, grown to the stack's shape, and **Blur
+  background** blurs the rest before it's encoded. **Crop and mask…** on a
+  row (**Trim, crop and mask…** on a clip) works on one picture: its own
+  word, **▶ Auto mask**, **◉ Dots**, and a **✎ Brush** that paints into the
+  mask or erases from it (on a clip, every frame), with settings that
+  follow Batch Masking until you change them there. In edit mode, a Full
+  RefMod's stored frames can be blurred too (**Mask…** on a frame), with
+  **Background kept** setting how much stays. The masks are temporary; the
+  RefMod records what was done, shown as a **bg blurred** badge. See
+  [Crop to the subject](REFMODS.md#crop-to-the-subject-and-blur-the-background).
+- **Fantastic H3 Reference Map.** A new node that gives the Text Encode's
+  `reference_map` without encoding: every label in the order the model
+  reads them. It shows the map as you edit the graph, before anything is
+  queued, with **⧉ Copy** for pasting into an LLM, and outputs it for an
+  LLM node.
+- **Reference order on the Text Encode.** The node lists its references in
+  the order the model reads them, kept up to date as you edit the graph.
+  **▦ Thumbnails…** shows them all as small previews.
+- **Fixes.** A RefMod renamed in the library keeps its new name in the
+  Stack's `labels` and the `reference_map`. RefMod names must be unique:
+  Create, rename and Save as a copy refuse a name that's taken. **⬇ Write
+  copy** in the picture editor shows its progress and errors. The guide's
+  contents jump to the section clicked, dropping a picture on the Create
+  tab lights the drop area reliably, and the stale "Audio can't be sent
+  alone" warning is gone.
+
 ## 1.8.1
 
 - **Custom size.** The trim and crop editor's size menu has **custom…**: type

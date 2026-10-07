@@ -96,7 +96,11 @@ understands RefMods:
   8, or all. More pictures may help lock in identity and reduce bleeding
   between RefMods, but they increase memory use and generation time.
 - **reference_map** is a text output listing every label and where it
-  came from. Handy for checking with a preview node.
+  came from. Handy for checking with a preview node. **Fantastic H3
+  Reference Map** gives the same text without encoding, from the same
+  references and mods. It shows the text as you edit the graph, before
+  anything is queued, with **⧉ Copy** for pasting it into an LLM, and
+  outputs it for an LLM node that writes the prompt.
 - The node itself lists its references in the order the model reads them,
   each label with its file or RefMod, media first and then RefMods. It
   updates as you change the graph, so you can check the order without
@@ -172,8 +176,8 @@ size and aspect ratio*.
 - Each preview shows what will be cut off
   to fit.
 - To choose which part is kept instead of taking the middle, click
-  **Crop to fit…** on a photo. The box is locked to the right aspect ratio, so
-  just drag it over the part you want.
+  **Crop and mask…** on a photo. The crop box is locked to the right aspect
+  ratio, so just drag it over the part you want.
 
 Hover over any preview to see it larger.
 
@@ -188,6 +192,8 @@ every picture and clip, using SAM 3.1. It needs
   and pose/motion concepts, the box starts as `person`. Every picture and
   clip goes through the queue as one job. Each picture keeps its largest
   match; tick **Keep every match** for a RefMod of more than one person.
+  A picture with its own word (see below) uses that, and pictures you
+  brushed are left alone.
 - **Crop to subject** crops each picture and clip around what was found,
   with room around it set by **Margin** (1.75× by default). In a stack, the
   crop takes the first photo's shape. It only grows to fit that shape, so
@@ -202,11 +208,29 @@ every picture and clip, using SAM 3.1. It needs
   All three are in pixels of the picture as it's encoded, so they look the
   same at any resolution. The blur doesn't change the token count; a
   tighter crop can lower it.
-- **Crop…** on a row opens the editor with the subject drawn over the
-  picture. **Mask | Result** switches between what SAM found and the
-  blurred result. To fix the subject, click **◉ Dots**, left-click to add
-  to it, right-click to take away, then **Find**. **‹ ›**, `,` and `.`, or
-  PgUp and PgDn step through every source.
+**Crop and mask…** on a row (**Trim, crop and mask…** on a clip) opens the
+editor with the mask drawn over the picture. **‹ ›**, `,` and `.`, or PgUp
+and PgDn step through every source. Its masking bar works on that picture
+alone:
+
+- **What to mask**: left empty, it uses Batch Masking's word. Type in it
+  to give this picture its own; Enter runs Auto mask.
+- **▶ Auto mask** masks the picture with SAM from the word and any dots.
+  To steer it, click **◉ Dots**, then left-click what to mask and
+  right-click what to leave out. It starts fresh: brush strokes on the
+  picture are dropped.
+- **✎ Brush** paints the mask by hand: **Paint** adds to it, **Erase**
+  takes away, **Size** sets the brush. Ctrl+Z undoes a stroke and **Clear
+  brush** removes them all. On a clip, a stroke covers every frame. It
+  works without Auto mask too, for masking by hand.
+- **Mask | Result** switches between the mask and the blurred result.
+- Under them are the picture's own settings. Each follows Batch Masking
+  until you change it here; a changed one is marked, and **Use batch
+  settings** hands them all back.
+
+**Apply** or **‹ ›** keeps what you did in the window. Closing it with
+unsaved changes asks first.
+A crop that follows the subject moves with the brush and the margin.
 
 A row is flagged when:
 
@@ -214,15 +238,16 @@ A row is flagged when:
   made at.
 - **Subject cut off**: the stack's shape can't fit around the subject at
   that margin.
-- **No subject found**: that picture is kept whole and isn't blurred.
-- **Find again**: a clip's trim or Clip frames changed, or the masks were
-  cleaned up while the library was closed.
+- **No subject found**, or **Nothing left masked** after the brush: that
+  picture is kept whole and isn't blurred.
+- **Auto mask again**: a clip's trim or Clip frames changed, or the masks
+  were cleaned up while the library was closed.
 
 The masks are temporary. They're deleted once the RefMod is made, and
 **Clean up** clears any left over. What was done is saved in the RefMod
 itself: its library card shows **bg blurred** (or **subject crop**), and
-Details lists the word, margin and blur. Editing it later starts from those
-settings.
+Details lists Batch Masking's word, margin and blur. Editing it later
+starts from those settings.
 
 ### Clips
 
@@ -230,7 +255,7 @@ A clip becomes a short run of stored frames, so the model can read a
 motion or a look in movement. Two things to know:
 
 - **Trim first.** Only the start of the clip is used, so trim it in the
-  Media Loader (or with **Crop / trim…** here) to the moment you want.
+  Media Loader (or with **Trim, crop and mask…** here) to the moment you want.
 - **Clip frames** is how many frames are taken from that start. H3 stores
   frames in chunks: 2 stored frames for anything up to 17, then 5 more for
   each further 17. So 22 frames store 7, 39 store 12, 56 store 17, and
@@ -355,8 +380,10 @@ jobs already running in your ComfyUI queue have finished.
 - **Blur the background of stored frames** (Full RefMods only): click
   **Find and Mask All** in Batch Masking, and the stored frames get their
   background blurred when you save. **Background kept** sets how much of
-  it stays; 0% blurs it fully. **Subject…** on a stored frame decodes it
-  with the blur, so you can check it first. The blur is applied to the
+  it stays; 0% blurs it fully. **Mask…** on a stored frame opens it in the
+  same window, with Auto mask, the brush, and Background kept and Grow for
+  that frame alone; **Result** decodes it with the blur, so you can check
+  it first. The blur is applied to the
   stored frame itself, so its edge follows the frame's 16-pixel blocks.
   A Compressed RefMod holds too little detail for this, but pictures you
   add to one still get cropped and blurred.
@@ -577,7 +604,7 @@ above 1 can help.
 
 **My photos came out cropped strangely.**
 They all follow the first photo's resolution and aspect ratio. Reorder so your best-framed photo
-is first, or use **Crop to fit…** on the others.
+is first, or use **Crop and mask…** on the others.
 
 **No RefMods loaded** shows in the editor.
 The stack is connected but empty, or every row is switched off. Add some

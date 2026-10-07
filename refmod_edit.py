@@ -18,7 +18,7 @@ import torch.nn.functional as F
 import comfy.utils
 import comfy.model_management as mm
 
-from .object_mask import drop_subject_masks, load_mask
+from .object_mask import drop_subject_masks, subject_mask
 from .refmod_core import H3RefMod, load_cached, encoder_record, stored_record, blur_latent_outside
 from .refmod_create import (_cover, ensure_min_size, resize_ref, pool_latent, optimize_latent,
                             encode_audio, save_mod, snap_to_h3_grid, parse_sources,
@@ -92,11 +92,12 @@ def encode_like(vae, mod, sources, latent_frames=16, progress=None, items=None):
     return torch.cat(parts, dim=2).contiguous(), shapes
 
 
-def stored_keep(annotated, grow, lat_h, lat_w):
-    """A subject mask drawn on a decoded stored frame as the share of each
-    latent cell it covers, after widening it by `grow` pixels of the frame
-    as it was encoded (lat_w x 16 wide). Returns [lat_h, lat_w]."""
-    m = load_mask(annotated, 1)
+def stored_keep(entry, grow, lat_h, lat_w):
+    """A stored frame's subject (its SAM mask and brush strokes, drawn on the
+    decoded frame) as the share of each latent cell it covers, after widening
+    it by `grow` pixels of the frame as it was encoded (lat_w x 16 wide).
+    Returns [lat_h, lat_w]."""
+    m = subject_mask(entry, 1, size=(lat_w * 16, lat_h * 16))
     px = round(grow * m.shape[-1] / (lat_w * 16))
     if px > 0:
         m = grow_mask(m, px)
@@ -162,8 +163,9 @@ class MiniMaxH3FantasticRefModEdit:
                                                    "onto the end of the subject's retention note. Empty keeps the stored text; "
                                                    "'-' clears it."}),
                 "stored_blur": ("STRING", {"default": "", "tooltip": "Full RefMods: blur the background of stored frames, "
-                    "as JSON {\"background\": 0-1, \"grow\": pixels, \"word\": ..., \"masks\": {frame index: subject "
-                    "mask}}. The frames stay their size; background 0 blurs everything outside the subject."}),
+                    "as JSON {\"background\": 0-1, \"grow\": pixels, \"word\": ..., \"masks\": {frame index: {\"mask\", "
+                    "\"strokes\", \"background\", \"grow\"}}}; the top-level values are Batch Masking's, for the record. "
+                    "The frames stay their size; background 0 blurs everything outside the subject."}),
             },
         }
 
@@ -277,8 +279,9 @@ class MiniMaxH3FantasticRefModEdit:
                 if isinstance(v, int):
                     frame = look_mod.latent[:, :, v:v + 1]
                     if v in blur_masks:
-                        keep = stored_keep(blur_masks[v], grow, look_mod.latent_h, look_mod.latent_w)
-                        frame = blur_latent_outside(frame, keep[None], background)
+                        e = blur_masks[v]
+                        keep = stored_keep(e, int(e.get("grow") or 0), look_mod.latent_h, look_mod.latent_w)
+                        frame = blur_latent_outside(frame, keep[None], min(1.0, max(0.0, float(e.get("background") or 0.0))))
                     parts.append(frame)
                     out_shapes.append(shapes[v] if per_frame else None)
                 else:
@@ -413,7 +416,7 @@ class MiniMaxH3FantasticRefModEdit:
                         saved.append(half_stem + ".safetensors")
                         print(f"[MiniMaxH3FantasticRefModEdit] {os.path.basename(half_stem)}: updated "
                               + ", ".join(k.replace("_", " ") for k in changes))
-        drop_subject_masks([*blur_masks.values(),
+        drop_subject_masks([*(e.get("mask") for e in blur_masks.values()),
                             *(it["subject"].get("mask") for it in look_items if isinstance(it.get("subject"), dict))])
         pbar.update_absolute(100)
         rel_saved = [os.path.relpath(os.path.realpath(p), os.path.realpath(root)).replace("\\", "/")

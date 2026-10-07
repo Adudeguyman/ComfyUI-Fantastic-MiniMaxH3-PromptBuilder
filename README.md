@@ -50,6 +50,38 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.8.2
+
+- **Masking in RefMod Create.** Crop each picture and clip to its subject
+  and blur the background, so props and backgrounds don't bleed into the
+  RefMod. **Find and Mask All** in **Batch Masking** finds the subject in
+  every source with SAM 3.1, from a word (starting as `person`); **Crop to
+  subject** crops around it, grown to the stack's shape, and **Blur
+  background** blurs the rest before it's encoded. **Crop and mask…** on a
+  row (**Trim, crop and mask…** on a clip) works on one picture: its own
+  word, **▶ Auto mask**, **◉ Dots**, and a **✎ Brush** that paints into the
+  mask or erases from it (on a clip, every frame), with settings that
+  follow Batch Masking until you change them there. In edit mode, a Full
+  RefMod's stored frames can be blurred too (**Mask…** on a frame), with
+  **Background kept** setting how much stays. The masks are temporary; the
+  RefMod records what was done, shown as a **bg blurred** badge. See
+  [Crop to the subject](REFMODS.md#crop-to-the-subject-and-blur-the-background).
+- **Fantastic H3 Reference Map.** A new node that gives the Text Encode's
+  `reference_map` without encoding: every label in the order the model
+  reads them. It shows the map as you edit the graph, before anything is
+  queued, with **⧉ Copy** for pasting into an LLM, and outputs it for an
+  LLM node.
+- **Reference order on the Text Encode.** The node lists its references in
+  the order the model reads them, kept up to date as you edit the graph.
+  **▦ Thumbnails…** shows them all as small previews.
+- **Fixes.** A RefMod renamed in the library keeps its new name in the
+  Stack's `labels` and the `reference_map`. RefMod names must be unique:
+  Create, rename and Save as a copy refuse a name that's taken. **⬇ Write
+  copy** in the picture editor shows its progress and errors. The guide's
+  contents jump to the section clicked, dropping a picture on the Create
+  tab lights the drop area reliably, and the stale "Audio can't be sent
+  alone" warning is gone.
+
 ## What's new in 1.8.1
 
 - **Custom size.** The trim and crop editor's size menu has **custom…**: type
@@ -173,61 +205,6 @@ any frame straight out of a video into your picture references.*
 - Deleting a RefMod now closes its details panel.
 - Single-file RefMod bundles saved by ComfyUI-MiniMaxH3Mod 0.2.6 show up
   in the library and can be used and inspected (not edited) here.
-
-## What's new in 1.7.0
-
-**RefMods.** Save a character, a place, a look or a voice once and use it
-in any prompt after that — no re-uploading, no re-cropping. A RefMod is a
-small file in `models/refmods`; the model reads it the same way it reads a
-reference picture or clip. New to them? See the
-[RefMods how-to guide](REFMODS.md).
-
-- **Fantastic H3 RefMod Stack** holds the RefMods a prompt uses. Click
-  **Browse library…** to pick from what you've saved, set a weight per
-  pick, and see the exact `<Picture 1>` / `<Video 1>` / `<Audio 1>` labels
-  the prompt should cite.
-- **The library** is where RefMods are made and looked after. Drop in
-  pictures, clips or audio (or pull them from a Media Loader), choose Full
-  or Compressed, and create. Several photos become one RefMod; a clip's
-  soundtrack or an audio file becomes its voice. Later you can rename it,
-  give it a description and a preview image, see what's actually stored
-  inside it, drop or reorder its frames, add more, swap the voice, or save
-  the result as a copy and keep the original.
-- **Fantastic H3 RefMod Text Encode** takes the place of *MiniMax H3
-  Reference to Video*. It sends the RefMods and the Media Loader's media to
-  the model together, numbered in one sequence, and gives you the empty
-  latent to sample from.
-- **The Prompt Builder** gets a **+ RefMods** button that adds and wires a
-  stack for you, shows RefMods as chips beside your media, warns when
-  something isn't reaching the Text Encode, and keeps a draft's RefMods
-  separate from Live — the same way it already handles media.
-- Two ready-made workflows show the whole chain:
-  `MMH3_RefMod_Vanilla_Stack_Example.json` (this pack and core nodes only)
-  and `MMH3_RefMod_Fully_Fantastic_Example.json` (adds the Fantastic LoRA
-  loader and seeds, from the `comfyui-fantastic-loras` pack). Use a
-  **ref2va** checkpoint with them: that's the model that was
-  trained on references. However, MiniMax has admitted there are faults
-  with the open-weight ref2va model, so we strongly encourage using a
-  fl2va/ref2va hybrid model that enables reference capabilities with fl2va
-  quality. These are **direct drop-ins** for ref2va workflows, and do not
-  require any special nodes or workflow modifications to use, just select
-  a hybrid model instead of a ref2va model. Testing was done using the
-  "20-49" model from this repo:
-  <https://huggingface.co/smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models>
-
-**Also:**
-
-- Delivery tags like `<whisper>` and `<pause>` now show in pink in the
-  prompt, in the picker's preview and in the guide, so they stand out from
-  the words being spoken. `<pants>` and `<smacks lips>` are gone — they
-  didn't do anything.
-- Weight sliders on a long stack no longer jump the list back to the top.
-- Set/Get nodes between the builder and the Text Encode are followed, so
-  labels and warnings stay right on tidy graphs.
-- A draft with its own media or RefMods but no text yet is saved to disk
-  like any other draft (it used to be lost on reload).
-- Security: the pack has a `SECURITY.md`, and its code no longer contains
-  anything the Comfy Registry's automated scan flags.
 
 Older releases are in the [changelog](CHANGELOG.md).
 
@@ -671,8 +648,9 @@ the first kept frame. Zoom the timeline with **−** / **+**, the zoom slider
 above it or the - and = keys (around the playhead), or scroll on it (around
 the pointer; Shift+scroll moves along it). **⤢ Kept range** fits the trim,
 and a short trim of a long clip opens zoomed. While zoomed, the strip beside
-the zoom controls shows the whole clip; drag it to move along. With unsaved changes, a
-click outside the editor doesn't close it; ✕ or Esc pressed twice drops them.
+the zoom controls shows the whole clip; drag it to move along. Closing with
+unsaved changes asks first: **Apply**, **Close without applying** or **Keep
+editing**.
 
 Videos that carry sound get an extra control for whether that soundtrack is
 treated as part of the video or as a separate audio reference. The **?** button
@@ -1305,11 +1283,11 @@ audio files, or clips whose soundtrack you keep — are joined into one voice
 saved beside it. Every photo in it takes the first one's shape (portrait,
 landscape or square): the others have their edges trimmed to fit, in Full
 and Compressed alike. Each photo's preview shows exactly what will be
-trimmed, so drag your best-framed one to the top. Rather than accept the automatic trim, click **Crop to
-fit…** on any other photo: the crop editor opens locked to the first
-photo's shape, and you drag the box over the part you want to keep. Every
-row also has **Crop…** (or **Crop / trim…** for a clip) for rotating,
-mirroring and trimming. These edits apply to the RefMod only; the Media
+trimmed, so drag your best-framed one to the top. Rather than accept the automatic trim, click **Crop and
+mask…** on any other photo: the crop editor opens locked to the first
+photo's shape, and you drag the box over the part you want to keep. The
+same button (**Trim, crop and mask…** on a clip) rotates, mirrors, trims
+and masks. These edits apply to the RefMod only; the Media
 Loader keeps its own settings. A stacked RefMod is cited in prompts as one
 video, like `<Video 1>`. Switch to **One
 per source** to turn a batch of unrelated items into separate RefMods
@@ -1325,22 +1303,30 @@ those. The setting's caption shows the result live.
 (`sam3.1_multiplex_fp16.safetensors` in `models/checkpoints`) over every
 picture and clip in one queue job. It finds the word you type, which starts
 as `person` for the identity and pose/motion concepts, keeping the largest
-match unless **Keep every match** is ticked. A clip is masked over the same
-frames Create takes from it. **Crop to subject** crops around what was
+match unless **Keep every match** is ticked. A picture with its own word
+uses that, and brushed pictures are left alone. A clip is masked over the
+same frames Create takes from it. **Crop to subject** crops around what was
 found with a **Margin** (1.75×), grown to the stack's shape and kept inside
 the picture. A crop you adjust by hand is kept, and **Back to auto** returns
 it. **Blur background** blurs everything but the subject in pixels before
 encoding; **Blur**, **Grow** and **Edge** are in pixels of the picture as
-encoded. The editor (**Crop…**) draws the subject over the picture, with
-**Mask | Result** for a live preview, **◉ Dots** to fix the subject, and
-‹ › or `,` `.` (PgUp/PgDn) to step through every source. In edit mode, a
-Full RefMod's stored frames can be blurred too: a latent blend outside the
-subject, with **Background kept** setting how much stays. Rows flag small
-crops (under 60% of the resolution), a subject cut off by the stack's
-shape, no subject found, and masks to find again. The masks are temporary:
-they're deleted once the RefMod is saved, and Clean up sweeps any left
-over. What was done is recorded in the file, shown as a **bg blurred**
-badge and in Details, and edit mode starts from it.
+encoded. The editor (**Crop and mask…**) draws the mask over the picture
+and masks that picture alone: a **What to mask** box (empty uses Batch
+Masking's word), **▶ Auto mask**, **◉ Dots** to steer it, a **✎ Brush**
+that paints into the mask or erases from it (on a clip, every frame;
+Ctrl+Z undoes a stroke), **Mask | Result** for a live preview, and the
+picture's own settings, each following Batch Masking until changed there
+(**Use batch settings** hands them back). Auto mask starts fresh and drops
+the brush strokes. Apply or ‹ › keeps the window's changes; ‹ › or `,` `.`
+(PgUp/PgDn) step through every source. In edit mode, a Full RefMod's stored
+frames can be blurred too (**Mask…** on the frame): a latent blend outside
+the subject, with **Background kept** setting how much stays. Rows flag
+small crops (under 60% of the resolution), a subject cut off by the stack's
+shape, nothing masked, and masks to redo with Auto mask. The masks are
+temporary: they're deleted once the RefMod is saved, and Clean up sweeps
+any left over. What was done is recorded in the file (Batch Masking's
+settings), shown as a **bg blurred** badge and in Details, and edit mode
+starts from it.
 
 Voices can be trimmed with **Trim…** on their row. A trimmed voice keeps
 its whole trim; Voice seconds only cuts untrimmed ones. The line under
@@ -1423,7 +1409,11 @@ and the audio VAE for voices. It presents every reference to the model's own
 encoder during tokenization, so the prompt can cite `<Picture n>`,
 `<Video n>` and `<Audio n>`: the loader's media is labelled first, the
 RefMods after it, one counter per kind with every copy numbered, and the
-map is reported on `reference_map`. Loader media is sized as the native
+map is reported on `reference_map`. **Fantastic H3 Reference Map** gives the
+same map from the same `references` and `mods` without encoding anything.
+It shows the map as you edit the graph, before anything is queued, with a
+**⧉ Copy** button for pasting it into an LLM, and outputs it for an LLM
+node writing the prompt. Loader media is sized as the native
 node sizes it (`width`, `height`, `length` and `ref_image_size` are the
 same settings); RefMods keep the size they were saved at. A clip is shown
 to the encoder at two frames a second, as the native node samples video.

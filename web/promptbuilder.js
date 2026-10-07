@@ -1171,13 +1171,13 @@ function encodeSlots(enc) {
     return i >= 0 && enc.inputs[i].link != null ? originNode(enc, i) : null;
   };
   const refSrc = from("references"), modSrc = from("mods");
-  let media = [], withheld = 0, partial = false;
+  let media = [], all = [], withheld = 0, partial = false;
   if (refSrc?.type === LOADER_NAME) {
     let items = [];
     try { items = JSON.parse(refSrc.widgets?.find((w) => w.name === "media_state")?.value || "[]"); } catch (e) { items = []; }
-    media = slotsFromItems(Array.isArray(items) ? items : [], "Media Loader") || [];
+    media = all = slotsFromItems(Array.isArray(items) ? items : [], "Media Loader") || [];
   } else if (refSrc?.type === NODE_NAME) {
-    const all = (mediaSlots(refSrc) || []).filter((m) => m.tag);
+    all = (mediaSlots(refSrc) || []).filter((m) => m.tag);
     const cap = MODE_CAPACITY[gateMode(refSrc)];
     media = all.filter((m) => m.idx <= (cap[m.kind] ?? 0));
     withheld = all.length - media.length;
@@ -1195,6 +1195,18 @@ function encodeSlots(enc) {
     card.tags.push(row);
   };
   media.forEach((m, i) => onCard(m.item, () => ({ group: "Media", name: rows[i].name, item: m.item, preview: m.preview }), rows[i]));
+  // reference_map's lines, as refmod_nodes.reference_lines writes them: a
+  // clip by its slot (a builder input's own number), the rest counted
+  const lines = [];
+  const slotOf = (m) => +((m.slotName || "").match(/^video(?:_audio)?_(\d+)$/) || [])[1] || 0;
+  let pics = 0, auds = 0;
+  for (const m of media) {
+    const what = m.kind === "Picture" ? `picture ${++pics}`
+      : m.kind === "Video" ? `video ${slotOf(m) || m.idx}`
+      : m.note?.startsWith("soundtrack of") ? `soundtrack of video ${slotOf(m) || +m.note.match(/(\d+)>$/)[1]}`
+      : `audio ${++auds}`;
+    lines.push(`${m.tag} = ${what} (media)`);
+  }
   const offset = { Picture: 0, Video: 0, Audio: 0 };
   for (const m of media) offset[m.kind] = Math.max(offset[m.kind], m.idx);
   if (modSrc) {
@@ -1207,11 +1219,14 @@ function encodeSlots(enc) {
         tag: nums.length > 1 ? `<${kind} ${nums[0]}\u2013${nums[nums.length - 1]}>` : `<${kind} ${nums[0]}>`,
         more: nums.length > 1 ? `${nums.length} copies` : "" };
       rows.push(row);
+      for (const num of nums) lines.push(`<${kind} ${num}> = ${String(g.name).split("/").pop()}`);
       onCard(g.uid, () => ({ group: "RefMods", name: g.name, refmod: true, preview: g.preview }),
         { ...row, tokens: g.tokens * nums.length });
     }
   }
-  return { rows, cards, partial, withheld, linked: !!(refSrc || modSrc) };
+  const edited = all.find((m) => m.kind === "Video" && m.item?.edit && m.item?.mask);
+  if (edited) lines.push(`Editing ${edited.item.name} (masked area regenerated)`);
+  return { rows, cards, lines, partial, withheld, linked: !!(refSrc || modSrc) };
 }
 
 /** Slots from the picture_/video_/audio_ inputs, numbered as the native
@@ -1976,7 +1991,7 @@ const CSS = `
   border:1px solid #2b303b;border-radius:6px;padding:4px 10px;font-size:13px;line-height:20px;color:#9aa3b2;overflow:hidden;}
 .mmh3-reforder-head{flex:0 0 24px;line-height:24px;cursor:pointer;color:#e6e9ef;font-weight:600;white-space:nowrap;
   display:flex;align-items:center;gap:6px;min-width:0;}
-.mmh3-reforder-head > span:first-child{flex:0 0 10px;color:#8b93a3;}
+.mmh3-reforder-head .caret{flex:0 0 10px;color:#8b93a3;}
 .mmh3-reforder-head .title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
 .mmh3-reforder-thumbs{flex:0 0 auto;background:#232833;border:1px solid #3a4252;border-radius:5px;color:#d7dbe2;
   font:inherit;font-size:12px;font-weight:500;line-height:18px;padding:0 7px;cursor:pointer;}
@@ -1995,6 +2010,11 @@ const CSS = `
 .mmh3-reforder-group{height:20px;padding-left:28px;color:#8b93a3;font-size:12px;font-weight:600;}
 .mmh3-reforder-note{flex:0 0 auto;color:#e0a94c;}
 .mmh3-reforder-note div{height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mmh3-mapbox .mmh3-reforder-head{cursor:default;}
+.mmh3-mapbox .mmh3-reforder-head .title{color:#8b93a3;font-weight:500;}
+.mmh3-mapbox-text{flex:0 0 auto;width:100%;box-sizing:border-box;resize:none;margin:0;padding:4px 7px;
+  background:#12151b;color:#e6e9ef;border:1px solid #2b303b;border-radius:5px;outline:none;
+  font:12px/18px ui-monospace,monospace;white-space:pre;overflow:auto;scrollbar-width:thin;scrollbar-color:#4b5363 transparent;}
 .mmh3-thumbs{width:min(1000px,94vw);height:auto;max-height:90vh;--mml-fs:1.25;}
 .mmh3-thumbscroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px 16px 16px;display:flex;flex-direction:column;
   gap:8px;font-size:13px;}
@@ -7250,7 +7270,7 @@ class RefOrderPanel {
   constructor(node) {
     this.node = node;
     this.key = null;
-    this.caret = el("span", {});
+    this.caret = el("span", { class: "caret" });
     // keep the wheel only while the list has more to show; Nodes 2.0 sends
     // it to the canvas unless the list was clicked first (data-capture-wheel)
     this.list = el("div", { class: "mmh3-reforder-list", tabIndex: -1, dataset: { captureWheel: "true" }, onwheel: (e) => {
@@ -7305,6 +7325,62 @@ class RefOrderPanel {
   }
 }
 
+const MAP_NODE = "MiniMaxH3FantasticReferenceMap";
+// a long name scrolls sideways, so the box keeps room for that scrollbar
+const MAP_ROWS = 12, MAP_LINE_H = 18, MAP_BOX_EXTRA = 20;
+
+/** The Reference Map node's output, kept live from the graph, so the map can
+ *  go to an LLM before anything is queued. */
+class MapBox {
+  constructor(node) {
+    this.node = node;
+    this.key = null;
+    this.text = "";
+    // keep the wheel only while the box has more to show; Nodes 2.0 sends it
+    // to the canvas unless the box was clicked first (data-capture-wheel)
+    this.box = el("textarea", { class: "mmh3-mapbox-text", readOnly: true, spellcheck: false,
+      dataset: { captureWheel: "true" }, onwheel: (e) => {
+        if (this.box.scrollHeight > this.box.clientHeight && !e.ctrlKey && !e.metaKey
+          && Math.abs(e.deltaY) >= Math.abs(e.deltaX)) e.stopPropagation();
+      } });
+    this.note = el("div", { class: "mmh3-reforder-note" });
+    this.root = el("div", { class: "mmh3-reforder mmh3-mapbox" },
+      el("div", { class: "mmh3-reforder-head" },
+        el("span", { class: "title" }, "Updates as you edit the graph"),
+        el("button", { class: "mmh3-reforder-thumbs", title: "Copy the reference map as text, for pasting into an LLM",
+          onclick: async (e) => {
+            e.stopPropagation();
+            toast(await copyText(this.text) ? "Reference map copied"
+              : "Couldn't reach the clipboard — select the text in the box and copy it", 3000);
+          } }, "⧉ Copy")),
+      this.box, this.note);
+    this.widget = node.addDOMWidget("mmh3_mapbox", "div", this.root, { serialize: false });
+    this.widget.computeSize = (w) => [w, this.height];
+    this.fit(1, 0);
+  }
+
+  fit(lines, notes) {
+    const rows = Math.min(Math.max(lines, 1), MAP_ROWS);
+    this.box.style.height = `${rows * MAP_LINE_H + MAP_BOX_EXTRA}px`;
+    this.height = ORDER_HEAD_H + ORDER_FRAME_H + rows * MAP_LINE_H + MAP_BOX_EXTRA + ORDER_ROW_H * notes + 2 * this.widget.margin;
+    this.widget.computedHeight = this.height;
+  }
+
+  refresh() {
+    const found = encodeSlots(this.node), notes = orderNotes(found);
+    const text = found.lines.join("\n") || "No references.";
+    const key = JSON.stringify([text, notes]);
+    if (key === this.key) return;
+    this.key = key;
+    this.text = text;
+    this.box.value = text;
+    this.note.replaceChildren(...notes.map(([t, more]) => el("div", { title: more }, t)));
+    this.fit(found.lines.length, notes.length);
+    try { this.node.setSize([this.node.size[0], this.node.computeSize()[1]]); } catch (e) { /* Vue sizes it */ }
+    this.node.setDirtyCanvas?.(true, true);
+  }
+}
+
 /** Panels recheck once a second, which catches every change upstream:
  *  media, picks, the builder's mode, links anywhere in the chain. */
 function watchOrder(panel) {
@@ -7319,12 +7395,14 @@ function watchOrder(panel) {
 app.registerExtension({
   name: "MiniMaxH3.TextEncodeOrder",
   async beforeRegisterNodeDef(nodeType, nodeData) {
-    if (nodeData.name !== ENCODE_NODE) return;
+    if (nodeData.name !== ENCODE_NODE && nodeData.name !== MAP_NODE) return;
+    const Panel = nodeData.name === ENCODE_NODE ? RefOrderPanel : MapBox;
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
       const r = onNodeCreated?.apply(this, arguments);
       injectCSS();
-      const panel = this._mmh3Order = new RefOrderPanel(this);
+      const panel = this._mmh3Order = new Panel(this);
+      if (Panel === MapBox) this.size[0] = Math.max(this.size[0], 480);
       watchOrder(panel);
       setTimeout(() => panel.refresh(), 0);
       return r;

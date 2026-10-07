@@ -487,6 +487,14 @@ def pick_channels(pick):
     return out
 
 
+def refmod_label(mod):
+    """A RefMod's name as the library and the stack show it: its file's name
+    without the look/voice suffix. That follows a rename, which the name
+    stored in the file doesn't. Mods from other packs keep their own name."""
+    path = getattr(mod, "path", "")
+    return _split_pair(os.path.basename(path))[0] if path else getattr(mod, "name", "?")
+
+
 def label_lines(rows):
     """What H3 RefMod Text Encode will call each entry: one counter per
     kind, in bundle order, every copy numbered. Consecutive entries of the
@@ -501,7 +509,7 @@ def label_lines(rows):
             continue
         counters[kind] += 1
         n = counters[kind]
-        name = getattr(mod, "name", "?")
+        name = refmod_label(mod)
         if lines and lines[-1][0] is mod:
             lines[-1][3] = n
         else:
@@ -602,7 +610,7 @@ class MiniMaxH3RefModStack:
                 tail = [s for s in strengths if s < 1.0]
                 shape = (f"x{whole}" if whole else "") + \
                         (f"{' + ' if whole else ''}{tail[0]:.2f}" if tail else "")
-                summary.append(f"{mod.name}@{shape}")
+                summary.append(f"{refmod_label(mod)}@{shape}")
 
         total = sum(getattr(m, "token_count", 0) for m, s in rows if s > 0)
         if budget and total > budget:

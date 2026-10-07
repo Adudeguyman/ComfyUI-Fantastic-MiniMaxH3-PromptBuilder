@@ -107,7 +107,7 @@ class MiniMaxH3FantasticRefModInspect:
                 "vae": ("VAE", {"tooltip": "MiniMax H3 video VAE, for a look."}),
                 "audio_vae": ("VAE", {"tooltip": "MiniMax H3 audio VAE, for a voice."}),
                 "stored_blur": ("STRING", {"default": "", "tooltip": "Preview the Create tab's background blur on "
-                    "stored frames, as JSON {\"background\", \"grow\", \"masks\": {frame index: subject mask}}. "
+                    "stored frames, as JSON {\"masks\": {frame index: {\"mask\", \"strokes\", \"background\", \"grow\"}}}. "
                     "Only those frames are decoded."}),
             },
         }
@@ -177,8 +177,9 @@ class MiniMaxH3FantasticRefModInspect:
                     mm.throw_exception_if_processing_interrupted()
                     zi = z[:, :, i:i + 1]
                     if i in masks:
-                        keep = stored_keep(masks[i], int(blur.get("grow") or 0), mod.latent_h, mod.latent_w)
-                        zi = blur_latent_outside(zi, keep[None], min(1.0, max(0.0, float(blur.get("background") or 0.0))))
+                        e = masks[i]
+                        keep = stored_keep(e, int(e.get("grow") or 0), mod.latent_h, mod.latent_w)
+                        zi = blur_latent_outside(zi, keep[None], min(1.0, max(0.0, float(e.get("background") or 0.0))))
                     f = _to_frames(vae.decode(zi))[:1]
                     out.append(f)
                     ui["images"].append(_save_png(f[0], f"{stem}_{i:03d}"))

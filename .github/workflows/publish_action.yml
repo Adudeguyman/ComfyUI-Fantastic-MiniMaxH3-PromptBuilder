@@ -16,7 +16,7 @@ jobs:
     # before the version-bump push, since registry versions are immutable.
     env:
       COMFY_NODE_CHANGELOG: |
-        The trim and crop editor's size menu takes a custom long edge. stack_pictures "up to 8" is now "up to N", with stack_pictures_n setting N (default 8); workflows saved with "up to 8" need it picked again. RefMod bundles from ComfyUI-MiniMaxH3Mod can be edited, saved as a copy in standalone files with the bundle left as it is. The RefMod library has its own window and text size control. RefMod Stack cards number RefMods after the Media Loader's media with or without the Prompt Builder in between. The mask preview redraws on size and crop changes and no longer draws grow and the regenerated cells too large on a cropped clip.
+        RefMod Create can crop to the subject and blur the background: Batch Masking finds it in every picture and clip with SAM 3.1, and the new Crop and mask window masks one picture at a time with its own word, Auto mask, dots and a brush that paints into or erases from the mask, its settings following Batch Masking until changed there. In edit mode, a Full RefMod's stored frames can have their background blurred. New Fantastic H3 Reference Map node: the Text Encode's reference_map without encoding, shown live on the node with a Copy button for pasting into an LLM. The Text Encode lists its references in the order the model reads them, with a thumbnails view. Fixes: a renamed RefMod keeps its new name in labels and reference_map; RefMod names must be unique; the stale "Audio can't be sent alone" warning is gone.
     steps:
       - name: Check out code
         uses: actions/checkout@v4
