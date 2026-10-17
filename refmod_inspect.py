@@ -187,6 +187,9 @@ class MiniMaxH3FantasticRefModInspect:
                 details["decoded"] = f"{len(picked)} of {t} stored frame{'s' if t != 1 else ''}"
 
         report = json.dumps(details, indent=2, ensure_ascii=False)
+        # No empty lists: comfyui_queue_manager reads images[0] of every
+        # output, and the error kills ComfyUI's prompt worker.
+        ui = {k: v for k, v in ui.items() if v}
         ui["refmod_inspect"] = [report]
         return {"ui": ui, "result": (report, frames, audio)}
 

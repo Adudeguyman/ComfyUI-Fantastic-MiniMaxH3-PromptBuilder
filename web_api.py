@@ -1,6 +1,7 @@
 """HTTP routes backing the Media Loader's drag-drop and file picker."""
 
 import asyncio
+import filecmp
 import hashlib
 import hmac
 import json
@@ -24,6 +25,9 @@ except Exception:  # pragma: no cover
     folder_paths = None
 
 SUBFOLDER = "minimax_h3"
+# The RefMod Create tab's own uploads: a RefMod holds all it needs once made,
+# so they're deleted then, apart from the Media Loader's files.
+REFMOD_UPLOADS = f"{SUBFOLDER}/refmod_uploads"
 
 # One random token per server process. Every state-changing route demands it
 # in a request header; the frontend fetches it from a same-origin GET. A page
@@ -57,9 +61,9 @@ def _safe(name):
     return name[:120]
 
 
-def _target_dir():
+def _target_dir(sub=SUBFOLDER):
     base = folder_paths.get_input_directory() if folder_paths else "input"
-    path = os.path.join(base, SUBFOLDER)
+    path = os.path.join(base, sub)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -391,6 +395,18 @@ def _unique(directory, name):
     return candidate
 
 
+def _same_file(directory, path, size, kind, wanted):
+    """A file already in `directory` with exactly the bytes of `path`: the
+    same media loaded again, under its own name or another. Only files of
+    the same size are read. Of several copies, `wanted` (the name it would
+    get) comes first, then the shortest name, so the original wins over the
+    _12345 copies older versions made."""
+    names = sorted((e.name for e in os.scandir(directory) if e.is_file() and not e.name.startswith(".")
+                    and kind_for(e.name) == kind and e.stat().st_size == size),
+                   key=lambda n: (n != wanted, len(n), n))
+    return next((n for n in names if filecmp.cmp(os.path.join(directory, n), path, shallow=False)), None)
+
+
 if PromptServer is not None and web is not None:
 
     routes = PromptServer.instance.routes
@@ -510,7 +526,8 @@ if PromptServer is not None and web is not None:
     @routes.post("/minimax_h3/upload")
     @_guard(json_only=False)
     async def upload(request):
-        """Accept one file, store it under input/minimax_h3, return its metadata."""
+        """Accept one file, store it under input/minimax_h3 (?for=refmod: the
+        RefMod Create tab's own folder), return its metadata."""
         try:
             reader = await request.multipart()
         except Exception:
@@ -529,24 +546,31 @@ if PromptServer is not None and web is not None:
                 {"error": f"unsupported file type: {os.path.splitext(original)[1]}"},
                 status=400)
 
-        directory = _target_dir()
-        name = _unique(directory, _safe(original))
-        path = os.path.join(directory, name)
+        sub = REFMOD_UPLOADS if request.query.get("for") == "refmod" else SUBFOLDER
+        directory = _target_dir(sub)
+        part = os.path.join(directory, f".upload-{secrets.token_hex(8)}.part")
         size = 0
         try:
-            with open(path, "wb") as fh:
+            with open(part, "wb") as fh:
                 while True:
                     chunk = await field.read_chunk()
                     if not chunk:
                         break
                     size += len(chunk)
                     fh.write(chunk)
+            # the same media again keeps the one copy already here, like the input folder
+            name = await asyncio.to_thread(_same_file, directory, part, size, kind, _safe(original))
+            if name:
+                os.remove(part)
+            else:
+                name = _unique(directory, _safe(original))
+                os.replace(part, os.path.join(directory, name))
         except Exception as exc:
-            if os.path.exists(path):
-                os.remove(path)
+            if os.path.exists(part):
+                os.remove(part)
             return web.json_response({"error": f"write failed: {exc}"}, status=500)
 
-        annotated = f"{SUBFOLDER}/{name} [input]"
+        annotated = f"{sub}/{name} [input]"
         info = media_io.probe(annotated) if kind in ("video", "audio") else {}
         return web.json_response({
             "file": annotated,
@@ -559,6 +583,36 @@ if PromptServer is not None and web is not None:
             "width": info.get("width"),
             "height": info.get("height"),
         })
+
+    @routes.post("/minimax_h3/refmod_uploads/sweep")
+    @_guard()
+    async def refmod_uploads_sweep(request):
+        """Delete the Create tab's uploads nothing needs now: with `files`, the
+        ones a finished job (`prompt_id`) used; without, any left over a day.
+        Files the tab still lists (`keep`) and any a queued or running prompt
+        names stay."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "expected JSON body"}, status=400)
+        prefix = REFMOD_UPLOADS + "/"
+        mine = lambda f: os.path.basename(str(f).split(" [")[0]) if str(f).startswith(prefix) else None
+        folder = _target_dir(REFMOD_UPLOADS)
+        files = body.get("files")
+        if isinstance(files, list):
+            names = {mine(f) for f in files} - {None}
+        else:
+            stale = time.time() - 86400
+            names = {e.name for e in os.scandir(folder) if e.is_file() and e.stat().st_mtime < stale}
+        running, pending = PromptServer.instance.prompt_queue.get_current_queue()
+        queued = json.dumps([q[2] for q in running + pending if q[1] != body.get("prompt_id")], default=str)
+        removed = 0
+        for name in names - {mine(f) for f in body.get("keep") or []}:
+            path = os.path.join(folder, name)
+            if not name.startswith(".") and name not in queued and os.path.isfile(path):
+                os.remove(path)
+                removed += 1
+        return web.json_response({"removed": removed})
 
     @routes.post("/minimax_h3/extract_audio")
     @_guard()

@@ -6,7 +6,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { LOADER_NAME, computeTags, viewURL as loaderViewURL,
-  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets, setterOf, linkNodes, keepNameChars,
+  safeCanvasFocus, openLoaderModal, isOn, postApi, outputTargets, originNode, linkNodes, keepNameChars,
   overlayOn, maskOverlay, refTokenEstimate, itemLook, picturePreview, clipPreview, miniPlayer, lightbox,
   injectCSS as injectLoaderCSS } from "./medialoader.js";
 import { STACK_NAME, ENCODE_NAMES, readStack, deriveEntries, labelGroups,
@@ -878,22 +878,6 @@ function viewURL(v) {
     `/view?filename=${encodeURIComponent(name)}` +
     `&subfolder=${encodeURIComponent(subfolder)}&type=${type}`
   );
-}
-
-/** The node behind an input, looked through reroutes and KJNodes' Get/Set
- *  pairs (a Get node stands in for whatever feeds its Set node). */
-function originNode(node, slotIndex) {
-  let n = node.getInputNode?.(slotIndex);
-  let guard = 0;
-  while (n && guard++ < 16) {
-    let up = null;
-    if (/reroute/i.test(n.type || "")) up = n.getInputNode?.(0);
-    else if (n.type === "GetNode") up = setterOf(n)?.getInputNode?.(0);
-    else break;
-    if (!up) break;
-    n = up;
-  }
-  return n || null;
 }
 
 function widgetValue(n, names) {
@@ -6915,8 +6899,10 @@ function hideWidget(node, name) {
   if (w.element) w.element.style.display = "none";
 }
 
-/** The one place this file links two nodes. */
+/** The one place this file links two nodes. Never across a subgraph's edge:
+ *  LiteGraph would write a link the other graph can't resolve. */
 function wire(from, outSlot, to, inSlot) {
+  if (from.graph !== to.graph) return null;
   return linkNodes(from, outSlot, to, inSlot);
 }
 
@@ -6935,8 +6921,7 @@ function feedEncoderMedia(node, enc) {
   const ri = (enc.inputs || []).findIndex((i) => i.name === "references");
   if (refIn < 0 || refOut < 0 || ri < 0) return false;
   if (node.inputs[refIn].link == null || enc.inputs[ri].link != null) return false;
-  wire(node, refOut, enc, ri);
-  return true;
+  return !!wire(node, refOut, enc, ri);
 }
 
 /** Wire a RefMod Stack into this builder's mods input. Focuses the stack
@@ -6970,8 +6955,7 @@ function addRefModStack(node, { focus = true } = {}) {
   for (const enc of encoders) {
     const mi = modsInput(enc);
     const head = mi >= 0 && enc.inputs[mi].link != null ? originNode(enc, mi) : null;
-    if (head?.type === STACK_NAME) {
-      wire(head, 0, node, inIdx);     // slot 0 is the stack's mods bundle
+    if (head?.type === STACK_NAME && wire(head, 0, node, inIdx)) {     // slot 0 is the stack's mods bundle
       feedEncoderMedia(node, enc);
       redraw(node);
       toast("Connected the RefMod Stack that already feeds RefMod Text Encode");
@@ -6987,20 +6971,20 @@ function addRefModStack(node, { focus = true } = {}) {
     toast("RefMod Stack node not found \u2014 restart ComfyUI");
     return null;
   }
-  app.graph.add(stack);
+  node.graph.add(stack);
   try {
     // Left of the builder like the Media Loader, below it when one is there.
     const refIdx = (node.inputs || []).findIndex((i) => i.name === "references");
     const loader = refIdx >= 0 && node.inputs[refIdx].link != null ? originNode(node, refIdx) : null;
     const x = node.pos[0] - ((stack.size?.[0] || 560) + 60);
-    const y = loader ? loader.pos[1] + (loader.size?.[1] || 400) + 60 : node.pos[1];
+    const y = loader?.graph === node.graph ? loader.pos[1] + (loader.size?.[1] || 400) + 60 : node.pos[1];
     stack.pos = [x, y];
   } catch (e) { /* let the renderer place it */ }
   wire(stack, 0, node, inIdx);
   let fed = 0;
   for (const enc of encoders) {
     const mi = modsInput(enc);
-    if (mi >= 0 && enc.inputs[mi].link == null) { wire(node, outIdx, enc, mi); fed++; }
+    if (mi >= 0 && enc.inputs[mi].link == null && wire(node, outIdx, enc, mi)) fed++;
     feedEncoderMedia(node, enc);
   }
   redraw(node);
@@ -7038,7 +7022,7 @@ function addMediaLoader(node) {
     toast("Media Loader node not found \u2014 restart ComfyUI");
     return;
   }
-  app.graph.add(loader);
+  node.graph.add(loader);
   try {
     loader.pos = [node.pos[0] - ((loader.size?.[0] || 430) + 60), node.pos[1]];
   } catch (e) { /* let the renderer place it */ }
@@ -7130,8 +7114,9 @@ app.registerExtension({
             onclick: () => openEditor(this),
           });
           this._mmh3Summary = summary;
+          // Not in the properties panel: it would squeeze this to its own width.
           const sw = this.addDOMWidget("mmh3_summary", "div", summary,
-            { serialize: false });
+            { serialize: false, hideInPanel: true });
           // Explicit height so either renderer reserves space for it.
           sw.computedHeight = 46;
           sw.computeSize = () => [330, 46];
@@ -7285,7 +7270,8 @@ class RefOrderPanel {
         onclick: () => { node.properties.mmh3RefOrderOpen = !this.open; this.refresh(); } },
         this.caret, el("span", { class: "title" }, "References, in model order"), this.thumbs),
       this.list, this.note);
-    this.widget = node.addDOMWidget("mmh3_reforder", "div", this.root, { serialize: false });
+    // Not in the properties panel: it would squeeze this to its own width.
+    this.widget = node.addDOMWidget("mmh3_reforder", "div", this.root, { serialize: false, hideInPanel: true });
     this.widget.computeSize = (w) => [w, this.height];
     this.fit(0);
   }
@@ -7354,7 +7340,8 @@ class MapBox {
               : "Couldn't reach the clipboard — select the text in the box and copy it", 3000);
           } }, "⧉ Copy")),
       this.box, this.note);
-    this.widget = node.addDOMWidget("mmh3_mapbox", "div", this.root, { serialize: false });
+    // Not in the properties panel: it would squeeze this to its own width.
+    this.widget = node.addDOMWidget("mmh3_mapbox", "div", this.root, { serialize: false, hideInPanel: true });
     this.widget.computeSize = (w) => [w, this.height];
     this.fit(1, 0);
   }

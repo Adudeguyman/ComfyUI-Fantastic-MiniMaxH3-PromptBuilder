@@ -22,6 +22,14 @@ try:
 except Exception as exc:  # pragma: no cover
     print(f"[MiniMaxH3] RefMod Stack unavailable: {exc}")
 
+# Experimental, and kept apart so a failure here can't take the RefMod nodes with it.
+try:
+    from . import ref_cache
+    NODE_CLASS_MAPPINGS = {**NODE_CLASS_MAPPINGS, **ref_cache.NODE_CLASS_MAPPINGS}
+    NODE_DISPLAY_NAME_MAPPINGS = {**NODE_DISPLAY_NAME_MAPPINGS, **ref_cache.NODE_DISPLAY_NAME_MAPPINGS}
+except Exception as exc:  # pragma: no cover
+    print(f"[MiniMaxH3] Reference Cache unavailable: {exc}")
+
 # Registers the upload / probe / capabilities routes when running inside
 # ComfyUI. Import failures here must never take the nodes down with them.
 try:

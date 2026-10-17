@@ -3,6 +3,31 @@
 Every release of **ComfyUI Fantastic H3 Prompt Builder**, newest first. The
 [README](README.md) keeps the recent ones; everything older lives here.
 
+## 1.8.3
+
+- **Subgraphs.** The Prompt Builder, the Text Encode's reference list, the
+  Reference Map and the RefMod Stack's chain now see media and RefMods
+  across subgraphs: a Text Encode inside one, a Media Loader inside one,
+  KJNodes Set/Get pairs between levels. **+ Media loader**, **+ RefMods**
+  and **+ Native-output splitter** add their node beside the one clicked,
+  in the same subgraph. **Clean up** now counts Media Loaders inside
+  subgraphs; before, it could list their masks as unused and delete them.
+- **Paste.** Ctrl+V adds files (a screenshot, say) to the selected Media
+  Loader, the loader window or the RefMod Create tab.
+- **Uploads.** Loading a file that's already in `input/minimax_h3`, under
+  any name, reuses the copy there. Files added in the RefMod Create tab go
+  to `input/minimax_h3/refmod_uploads` and are deleted once the RefMod is
+  made; anything left unused there is cleared after a day.
+- **Fantastic H3 Reference Cache (experimental).** A new node between the
+  model loader and the sampler that skips most of the references' work
+  between refreshes: 4–15% faster per step in one test. Results differ
+  from a normal run, and it needs RAM, about 2.5 GB for a 6-frame RefMod
+  (half with `store_8bit`). See [The stack node](README.md#the-stack-node).
+- **Fixes.** With ComfyUI's properties panel open, selecting a Media
+  Loader, RefMod Stack, Prompt Builder, Text Encode or Reference Map no
+  longer squeezes its panel into a narrow column. RefMod Inspect no longer
+  stops ComfyUI's queue when `comfyui_queue_manager` is installed.
+
 ## 1.8.2
 
 - **Masking in RefMod Create.** Crop each picture and clip to its subject

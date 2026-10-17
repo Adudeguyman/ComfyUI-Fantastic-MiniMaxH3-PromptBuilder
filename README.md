@@ -50,6 +50,31 @@ any frame straight out of a video into your picture references.*
 
 ---
 
+## What's new in 1.8.3
+
+- **Subgraphs.** The Prompt Builder, the Text Encode's reference list, the
+  Reference Map and the RefMod Stack's chain now see media and RefMods
+  across subgraphs: a Text Encode inside one, a Media Loader inside one,
+  KJNodes Set/Get pairs between levels. **+ Media loader**, **+ RefMods**
+  and **+ Native-output splitter** add their node beside the one clicked,
+  in the same subgraph. **Clean up** now counts Media Loaders inside
+  subgraphs; before, it could list their masks as unused and delete them.
+- **Paste.** Ctrl+V adds files (a screenshot, say) to the selected Media
+  Loader, the loader window or the RefMod Create tab.
+- **Uploads.** Loading a file that's already in `input/minimax_h3`, under
+  any name, reuses the copy there. Files added in the RefMod Create tab go
+  to `input/minimax_h3/refmod_uploads` and are deleted once the RefMod is
+  made; anything left unused there is cleared after a day.
+- **Fantastic H3 Reference Cache (experimental).** A new node between the
+  model loader and the sampler that skips most of the references' work
+  between refreshes: 4–15% faster per step in one test. Results differ
+  from a normal run, and it needs RAM, about 2.5 GB for a 6-frame RefMod
+  (half with `store_8bit`). See [The stack node](#the-stack-node).
+- **Fixes.** With ComfyUI's properties panel open, selecting a Media
+  Loader, RefMod Stack, Prompt Builder, Text Encode or Reference Map no
+  longer squeezes its panel into a narrow column. RefMod Inspect no longer
+  stops ComfyUI's queue when `comfyui_queue_manager` is installed.
+
 ## What's new in 1.8.2
 
 - **Masking in RefMod Create.** Crop each picture and clip to its subject
@@ -194,17 +219,6 @@ any frame straight out of a video into your picture references.*
   when everything is already drafted.
 - The built-in 📖 Guide adds parts on using the Prompt Builder and RefMods.
 - The Quick start now builds the workflow before you write the prompt.
-
-## What's new in 1.7.1
-
-- RefMods made from a **video clip** now hold real motion. Create and Edit
-  take the first frames of the clip (after your trim) on H3's own frame
-  grid — 22 frames store 7, 39 store 12, 56 store 17 — instead of evenly
-  spaced picks that stored only 2 frames. **Clip frames** defaults to 22
-  and shows what you'll get as you change it.
-- Deleting a RefMod now closes its details panel.
-- Single-file RefMod bundles saved by ComfyUI-MiniMaxH3Mod 0.2.6 show up
-  in the library and can be used and inspected (not edited) here.
 
 Older releases are in the [changelog](CHANGELOG.md).
 
@@ -617,8 +631,11 @@ H3 Reference to Video** and the `ref2va` checkpoint.
 
 1. On the Prompt Builder, click **+ Media loader**. A Media Loader appears,
    already connected.
-2. Drop your reference files onto it, or click **Load files…**. Images, video,
-   and audio can all go in at once — each lands in the right group.
+2. Drop your reference files onto it, paste them (select the loader and press
+   Ctrl+V; handy for a screenshot), or click **Load files…**. Images, video,
+   and audio can all go in at once — each lands in the right group. Files are
+   copied into `input/minimax_h3`; loading the same file again, under any
+   name, reuses the copy already there.
 3. Connect the Prompt Builder's media outputs — `picture_1`, `video_1`, and so
    on — to the matching slots on **MiniMax H3 Reference to Video**, alongside
    the `prompt` connection you already made. With RefMods, the **RefMod Text
@@ -1273,10 +1290,13 @@ RefMod made from several pictures keeps every picture, which roughly
 doubles its file.
 **Fantastic H3 Store RefMod Encoder Frames** is the node behind it.
 
-The **Create** tab makes new ones. Drop pictures, clips or audio anywhere
-on the library, or pull the items from any Media Loader in the workflow
+The **Create** tab makes new ones. Drop or paste (Ctrl+V) pictures, clips or
+audio anywhere on the library, or pull the items from any Media Loader in the workflow
 (the loader's right-click menu has *RefMod library* for the same thing), so
-a clip you have already trimmed and cropped goes in as it stands. By
+a clip you have already trimmed and cropped goes in as it stands. Files
+added here are kept in `input/minimax_h3/refmod_uploads` only until the
+RefMod is made, since it holds everything it needs; pulled media stays the
+loader's. By
 default everything becomes **one RefMod**: six photos of a character are
 stacked into a single reference, one frame per photo, and any voices —
 audio files, or clips whose soundtrack you keep — are joined into one voice
@@ -1452,6 +1472,19 @@ heading to fold it. **▦ Thumbnails…** on the heading shows every reference
 as a small preview in the same order: media as the Media Loader shows it,
 crops marked, and RefMods with their tags and tokens. A clip's soundtrack
 and a RefMod's voice share its card.
+
+**Fantastic H3 Reference Cache** (experimental) goes between the model
+loader and the sampler. Each step H3 runs the references through all of its
+blocks, though only the video and audio come out at the end. This node runs
+them in full on the first step and every `refresh_every` steps after it; in
+between, each block reuses their stored input, so only the video and audio
+do the full work. Between refreshes the references don't see the video
+change, so results differ from a normal run: bypass the node to compare.
+`cache` can include the prompt too, which counts what the text encoder was
+shown and is often as many tokens as the references. The stored rows take
+about 0.54 MB of RAM per cached token while sampling, or 0.27 MB with
+`store_8bit`, which keeps them as 8-bit floats at a little extra error (not
+on Apple MPS or DirectML). The console reports the total; no extra VRAM.
 
 **Fantastic H3 RefMod Apply** appends the references to conditioning encoded
 elsewhere, with a `retention` multiplier on every entry. The model sees them,

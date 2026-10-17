@@ -6,8 +6,9 @@
  */
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { postApi, LOADER_NAME, computeTags, viewURL, openCropEditor, keepNameChars, outputTargets, setterOf,
-         clampScale, SCALE_MIN, SCALE_MAX, TEXT_SCALE_MAX, MASK_NODE, SAM_KEY, SAM_LINK, samCheckpoints } from "./medialoader.js";
+import { postApi, LOADER_NAME, computeTags, viewURL, openCropEditor, keepNameChars, outputTargets, originNode, allNodes,
+         clampScale, SCALE_MIN, SCALE_MAX, TEXT_SCALE_MAX, MASK_NODE, SAM_KEY, SAM_LINK, samCheckpoints,
+         pastedFiles } from "./medialoader.js";
 
 export const STACK_NAME = "MiniMaxH3RefModStack";
 const BUILDER_NAME = "MiniMaxH3PromptBuilder";
@@ -136,24 +137,10 @@ function applyStoredStackScale(node, { force = false } = {}) {
 
 /* The chain: stacks wired in series through their mods input and output. */
 
-/** The node behind an input, looked through reroutes and Set/Get pairs. */
-function inputOrigin(node, slot) {
-  let n = node.getInputNode?.(slot), guard = 0;
-  while (n && guard++ < 16) {
-    let up = null;
-    if (/reroute/i.test(n.type || "")) up = n.getInputNode?.(0);
-    else if (n.type === "GetNode") up = setterOf(n)?.getInputNode?.(0);
-    else break;
-    if (!up) break;
-    n = up;
-  }
-  return n || null;
-}
-
 function stackAbove(node) {
   const i = (node.inputs || []).findIndex((x) => x.name === "mods");
   if (i < 0 || node.inputs[i].link == null) return null;
-  return inputOrigin(node, i);
+  return originNode(node, i);
 }
 
 /** { up: stacks before this one (farthest first), down: stacks after it,
@@ -190,8 +177,8 @@ function mediaBefore(node, chain) {
   const enc = outputTargets(last, modsOut(last))
     .flatMap((t) => t.type === BUILDER_NAME ? outputTargets(t, modsOut(t)) : [t])
     .find((t) => ENCODE_NAMES.has(t.type));
-  let src = enc && refsIn(enc) >= 0 ? inputOrigin(enc, refsIn(enc)) : null;
-  if (src?.type === BUILDER_NAME) src = refsIn(src) >= 0 ? inputOrigin(src, refsIn(src)) : null;
+  let src = enc && refsIn(enc) >= 0 ? originNode(enc, refsIn(enc)) : null;
+  if (src?.type === BUILDER_NAME) src = refsIn(src) >= 0 ? originNode(src, refsIn(src)) : null;
   if (src?.type !== LOADER_NAME) return counts;
   let items;
   try { items = JSON.parse(src.widgets?.find((w) => w.name === "media_state")?.value || "[]"); } catch (e) { return counts; }
@@ -1605,10 +1592,10 @@ function sourcesFromItems(items, origin) {
   }));
 }
 
-/** Every Media Loader in the graph, for the "pull from" control. */
+/** Every Media Loader in the workflow, for the "pull from" control. */
 function loadersInGraph() {
   try {
-    return (app.graph?._nodes || []).filter((n) => n.type === "MiniMaxH3MediaLoader").map((n) => {
+    return allNodes().filter((n) => n.type === "MiniMaxH3MediaLoader").map((n) => {
       let items = [];
       try { items = JSON.parse(n.widgets?.find((w) => w.name === "media_state")?.value || "[]"); } catch (e) { items = []; }
       return { node: n, title: n.title || "Media Loader", items: Array.isArray(items) ? items : [] };
@@ -1884,12 +1871,26 @@ export function openLibrary(panel, opts = {}) {
     onclick: () => { view.tab = id; paintTabs(); } }, label);
   const tabs = el("div", { class: "mmr-tabs" });
   const summary = el("small", {}, "Loading…");
-  const close = () => { window.removeEventListener("keydown", onKey); unhook(); hidePeek(); overlay.remove(); keepDraft(); gone = true; };
+  const close = () => {
+    window.removeEventListener("keydown", onKey); window.removeEventListener("paste", onPaste, true);
+    unhook(); hidePeek(); overlay.remove(); keepDraft(); gone = true;
+  };
   const onKey = (e) => {
     if (e.key !== "Escape" || document.querySelector(".mml-tmover")) return;   // the crop editor handles its own
     e.stopPropagation(); close();
   };
   window.addEventListener("keydown", onKey);
+  // Ctrl+V adds pictures, clips and audio to Create, as a drop does; the
+  // library is modal, so nothing pasted over it lands on the canvas behind
+  const onPaste = (e) => {
+    e.stopPropagation();
+    const files = pastedFiles(e);
+    if (!files.length) return;
+    e.preventDefault();
+    if (view.tab !== "create") { view.tab = "create"; paintTabs(); }
+    addFiles(files);
+  };
+  window.addEventListener("paste", onPaste, true);
   const libraryPane = el("div", { class: "mmr-pane" });
   const createPane = el("div", { class: "mmr-pane" });
   // The library's own window and text size; its text size wins over the Prompt Builder's inside it.
@@ -2541,7 +2542,7 @@ export function openLibrary(panel, opts = {}) {
   const pullSel = el("select", { class: "mmr-sel", "aria-label": "Pull from a Media Loader" });
   // Click target only: drops are taken by the whole dialog (see below).
   const drop = el("div", { class: "mmr-drop", onclick: () => dropIn.click() },
-    "Drop pictures, clips or audio anywhere here, or click to choose", dropIn);
+    "Drop or paste pictures, clips or audio anywhere here, or click to choose", dropIn);
   setChildren(createPane,
     el("div", { class: "mmr-cbar" },
       el("span", { class: "mmr-fh" }, "Sources"),
@@ -2610,7 +2611,7 @@ export function openLibrary(panel, opts = {}) {
     for (const f of list) {
       const fd = new FormData(); fd.append("file", f);
       try {
-        const r = await postApi("/minimax_h3/upload", { body: fd });
+        const r = await postApi("/minimax_h3/upload?for=refmod", { body: fd });
         const d = await r.json(); if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
         const rec = { file: d.file, kind: d.kind, name: d.name, has_audio: !!d.has_audio, audio_mode: "paired",
           duration: d.duration, width: d.width, height: d.height };
@@ -2618,6 +2619,13 @@ export function openLibrary(panel, opts = {}) {
       } catch (err) { toast(`Couldn't upload ${f.name}: ${err.message}`, 5000); }
     }
     paintTabs();
+  }
+  /** Delete the Create tab's uploads (input/minimax_h3/refmod_uploads) nothing
+   *  needs now: those a finished job used, or with none given, any left over
+   *  from a day or more ago. What's still listed here stays. */
+  function sweepUploads(files = null, prompt_id = null) {
+    postApi("/minimax_h3/refmod_uploads/sweep", { headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files, prompt_id, keep: sources.map((x) => x.rec.file) }) }).catch(() => {});
   }
   function pull() {
     const L = loadersInGraph()[+pullSel.value];
@@ -3671,7 +3679,8 @@ export function openLibrary(panel, opts = {}) {
         const errs = Object.values(d.node_errors || {}).flatMap((n) => (n.errors || []).map((e) => e.message || e.details || ""));
         throw new Error((d.error && (d.error.message || d.error)) + (errs.length ? ": " + errs.join("; ") : ""));
       }
-      jobs.unshift({ prompt_id: d.prompt_id, names, status: "queued", msg: `#${d.number} in the queue`, progress: 0, saved: [] });
+      jobs.unshift({ prompt_id: d.prompt_id, names, status: "queued", msg: `#${d.number} in the queue`, progress: 0, saved: [],
+        files: use.map((x) => x.rec.file) });
       hook(); watchJob(d.prompt_id); paintJobs();
       subjectName = appearanceText = voiceText = retainedText = "";   // these belong to the RefMod just made
       toast(`Queued ${names.length === 1 ? names[0] : `${names.length} RefMods`}`);
@@ -3761,6 +3770,7 @@ export function openLibrary(panel, opts = {}) {
         inspectResults.delete(j.edit);
         if (editing && editing.name === j.edit) cancelEdit(false);
         for (const x of j.consumed || []) { const k = sources.indexOf(x); if (k >= 0) sources.splice(k, 1); }
+        sweepUploads((j.consumed || []).map((x) => x.rec.file), j.prompt_id);
         await load(true);
         if (panel) panel.refresh();
         toast(`Saved ${j.names.join(", ")}`);
@@ -3773,6 +3783,7 @@ export function openLibrary(panel, opts = {}) {
       await load(true);
       toast(`Created ${j.names.join(", ")}`);
       sources.splice(0, sources.length, ...sources.filter((s) => !s.use));
+      sweepUploads(j.files, j.prompt_id);
       view.tab = "library"; view.sort = "new"; sort.value = "new"; paintTabs(); drawGrid();
     },
   };
@@ -3804,6 +3815,7 @@ export function openLibrary(panel, opts = {}) {
     }
   }
   if (resume) resumeDraft(resume);
+  sweepUploads();
   paintTabs();
   load(false).then(() => {
     if (editing && !byName(editing.name)) {          // edited away or deleted while the library was shut
@@ -3893,7 +3905,8 @@ app.registerExtension({
         const w = this.widgets?.find((x) => x.name === "stack_state");
         if (w) { w.hidden = true; w.type = "hidden"; w.computeSize = () => [0, -4]; }
         this._mmrPanel = new StackPanel(this);
-        const widget = this.addDOMWidget("mmr_panel", "div", this._mmrPanel.root, { serialize: false });
+        // Not in the properties panel: it would squeeze this to its own width.
+        const widget = this.addDOMWidget("mmr_panel", "div", this._mmrPanel.root, { serialize: false, hideInPanel: true });
         this._mmrWidget = widget;
         applyStoredStackScale(this, { force: true });
       } catch (err) {
