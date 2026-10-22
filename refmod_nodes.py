@@ -601,14 +601,56 @@ class MiniMaxH3FantasticRefModApply:
         return (out,)
 
 
+
+def refmod_metadata_lines(references, active):
+    """Describe the active RefMods with precisely the Text Encode's label numbering.
+
+    Count Media Loader entries first, using reference_lines itself.  No
+    metadata is invented for media (it has no saved RefMod fields).
+    """
+    import re
+
+    counters = {"image": 0, "video": 0, "audio": 0}
+    by_label = {"Picture": "image", "Video": "video", "Audio": "audio"}
+    for line in reference_lines(references, []):
+        match = re.match(r"^<(Picture|Video|Audio) (\d+)>", line)
+        if match:
+            kind = by_label[match.group(1)]
+            counters[kind] = int(match.group(2))
+
+    fields = (
+        ("Concept type", "concept_type"),
+        ("Description", "description"),
+        ("Subject name", "subject_name"),
+        ("Appearance", "appearance"),
+        ("Voice description", "voice_description"),
+        ("Retained attributes", "retained_attributes"),
+    )
+    groups = []
+    for mod, _strength in active:
+        kind = mod.kind
+        if kind not in counters:
+            raise ValueError(f"Unsupported RefMod kind: {kind!r}")
+        counters[kind] += 1
+        label = f"<{KIND_LABEL[kind]} {counters[kind]}>"
+        name = refmod_label(mod)
+        lines = [f"{label} = {name}"]
+        for title, attr in fields:
+            value = getattr(mod, attr, None)
+            if value is not None and str(value).strip():
+                lines.append(f"{title}: {str(value).strip()}")
+        groups.append("\n".join(lines))
+    return "\n\n".join(groups) or "No active RefMods."
+
+
 class MiniMaxH3FantasticReferenceMap:
     DESCRIPTION = ("The Text Encode's reference_map without the encode: every reference's label in the order the "
                    "model reads them, the media first and the RefMods numbered on from them. Wire it the same "
                    "references and mods as the Text Encode. It shows the map as you edit the graph, with a Copy "
                    "button for pasting it into an LLM, and outputs it for an LLM node writing the prompt.")
     CATEGORY = CATEGORY
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("reference_map",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("reference_map", "refmod_metadata")
     FUNCTION = "reference_map"
 
     @classmethod
@@ -622,7 +664,8 @@ class MiniMaxH3FantasticReferenceMap:
         if references is not None and not isinstance(references, dict):
             raise ValueError("'references' is not a Media Loader bundle.")
         active = [(m, s) for m, s in check_bundle(mods, "Reference Map") if s > 0]
-        return ("\n".join(reference_lines(references, active)) or "No references.",)
+        return ("\n".join(reference_lines(references, active)) or "No references.",
+                refmod_metadata_lines(references, active))
 
 
 NODE_CLASS_MAPPINGS = {
