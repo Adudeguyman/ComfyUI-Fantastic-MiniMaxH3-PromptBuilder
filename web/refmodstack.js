@@ -1501,6 +1501,7 @@ function clampSetting(key, value, fallback) {
 function loadSettings() {
   const d = { mode: "Full Reference", ref_resolution: 768, grid: 16, latent_frames: 22,
     refinement_steps: 500, max_tokens: 5120, audio_max_seconds: 30, concept_type: "generic",
+    fit_mode: "Crop", pad_color: "#FFFFFF",
     subfolder: "", write_preview: true, videoVae: "", audioVae: "", combine: true,
     // Batch Masking; grow and edge stay null to follow the resolution
     subject_crop: true, subject_margin: 1.75, subject_blur_on: true, subject_blur: 24,
@@ -1516,6 +1517,8 @@ function loadSettings() {
   // again is remembered.
   if (!(st.v >= 3)) { st.mode = "Full Reference"; st.v = 3; }
   for (const k of Object.keys(SETTING_RANGES)) st[k] = clampSetting(k, st[k], d[k]);
+  if (!["Crop", "Pad", "Stretch"].includes(st.fit_mode)) st.fit_mode = "Crop";
+  if (!/^#[0-9a-fA-F]{6}$/.test(st.pad_color)) st.pad_color = "#FFFFFF";
   return st;
 }
 function saveSettings(st) { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(st)); } catch (e) { /* private mode */ } }
@@ -1713,13 +1716,18 @@ function effectiveCanvas(src, rec, cap = 480) {
 function fitOf(aspect, target) {
   if (!target) return null;
   const A = target.aspect;
+  if (target.fitMode === "Stretch") return { kind: "stretch", keep: 1, axis: "none" };
+  if (target.fitMode === "Pad") return { kind: "pad", keep: 1, axis: "none" };
   // Both modes trim: the photo is scaled to cover the first one's frame and
   // the overhang is cut off. Nothing is squeezed any more.
   return aspect > A ? { kind: "trim", axis: "width", keep: A / aspect }
                     : { kind: "trim", axis: "height", keep: aspect / A };
 }
 function fitCaption(fit) {
-  if (!fit || fit.keep > 0.97) return "Fits the frame";
+  if (!fit) return "Fits the frame";
+  if (fit.kind === "pad") return "Padded to the first source's aspect ratio";
+  if (fit.kind === "stretch") return "Stretched to the first source's aspect ratio";
+  if (fit.keep > 0.97) return "Fits the frame";
   return `Edges trimmed: ${Math.round((1 - fit.keep) * 100)}% of the ${fit.axis}`;
 }
 
@@ -1745,6 +1753,19 @@ function drawFit(cv, rec, target, isFirst) {
       return;
     }
     const fit = fitOf(aspect, target);
+    if (fit.kind === "pad" || fit.kind === "stretch") {
+      const [x, y, w, h] = fitBox(target.aspect);
+      g.fillStyle = target.padColor || "#FFFFFF";
+      g.fillRect(x, y, w, h);
+      if (fit.kind === "stretch") g.drawImage(img, x, y, w, h);
+      else {
+        const scale = Math.min(w / img.width, h / img.height);
+        const iw = img.width * scale, ih = img.height * scale;
+        g.drawImage(img, x + (w - iw) / 2, y + (h - ih) / 2, iw, ih);
+      }
+      outline(x, y, w, h);
+      return;
+    }
     const [x, y, w, h] = fitBox(aspect);
     g.drawImage(img, x, y, w, h);
     const kw = fit.axis === "width" ? w * fit.keep : w, kh = fit.axis === "height" ? h * fit.keep : h;
@@ -2770,7 +2791,7 @@ export function openLibrary(panel, opts = {}) {
     if (editing) {
       if (!editing.visual || !used().some((x) => isLook(x) && !isStored(x))) return null;
       const [w, h] = editing.px;
-      return { mode: fullMode() ? "full" : "compressed", aspect: w / h, first: null, lock: editing.px };
+      return { mode: fullMode() ? "full" : "compressed", aspect: w / h, first: null, lock: editing.px, fitMode: "Crop" };
     }
     if (!combine) return null;
     const looks = used().filter(isLook);
@@ -2781,11 +2802,11 @@ export function openLibrary(panel, opts = {}) {
     if (st.mode === "Full Reference") {
       const sc = Math.min(1, st.ref_resolution / Math.min(w0, h0));
       const tw = Math.max(32, pyRound(w0 * sc / 32) * 32), th = Math.max(32, pyRound(h0 * sc / 32) * 32);
-      return { mode: "full", aspect: tw / th, first: looks[0] };
+      return { mode: "full", aspect: tw / th, first: looks[0], fitMode: st.fit_mode, padColor: st.pad_color };
     }
     // Compressed pools every frame to one grid shaped like the first photo,
     // so the others are measured against that photo's own proportions.
-    return { mode: "compressed", aspect: w0 / h0, first: looks[0] };
+    return { mode: "compressed", aspect: w0 / h0, first: looks[0], fitMode: st.fit_mode, padColor: st.pad_color };
   }
 
   /** The line under Create: what will be made and what it costs. Blocks the
@@ -2943,13 +2964,13 @@ export function openLibrary(panel, opts = {}) {
         const full = st.mode === "Full Reference";
         kids.push(el("div", { class: "mmr-srchint" },
           `The ${looks} pictures and clips become one reference, one frame each. They all take the first one's ` +
-          `shape, and the others have their edges trimmed to fit, so put your ` +
-          "best-framed photo first. Drag to reorder. In prompts it's cited as one video, like <Video 1>."));
+          `shape. Fit mode: ${st.fit_mode}. ` +
+          "Put your best-framed photo first. Drag to reorder. In prompts it's cited as one video, like <Video 1>."));
         const t = stackTarget();
         if (t) {
           const bad = used().filter((x) => isLook(x) && x !== t.first && effDims(x))
             .filter((x) => { const [w, h] = effDims(x); return fitOf(w / h, t).keep < 0.8; }).length;
-          if (bad) kids.push(el("div", { class: "mmr-srchint warn" },
+          if (bad && st.fit_mode === "Crop") kids.push(el("div", { class: "mmr-srchint warn" },
             `${bad === 1 ? "1 photo is" : `${bad} photos are`} a very different shape from the first and will be ` +
             `trimmed noticeably — see the previews.`));
         }
@@ -3058,6 +3079,28 @@ export function openLibrary(panel, opts = {}) {
       el("label", { class: "mmr-ilabel" }, "Mode", el("select", { class: "mmr-sel", onchange: (e) => { st.mode = e.target.value; saveSettings(st); paintCreate(); } },
         ["Full Reference", "Compressed Reference"].map((m) => el("option", { value: m, selected: st.mode === m }, m)))),
       modeNote(),
+      !editing ? el("div", { class: "mmr-grid2" },
+        el("label", { class: "mmr-ilabel" }, "Image fit", el("select", { class: "mmr-sel",
+          onchange: (e) => { st.fit_mode = e.target.value; saveSettings(st); paintCreate(); } },
+          ["Crop", "Pad", "Stretch"].map((m) => el("option", { value: m, selected: st.fit_mode === m }, m)))),
+        st.fit_mode === "Pad" ? el("label", { class: "mmr-ilabel" }, "Padding color (HEX)",
+          el("div", { style: "display:flex;gap:8px;align-items:center;" },
+            el("input", { type: "color", value: st.pad_color,
+              title: "Choose padding color",
+              onchange: (e) => { st.pad_color = e.target.value.toUpperCase(); saveSettings(st); paintCreate(); } }),
+            el("input", { type: "text", value: st.pad_color, placeholder: "#FFFFFF", maxlength: 7,
+              style: "min-width:0;flex:1;box-sizing:border-box;",
+              title: "Six-digit RGB hex color, e.g. #FFFFFF",
+              onchange: (e) => {
+                const value = e.target.value.trim().toUpperCase();
+                if (/^#[0-9A-F]{6}$/.test(value)) {
+                  st.pad_color = value;
+                  saveSettings(st);
+                  paintCreate();
+                } else {
+                  e.target.value = st.pad_color;
+                }
+              } }))) : null) : null,
       el("div", { class: "mmr-grid2" },
         num("ref_resolution", "Resolution (short edge)", 256, 2048, 32, "Pictures are scaled down to this before encoding, never up."),
         num("max_tokens", "Max tokens", 0, 1048576, 256, "Refuses to create anything bigger than this. 0 = no limit."),
@@ -3167,6 +3210,8 @@ export function openLibrary(panel, opts = {}) {
     modal = openCropEditor(x.rec, {
       aspect: lock ? lock[0] / lock[1] : undefined,
       aspectLabel: lock ? `first photo (${Math.round(lock[0])}×${Math.round(lock[1])})` : undefined,
+      fitMode: lock ? (target?.fitMode || st.fit_mode || "Crop") : "Crop",
+      padColor: lock ? (target?.padColor || st.pad_color || "#FFFFFF") : "#FFFFFF",
       say: (m) => toast(m, 4000),
       noCrop: x.stored != null,
       subject,
@@ -3579,7 +3624,7 @@ export function openLibrary(panel, opts = {}) {
           ? el("div", { class: "mmr-srctitle" }, el("b", {}, x.name),
               combine && setsFrame && used().filter(isLook).length > 1 ? el("span", { class: "mmr-framechip",
                 title: "Every photo in this RefMod is made this size and shape (portrait, landscape or square). " +
-                  "The others have their edges trimmed to match." },
+                  "The other sources are fitted with the selected Image fit mode." },
                 "Sets dataset size and aspect ratio") : null)
           : el("input", { class: "mmr-search", value: x.name, "aria-label": "RefMod name", onchange: (e) => {
               x.name = cleanName(e.target.value); e.target.value = x.name; if (x._subjLabel) x._subjLabel.textContent = x.name;
@@ -3659,6 +3704,7 @@ export function openLibrary(panel, opts = {}) {
       const inputs = { name: g.name, subfolder: st.subfolder || "", mode: st.mode, ref_resolution: st.ref_resolution,
         grid: st.grid, latent_frames: st.latent_frames, refinement_steps: st.refinement_steps, max_tokens: st.max_tokens,
         audio_max_seconds: st.audio_max_seconds, concept_type: st.concept_type, description: "",
+        fit_mode: st.fit_mode, pad_color: st.pad_color,
         subject_name: g.subject || "",
         appearance: g.members.some(isLook) ? oneLine(g.appearance) : "",
         voice_description: g.members.some((x) => x.voice) ? oneLine(g.voiceDesc) : "",

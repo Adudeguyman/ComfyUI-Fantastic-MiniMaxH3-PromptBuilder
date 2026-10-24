@@ -154,6 +154,52 @@ def _cover(image, tw, th):
     return samples.movedim(1, -1)
 
 
+def _fit_canvas(image, tw, th, fit_mode="Crop", pad_color="#FFFFFF", mask=False):
+    """Fit NHWC frames to the first source's canvas; retain all image content in Pad mode."""
+    if fit_mode == "Crop":
+        return _cover(image, tw, th)
+    if fit_mode not in ("Pad", "Stretch"):
+        raise ValueError(f"Unknown RefMod fit mode: {fit_mode}")
+    if fit_mode == "Stretch":
+        samples = comfy.utils.common_upscale(image[..., :3].movedim(-1, 1), tw, th,
+                                             "lanczos", "disabled")
+        return samples.movedim(1, -1)
+    color = str(pad_color).lstrip("#")
+    if len(color) != 6 or any(c not in "0123456789abcdefABCDEF" for c in color):
+        raise ValueError("Pad color must be a six-digit RGB hex value, e.g. #FFFFFF")
+    rgb = (0., 0., 0.) if mask else tuple(int(color[j:j+2], 16) / 255 for j in (0, 2, 4))
+    n, h, w = image.shape[:3]
+    scale = min(tw / w, th / h)
+    nw, nh = max(1, min(tw, round(w * scale))), max(1, min(th, round(h * scale)))
+    samples = comfy.utils.common_upscale(image[..., :3].movedim(-1, 1), nw, nh,
+                                         "lanczos", "disabled").movedim(1, -1)
+    output = image.new_empty((n, th, tw, 3))
+    output[:] = image.new_tensor(rgb)
+    y, x = (th - nh) // 2, (tw - nw) // 2
+    output[:, y:y+nh, x:x+nw] = samples
+    return output
+
+
+def _canvas_crop(image, rect):
+    """Reframe an already fitted canvas, including padding, without changing its size."""
+    if not rect:
+        return image
+    n, h, w, channels = image.shape
+    try:
+        x, y, cw, ch = (float(rect[k]) for k in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Invalid RefMod canvas crop") from exc
+    if not (0 <= x < 1 and 0 <= y < 1 and 0 < cw <= 1 and 0 < ch <= 1):
+        raise ValueError("Invalid RefMod canvas crop bounds")
+    x0, y0 = round(x * w), round(y * h)
+    x1, y1 = round(min(1, x + cw) * w), round(min(1, y + ch) * h)
+    if x1 <= x0 or y1 <= y0:
+        raise ValueError("RefMod canvas crop is empty")
+    cropped = image[:, y0:y1, x0:x1, :]
+    return comfy.utils.common_upscale(cropped.movedim(-1, 1), w, h,
+                                     "lanczos", "disabled").movedim(1, -1)
+
+
 SUBJECT_KEYS = ("word", "margin", "crop", "blur", "grow", "edge")
 
 
@@ -175,7 +221,7 @@ def subject_record(spec):
     return out
 
 
-def blur_subject(src, item, canvas):
+def blur_subject(src, item, canvas, fit_mode="Crop", pad_color="#FFFFFF"):
     """A picture or clip already fitted for encoding, with its background
     blurred around the subject the Create tab masked in it. The subject mask
     is framed the way the source was (turn, mirror, crop, the stack's canvas)
@@ -191,14 +237,16 @@ def blur_subject(src, item, canvas):
                         rotate=0 if is_video else item.get("rotate") or 0, size=spec.get("size"))
     keep = keep[..., None].expand(-1, -1, -1, 3)
     if canvas:
-        keep = _cover(keep, *canvas)
+        keep = _fit_canvas(keep, *canvas, fit_mode, pad_color, mask=True)
+        keep = _canvas_crop(keep, item.get("fit_crop"))
     keep = F.interpolate(keep[..., 0][:, None].float(), size=tuple(src.shape[1:3]), mode="bilinear",
                          align_corners=False)[:, 0]
     return blur_outside(src, keep, float(spec["blur"]), int(spec.get("grow") or 0), int(spec.get("edge") or 0))
 
 
 def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
-                steps, max_tokens, label, progress=None, items=None):
+                steps, max_tokens, label, progress=None, items=None,
+                fit_mode="Crop", pad_color="#FFFFFF"):
     """One latent from one or more sources, stacked along time.
 
     `sources` is [(frames [N,H,W,3], is_video)]. Each is encoded on its own
@@ -238,10 +286,12 @@ def encode_look(vae, sources, *, mode, ref_resolution, grid, latent_frames,
             # (Evenly spaced picks across a long clip encoded as if they were
             # consecutive, which stored a jerky, mostly-frozen reference.)
             src = src[:snap_to_h3_grid(min(latent_frames, src.shape[0]))]
-        src = _cover(src, *canvas) if canvas else resize_ref(src, ref_resolution)
+        src = _fit_canvas(src, *canvas, fit_mode, pad_color) if canvas else resize_ref(src, ref_resolution)
+        if items and canvas and fit_mode in ("Pad", "Stretch"):
+            src = _canvas_crop(src, items[i].get("fit_crop"))
         src = ensure_min_size(src)
         if items:
-            src = blur_subject(src, items[i], canvas)
+            src = blur_subject(src, items[i], canvas, fit_mode, pad_color)
         if first_frame is None:
             first_frame = src[0].detach().cpu()
         mm.throw_exception_if_processing_interrupted()
@@ -519,6 +569,10 @@ class MiniMaxH3FantasticRefModCreate:
                     "tooltip": "Compressed: how long the small grid is refined toward the full encode."}),
                 "max_tokens": ("INT", {"default": 5120, "min": 0, "max": 1048576,
                     "tooltip": "Refuse to save a look over this many tokens. 0 = no limit."}),
+                "fit_mode": (["Crop", "Pad", "Stretch"], {"default": "Crop",
+                    "tooltip": "Fit additional pictures/clips to the first source's aspect ratio."}),
+                "pad_color": ("STRING", {"default": "#FFFFFF",
+                    "tooltip": "RGB hex color for Pad mode, e.g. #FFFFFF (white)."}),
                 "audio_max_seconds": ("FLOAT", {"default": 30.0, "min": 0.5, "max": 600.0, "step": 0.5,
                     "tooltip": "Voice: seconds kept from the start of the joined audio."}),
                 "concept_type": (list(CONCEPT_TYPES), {"default": "generic"}),
@@ -574,7 +628,7 @@ class MiniMaxH3FantasticRefModCreate:
                refinement_steps, max_tokens, audio_max_seconds, concept_type,
                description, write_preview, source, image=None, audio=None,
                vae=None, audio_vae=None, subject_name="", appearance="", voice_description="",
-               retained_attributes=""):
+               retained_attributes="", fit_mode="Crop", pad_color="#FFFFFF"):
         subject_name = clean_subject_name(subject_name)
         described = {"subject_name": subject_name,
                      "appearance": clean_description(appearance, "appearance"),
@@ -628,7 +682,8 @@ class MiniMaxH3FantasticRefModCreate:
             latent, info = encode_look(
                 vae, looks, mode=mode_key, ref_resolution=ref_resolution, grid=grid,
                 latent_frames=latent_frames, steps=refinement_steps, max_tokens=max_tokens,
-                label=clean, progress=lambda f: pbar.update_absolute(int(70 * f)), items=look_items)
+                label=clean, progress=lambda f: pbar.update_absolute(int(70 * f)), items=look_items,
+                fit_mode=fit_mode, pad_color=pad_color)
             n_img = sum(1 for _f, v in looks if not v)
             n_vid = len(looks) - n_img
             tag = ", ".join(t for t in (f"{n_img} img" if n_img else "", f"{n_vid} vid" if n_vid else "") if t)
