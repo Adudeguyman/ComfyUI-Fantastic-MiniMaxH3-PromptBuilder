@@ -1046,7 +1046,9 @@ class TrimModal {
     this.start = item.trim?.start || 0;
     this.end = item.trim?.end ?? this.dur;
     this.view = [0, this.dur];          // the part of the clip the timeline shows
-    this.crop = item.crop ? { ...item.crop } : null;
+    this.canvasCrop = opts.aspect > 0 && ["Pad", "Stretch"].includes(opts.fitMode);
+    this.crop = this.canvasCrop ? (item.fit_crop ? { ...item.fit_crop } : { x: 0.1, y: 0.1, w: 0.8, h: 0.8 })
+      : item.crop ? { ...item.crop } : null;
     this.mirror = !!item.mirror;
     this.rotate = ((parseInt(item.rotate, 10) || 0) % 360 + 360) % 360;
     // RefMods ignore the loader's size cap (Create's resolution decides size).
@@ -1054,9 +1056,11 @@ class TrimModal {
     this.customSize = !!this.resize && !SIZE_CAPS.includes(this.resize);
     this.cropMode = false;
     this.aspect = "free";
+    this.fitMode = ["Crop", "Pad", "Stretch"].includes(opts.fitMode) ? opts.fitMode : "Crop";
+    this.padColor = /^#[0-9a-fA-F]{6}$/.test(opts.padColor || "") ? opts.padColor : "#FFFFFF";
     if (opts.aspect > 0) {
       this.aspect = String(opts.aspect);
-      if (!this.crop) this.crop = coverRect(item.width, item.height, opts.aspect);
+      if (!this.crop && this.fitMode === "Crop") this.crop = coverRect(item.width, item.height, opts.aspect);
     }
     this.drag = null;
     this.canMask = item.kind === "video" && !opts.refmod && !opts.noAdd && Array.isArray(panel?.items);
@@ -1265,8 +1269,15 @@ class TrimModal {
         end: this.end >= this.dur - eps ? null : +this.end.toFixed(2) };
     }
     const visual = it.kind === "video" || it.kind === "picture";
-    if (this.crop && visual) it.crop = { ...this.crop };
-    else delete it.crop;
+    if (this.canvasCrop && visual) {
+      // The selection belongs to the padded/stretched output canvas, not to
+      // the original picture. Keep the two coordinate systems separate.
+      it.fit_crop = { ...this.crop };
+    } else {
+      if (this.crop && visual) it.crop = { ...this.crop };
+      else delete it.crop;
+      delete it.fit_crop;
+    }
     if (this.mirror && visual) it.mirror = true;
     else delete it.mirror;
     if (this.rotate && visual) it.rotate = this.rotate;
@@ -1690,9 +1701,10 @@ class TrimModal {
     this.cropBox = el("div", { class: "mml-cropbox" }, this.cropRect);
     this.cropWrap = el("div", { class: "mml-tmcropwrap" }, this.cropBox);
     requestAnimationFrame(() => {
-      this.stopFit = fitToMedia(this.media, this.cropBox,
-                                this.item.width, this.item.height,
-                                this.stageEl);
+      if (this.canvasCrop) this.fitCropToCanvas();
+      else this.stopFit = fitToMedia(this.media, this.cropBox,
+                                    this.item.width, this.item.height,
+                                    this.stageEl);
     });
     this.cropInfo = el("span", { class: "mml-tmcropinfo" });
     this.rotBtn = el("button", { class: "mml-btn mml-sm",
@@ -1710,8 +1722,8 @@ class TrimModal {
         }
         const t = this.item.width; this.item.width = this.item.height;
         this.item.height = t;
-        // A locked shape can't be turned with the picture: re-fit it.
-        if (this.opts.aspect > 0)
+        // In Crop mode a locked shape is enforced by the crop box itself.
+        if (this.opts.aspect > 0 && this.fitMode === "Crop")
           this.crop = coverRect(this.item.width, this.item.height, this.opts.aspect);
         this.syncRotate();
         this.syncCrop();
@@ -1870,6 +1882,29 @@ class TrimModal {
     this.note.classList.toggle("bad", !!bad);
   }
 
+  fitCropToCanvas() {
+    if (!this.cropBox || !this.stageEl) return;
+    if (this.stopFit) { this.stopFit(); this.stopFit = null; }
+    // In Pad/Stretch, the crop rectangle lives on the whole output canvas,
+    // including padding, rather than on the smaller image element.
+    Object.assign(this.cropBox.style, { left: "0px", top: "0px",
+      width: "100%", height: "100%" });
+  }
+
+  fitCanvasPreview() {
+    return this.opts.aspect > 0 && ["Pad", "Stretch"].includes(this.fitMode);
+  }
+
+  fitCanvasBox(stage) {
+    const cap = 340;
+    const availW = (stage && stage.clientWidth) || 600;
+    const aspect = parseFloat(this.opts.aspect) || 1;
+    let w = Math.min(availW, cap * aspect);
+    let h = w / aspect;
+    if (h > cap) { h = cap; w = h * aspect; }
+    return { w: Math.max(1, Math.round(w)), h: Math.max(1, Math.round(h)) };
+  }
+
   /** Size the preview so its PAINTED box fits the stage.
    *
    *  rotate() leaves the layout box alone: a 736x414 element still occupies
@@ -1888,6 +1923,27 @@ class TrimModal {
     const stage = m.closest(".mml-tmstage");
     const turned = !!(this.rotate % 180);
     m.classList.toggle("turned", turned);
+    if (stage) stage.style.background = this.fitCanvasPreview() && this.fitMode === "Pad" ? this.padColor : "";
+    if (this.fitCanvasPreview()) {
+      const { w: boxW, h: boxH } = this.fitCanvasBox(stage);
+      if (stage) { stage.style.width = `${boxW}px`; stage.style.height = `${boxH}px`; stage.style.margin = "0 auto"; }
+      const srcW = this.item.width || m.naturalWidth || m.videoWidth || 1;
+      const srcH = this.item.height || m.naturalHeight || m.videoHeight || 1;
+      let drawW = boxW, drawH = boxH;
+      if (this.fitMode === "Pad") {
+        const scale = Math.min(boxW / srcW, boxH / srcH);
+        drawW = Math.max(1, Math.round(srcW * scale));
+        drawH = Math.max(1, Math.round(srcH * scale));
+      }
+      m.style.maxHeight = "none";
+      m.style.objectFit = this.fitMode === "Stretch" ? "fill" : "contain";
+      m.style.width = `${turned ? drawH : drawW}px`;
+      m.style.height = `${turned ? drawW : drawH}px`;
+      return;
+    }
+    if (stage) { stage.style.width = ""; stage.style.margin = ""; }
+    m.style.height = "";
+    m.style.objectFit = "";
     if (!turned) {
       m.style.width = "";
       m.style.maxHeight = "";
@@ -1924,8 +1980,9 @@ class TrimModal {
         requestAnimationFrame(() => {
           const w = this.item.width, h = this.item.height;
           if (this.stopFit) this.stopFit();
-          this.stopFit = fitToMedia(this.media, this.cropBox, w, h,
-                                    this.stageEl);
+          if (this.canvasCrop) this.fitCropToCanvas();
+          else this.stopFit = fitToMedia(this.media, this.cropBox, w, h,
+                                        this.stageEl);
         });
       }
     }
@@ -1949,7 +2006,7 @@ class TrimModal {
     const target = parseFloat(this.aspect);
     if (!target) return;
     const vw = this.item.width || 16, vh = this.item.height || 9;
-    const px = vw / vh;                 // pixels per unit of normalised space
+    const px = this.canvasCrop ? target : vw / vh; // canvas-space selections use the target aspect
     const c = this.crop;
 
     // Height that gives the requested pixel aspect for the current width.
@@ -2270,8 +2327,13 @@ class TrimModal {
                   this.crop = null; this.cropMode = false; this.mirror = false;
                   this.rotate = 0; this.resize = 0;
                   if (this.opts.aspect > 0) {
-                    this.crop = coverRect(this.item.width, this.item.height, this.opts.aspect);
-                    this.cropMode = true;
+                    if (this.fitMode === "Crop") {
+                      this.crop = coverRect(this.item.width, this.item.height, this.opts.aspect);
+                      this.cropMode = true;
+                    } else {
+                      this.crop = { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
+                      this.cropMode = true;
+                    }
                   }
                   this.customSize = false; this.syncSize();
                   this.syncCrop(); this.syncMirror(); this.syncRotate();
@@ -4693,7 +4755,7 @@ function coverRect(w, h, aspect) {
 
 /** The trim/crop editor for an item that doesn't live in a Media Loader.
  *  Edits are written to `item` on Apply, then `onApply(item)` runs. */
-export function openCropEditor(item, { onApply, aspect, aspectLabel, say, nav, subject, noCrop } = {}) {
+export function openCropEditor(item, { onApply, aspect, aspectLabel, fitMode, padColor, say, nav, subject, noCrop } = {}) {
   const panel = {
     node: null,
     live: () => item,
@@ -4704,7 +4766,7 @@ export function openCropEditor(item, { onApply, aspect, aspectLabel, say, nav, s
   // or the item would describe a turn it never got.
   const size = [item.width, item.height];
   let applied = false;
-  const modal = new TrimModal(panel, item, { aspect, aspectLabel, noAdd: true, refmod: true, nav, subject, noCrop });
+  const modal = new TrimModal(panel, item, { aspect, aspectLabel, fitMode, padColor, noAdd: true, refmod: true, nav, subject, noCrop });
   const apply = modal.apply, close = modal.close;
   modal.apply = () => { applied = true; modal.subjectLayer?.commit(); apply.call(modal); };
   modal.close = () => { close.call(modal); if (!applied) [item.width, item.height] = size; };
